@@ -1,4 +1,4 @@
-/* Deterministic integration tests for verbatim-compact.ts.
+/* Deterministic integration tests for transparent-compact.ts.
  * Run: node test.cjs [cap|caphang|capspans|capdefault|capenv <percent> <expected budget> [chars]|lookupenv <limit> <expected limit>]
  * Uses pi's jiti loader, real SessionManager branches, and stubbed model calls.
  * No credentials, network requests, or pilot runs are needed.
@@ -170,7 +170,7 @@ async function methodTests(factory, SessionManager, root) {
   const provider = wrap(current);
   const options = { signal: new AbortController().signal, force: false };
   const suggest = () => provider.getSuggestions(["/comp"], 0, 5, options);
-  assert.equal((await suggest()).items[0].description, "Manually compact with verbatim-compact");
+  assert.equal((await suggest()).items[0].description, "Manually compact with transparent-compact");
   assert.deepEqual(forwarded, [["/comp"], 0, 5, options]);
   assert.deepEqual(provider.triggerCharacters, ["#"]);
   assert.equal(provider.applyCompletion(["/comp"], 0, 5, original.items[0], "/comp"), completion);
@@ -193,7 +193,7 @@ async function methodTests(factory, SessionManager, root) {
   ], cwd));
   const realDescription = async () => (await realProvider.getSuggestions(["/comp"], 0, 5, options))
     .items.find((item) => item.value === "compact").description;
-  assert.equal(await realDescription(), "Manually compact with verbatim-compact");
+  assert.equal(await realDescription(), "Manually compact with transparent-compact");
 
   const originalContext = JSON.stringify(f.manager.buildSessionContext());
   await command.handler("summary", ctx);
@@ -254,7 +254,7 @@ async function methodTests(factory, SessionManager, root) {
   assert(notices.every((n) => n.level === "info"), "resume, fork, reload, and checks do not repeat the summary warning");
   sessionRef.current = f.manager;
   f.manager.branch(before);
-  assert.equal((await suggest()).items[0].description, "Manually compact with verbatim-compact",
+  assert.equal((await suggest()).items[0].description, "Manually compact with transparent-compact",
     "tree navigation reads the active branch, not abandoned state");
   const live = f.manager.appendMessage(user("New live branch"));
   await compact(ext, ctx, [f.u], live);
@@ -414,10 +414,10 @@ async function main() {
   if (mode === "lookupenv") process.env.MECH_COMPACT_LOOKUP_MAX_CALLS = process.argv[3];
   process.env.MECH_COMPACT_LOOKUP_TURNS = "2";
   process.env.MECH_COMPACT_WARN_GITIGNORE = "0";
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "verbatim-compact-test-"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "transparent-compact-test-"));
   try {
     const { SessionManager, loadSkillsFromDir } = await jiti.import("@earendil-works/pi-coding-agent");
-    const { default: factory } = await jiti.import(path.join(__dirname, "extensions", "verbatim-compact.ts"));
+    const { default: factory } = await jiti.import(path.join(__dirname, "extensions", "transparent-compact.ts"));
     const ext = load(factory);
     const hybridTests = require("./scripts/hybrid-tests.cjs");
     const hybridHelpers = { ext, SessionManager, root, fixture, makeContext, assistant, text, toolCall, toolText, search, saveSession, output, thinking, argumentsText, user };
@@ -459,7 +459,7 @@ async function main() {
     assert.equal(loadedSkills.skills[0].name, "context-retrieval");
     assert(loadedSkills.skills[0].description.includes("context_lookup"));
     const skillText = fs.readFileSync(path.join(skillDir, "SKILL.md"), "utf8");
-    assert(skillText.includes("verbatim-compact.ts"));
+    assert(skillText.includes("transparent-compact.ts"));
     assert(skillText.includes("only supply `question`"));
     assert(skillText.includes("Bounded fallback and pagination"));
     assert(!skillText.includes("Always use `context_lookup`"));

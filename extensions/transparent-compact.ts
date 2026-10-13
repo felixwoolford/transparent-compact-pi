@@ -1,5 +1,5 @@
 /**
- * verbatim-compact — verbatim compaction with session-backed recovery.
+ * transparent-compact — transparent compaction with session-backed recovery.
  *
  * Builds a deterministic checkpoint without writing local transcript dumps. context_lookup renders the current raw
  * session branch in memory at call time, including earlier compactions,
@@ -40,7 +40,7 @@ import type { ExtensionAPI, ExtensionContext, ModelRegistry, SessionEntry } from
 // ============================================================================
 
 const MECH_KIND = "mech-compact";
-const METHOD_ENTRY = "verbatim-compact:compaction-method";
+const METHOD_ENTRY = "transparent-compact:compaction-method";
 type CompactionMethod = "verbatim" | "summary";
 
 const SUMMARY_COMPACTION_WARNING = "Applying summary compaction weakens the verbatim guarantee. You may switch back to verbatim compaction before summary compaction runs to leave the guarantee unchanged. If summary compaction runs (manually or automatically), it replaces older active context with a model-generated summary, which may omit or reinterpret details. Switching back afterward does not undo this: only subsequent verbatim spans retain the guarantee. Original history remains recoverable through context_lookup, but is no longer a direct expansion of the active context.";
@@ -91,7 +91,7 @@ const cfg = {
 };
 
 // Cap policy is session/branch state, separate from the compaction method.
-const CAP_ENTRY = "verbatim-compact:cap-compaction";
+const CAP_ENTRY = "transparent-compact:cap-compaction";
 type CapMode = "on" | "off" | "warn";
 interface CapBudget { unit: "chars" | "tokens" | "percent"; value: number }
 interface CapSettings { mode: CapMode; budget: CapBudget }
@@ -156,7 +156,7 @@ async function chooseCapBudget(pi: ExtensionAPI, ctx: ExtensionContext, signal: 
       if (state.mode === "off") return undefined;
       const limit = capBudgetChars(state.budget, ctx.model?.contextWindow);
       if (limit === undefined) {
-        ctx.ui.notify("verbatim-compact: cannot resolve percentage cap without the model's context window; choose a c/t budget or turn the cap off.", "error");
+        ctx.ui.notify("transparent-compact: cannot resolve percentage cap without the model's context window; choose a c/t budget or turn the cap off.", "error");
         return null;
       }
       // Exactly the existing cap's test, including its minimum 500-char line budget.
@@ -199,7 +199,7 @@ async function chooseCapBudget(pi: ExtensionAPI, ctx: ExtensionContext, signal: 
       }
     }
   } catch (err) {
-    if (!signal?.aborted) ctx.ui?.notify?.(`verbatim-compact: unable to resolve cap decision (${errMsg(err)}); compaction cancelled`, "error");
+    if (!signal?.aborted) ctx.ui?.notify?.(`transparent-compact: unable to resolve cap decision (${errMsg(err)}); compaction cancelled`, "error");
     return null;
   }
 }
@@ -658,7 +658,7 @@ async function buildMechanicalSummary(opts: {
   const maxChars = await opts.chooseCap({ overhead, lineChars });
   if (maxChars === null) return undefined;
   if (maxChars !== undefined && base && base.summary.length > maxChars)
-    opts.notify(`verbatim-compact: the base block alone is ${base.summary.length.toLocaleString()} chars (budget ${maxChars.toLocaleString()}); it is kept un-capped`);
+    opts.notify(`transparent-compact: the base block alone is ${base.summary.length.toLocaleString()} chars (budget ${maxChars.toLocaleString()}); it is kept un-capped`);
   const capped = maxChars === undefined ? lines : capSpans(lines, Math.max(500, maxChars - overhead));
 
   const blocks: string[] = [];
@@ -1285,7 +1285,7 @@ export default function (pi: ExtensionAPI) {
           ...suggestions,
           items: suggestions.items.map((item) => item.value === "compact"
             ? { ...item, description: method === "verbatim"
-              ? "Manually compact with verbatim-compact"
+              ? "Manually compact with transparent-compact"
               : "Manually compact with summary compaction" }
             : item),
         };
@@ -1369,7 +1369,7 @@ export default function (pi: ExtensionAPI) {
       if (summary === undefined || signal?.aborted) return { cancel: true };
 
       ctx.ui?.notify?.(
-        `verbatim-compact: ~${preparation.tokensBefore.toLocaleString()} tokens -> verbatim checkpoint; full transcript kept in the session`,
+        `transparent-compact: ~${preparation.tokensBefore.toLocaleString()} tokens -> verbatim checkpoint; full transcript kept in the session`,
         "info",
       );
 
@@ -1389,7 +1389,7 @@ export default function (pi: ExtensionAPI) {
         },
       };
     } catch (err) {
-      ctx.ui?.notify?.(`verbatim-compact: failed to build checkpoint (${errMsg(err)}); falling back to Pi's summary compaction`, "error");
+      ctx.ui?.notify?.(`transparent-compact: failed to build checkpoint (${errMsg(err)}); falling back to Pi's summary compaction`, "error");
       return;
     }
   });

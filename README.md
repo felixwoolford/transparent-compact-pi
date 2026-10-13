@@ -1,7 +1,8 @@
-# verbatim-compact
+# transparent-compact
 
 Deterministic context compaction for [Pi](https://pi.dev/), with session-backed
-recovery. By default, replaces Pi's model-generated compaction summary with a checkpoint
+recovery. By default, replaces Pi's model-generated compaction summary with a verbatim
+compaction, with a checkpoint
 built mechanically from conversation text. Thinking and tool outputs are removed
 from the active model context, while user inputs, assistant text, and tool call stubs are retained verbatim.
 
@@ -11,34 +12,32 @@ full raw branch and returns only relevant findings.
 
 The goal is to let the agent withstand many (but finite) rounds of compaction without the copy-of-a-copy degradation of model-summary compaction, which is exacerbated in sub-frontier models.
 
-The defining property of verbatim-compact is the guarantee that all history is either kept
-verbatim in context or stripped entirely from it; nothing is ever compressed in
-between. Every verbatim compaction is also followed by a re-orientation block that tells the agent what was removed and what remaining information must be verified before being relied on.
+The defining property of transparent-compact is the guarantee up to the checkpoint cap (10+ rounds of compaction)  that all history is either kept verbatim in context or stripped entirely from it with transparent signposting; nothing is compressed in between. Every verbatim compaction is also followed by a re-orientation block that tells the agent what was removed and what remaining information must be verified before being relied on.
+All removed sections are systematically signposted and the recovery protocol is strictly defined so
+that the model is maximally informed about how to interpret its own history.
 Tests indicate that this helps weaker models to avoid confabulating the historical context and to more carefully verify what it does and does not know.
 
 The primary intended use case is on a strong local LLM with a reasonably large context window (128k+) : for example, **Qwen 3.8 27B through
 llama.cpp on an RTX 5090**. Recovery uses
 the session model by default and does not require a second model to be loaded.
 Performance improvements over compaction are greatest in this use case, but the tool is also effective with frontier models.
-Performance benchmarking with frontier models is WIP.
 
 ## Install
 
-Requires Pi and Node.js 22.19 or newer. Tests currently target **Pi 1.0.3**;
-other versions have not been verified here.
+Requires Pi and Node.js 22.19 or newer. Tests currently target **Pi 1.1.0**;
 
 ### Package installation
 
 Install from git:
 
 ```bash
-pi install git:github.com/felixwoolford/verbatim-compact-pi
+pi install git:github.com/felixwoolford/transparent-compact-pi
 ```
 
 or from a downloaded or cloned checkout:
 
 ```bash
-pi install /absolute/path/to/verbatim-compact
+pi install /absolute/path/to/transparent-compact
 ```
 
 This installs both the extension and the `context-retrieval` skill. Run `/reload`
@@ -48,7 +47,7 @@ Use `pi install --local <source>` for a project-only installation. To load a
 local checkout for one invocation without saving an installation:
 
 ```bash
-pi -e /absolute/path/to/verbatim-compact
+pi -e /absolute/path/to/transparent-compact
 ```
 
 Remove previously copied extensions and skills before installing the package,
@@ -60,7 +59,7 @@ From the checkout directory:
 
 ```bash
 mkdir -p ~/.pi/agent/extensions ~/.pi/agent/skills
-cp extensions/verbatim-compact.ts ~/.pi/agent/extensions/
+cp extensions/transparent-compact.ts ~/.pi/agent/extensions/
 cp -r skills/context-retrieval ~/.pi/agent/skills/
 ```
 
@@ -74,7 +73,7 @@ Pi's existing session files are unaffected.
 
 ## Usage
 
-Pi's compaction uses verbatim-compact by default once the extension is loaded.
+Pi's compaction uses transparent-compact by default once the extension is loaded.
 To compact manually:
 
 ```text
@@ -101,7 +100,7 @@ The choice persists in the existing session, follows branch history through
 reload, resume, fork, and tree navigation, and needs no extra configuration file.
 New sessions default to verbatim. The footer is unchanged. On Pi versions with
 `addAutocompleteProvider`, `/compact`'s description changes to “Manually compact
-with verbatim-compact” or “Manually compact with summary compaction”; older
+with transparent-compact” or “Manually compact with summary compaction”; older
 versions retain the built-in description. The `/compact` command itself is not
 replaced, and Pi handles custom summary instructions normally in summary mode.
 
@@ -342,27 +341,9 @@ even if previously read, re-acquire missing task information, inspect Git state
 when in a Git repository, and re-read files before modifying them.
 
 
-## Pilot results
+## Benchmark and controlled study
 
-A preliminary synthetic pilot used local **Qwen3.8-27B via llama.cpp**, ten
-sessions, and three successive compactions:
-
-| | After compaction 1 | After compaction 2 | After compaction 3 |
-|---|---:|---:|---:|
-| Pi default compaction recall | 83% | 79% | 79% |
-| Pi default compaction confidently wrong answers | 6 | 13 | 14 |
-| verbatim-compact recall | 97% | 99% | 99% |
-| verbatim-compact confidently wrong answers | 0 | 1 | 0 |
-
-Median compaction time was **0.8–1.1 seconds** for verbatim-compact and
-**204–372 seconds** for Pi's model summary. These timings exclude lookups.
-
-**These historical results used a separate-dump lookup implementation**, not the
-current session-backed implementation. They have not been re-measured for this
-release and are not a general performance guarantee. A fuller evaluation is in
-progress. [Details, examples, and scoring notes](docs/pilot-results.md).
-
-
+Details to be added here
 
 ## Limitations and safety
 

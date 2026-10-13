@@ -1,16 +1,16 @@
 {
-  "name": "verbatim-compact",
+  "name": "transparent-compact",
   "version": "0.7.0",
   "private": true,
-  "description": "Deterministic, verbatim-preserving compaction for Pi, with session-backed subagent context recovery.",
+  "description": "Deterministic, transparent-preserving compaction for Pi, with session-backed subagent context recovery.",
   "license": "MIT",
-  "homepage": "https://github.com/felixwoolford/verbatim-compact-pi#readme",
+  "homepage": "https://github.com/felixwoolford/transparent-compact-pi#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/felixwoolford/verbatim-compact-pi.git"
+    "url": "git+https://github.com/felixwoolford/transparent-compact-pi.git"
   },
   "bugs": {
-    "url": "https://github.com/felixwoolford/verbatim-compact-pi/issues"
+    "url": "https://github.com/felixwoolford/transparent-compact-pi/issues"
   },
   "type": "module",
   "keywords": [
@@ -31,7 +31,7 @@
     "docs/"
   ],
   "pi": {
-    "extensions": ["./extensions/verbatim-compact.ts"],
+    "extensions": ["./extensions/transparent-compact.ts"],
     "skills": ["./skills/context-retrieval"]
   },
   "scripts": {

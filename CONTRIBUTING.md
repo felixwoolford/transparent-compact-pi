@@ -47,7 +47,7 @@ Individual scripts are `test:integration`, `test:cap`, `test:caphang`,
 
 ## Manual check
 
-Load the checkout with `pi -e /absolute/path/to/verbatim-compact`, avoiding duplicate
+Load the checkout with `pi -e /absolute/path/to/transparent-compact`, avoiding duplicate
 installed copies. In a disposable project, produce a distinctive tool result,
 trigger `/compact`, and ask for the exact earlier result through `context_lookup`.
 Repeat across several compactions. Verify the retained boundary, file lists,

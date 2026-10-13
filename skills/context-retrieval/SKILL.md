@@ -5,7 +5,7 @@ description: Recover earlier pi session context through the context_lookup subag
 
 # Session context recovery
 
-This skill pairs with `verbatim-compact.ts`, which provides:
+This skill pairs with `transparent-compact.ts`, which provides:
 
 - **Verbatim compaction** — a deterministic checkpoint retains user messages, assistant prose, and compact tool-call signatures. Thinking and tool outputs are removed from the active model context, not from the raw session history. Earlier spans are re-rendered flat, with one re-orientation block and an opaque base when needed.
 - **`context_lookup`** — the preferred first step: a subagent searches the full raw session branch in its **own** context and returns relevant findings. At lookup time, the extension mechanically renders the branch into entry-anchored text with an authoritative entry/section index, in memory. There is no local dump or temporary transcript file to manage.
