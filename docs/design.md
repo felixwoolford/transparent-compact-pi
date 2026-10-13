@@ -5,7 +5,7 @@
 `session_before_compact` intercepts automatic compaction, `/compact`, and overflow
 recovery. `/compaction-method verbatim|summary` selects the method for all three
 triggers, independently of Pi's auto-compaction on/off setting. The latest valid
-`verbatim-compact:compaction-method` custom entry on the active branch determines
+`transparent-compact:compaction-method` custom entry on the active branch determines
 the method; absence means verbatim. Reading branch state at use time avoids stale
 choices after reload, resume, fork, or tree navigation. Custom entries stay out
 of model context and require no extra configuration file.
@@ -90,7 +90,7 @@ explicit `MECH_COMPACT_MAX_SUMMARY_CHARS` provides a character budget instead,
 taking precedence over the percentage setting. Both are read on extension load;
 session settings take precedence over either. `/cap-compaction [on|off|warn]
 [<chars>c|<estimated tokens>t|<percent>%]` persists mode and budget in a
-`verbatim-compact:cap-compaction` custom entry on the active branch. Omitting
+`transparent-compact:cap-compaction` custom entry on the active branch. Omitting
 mode or budget preserves it. Session entries override the initial configuration
 and stay out of model context.
 
