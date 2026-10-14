@@ -11,10 +11,10 @@ The goal is to let the agent withstand many (but finite) rounds of compaction wi
 The method is functionally similar to pi-vcc, but is specifically aimed at lighter weight models
 such as **Qwen 3.8 27B** or **Luna**. The design principle is that:
 
--(1) Algorithmic or model-based manipulation of text has the potential to confound the model later, and should be avoided.
--(2) History retrieval should be parsimonious, explicitly clear to the agent, and agnostic to the task and session structure. 
+- **(1)** Algorithmic or model-based manipulation of text has the potential to confound the model later, and should be avoided.
+- **(2)** History retrieval should be parsimonious, explicitly clear to the agent, and agnostic to the task and session structure. 
 
-[This Study](docs/transparent-compact_vs_pi_vs_pi-vdd.pdf) demonstrated that a minimal system like
+[This study](docs/transparent-compact_vs_pi_vs_pi-vdd.pdf) demonstrated that a minimal system like
 this outperforms more complicated techniques with lightweight models and essentiallly matches pi-vcc and beats the default Pi compaction with frontier models as well. It helps weaker models to avoid confabulating the historical context and to more carefully verify what it does and does not know.
 
 The primary intended use case is on a strong local LLM with a reasonably large context window (128k+) : for example,  through
