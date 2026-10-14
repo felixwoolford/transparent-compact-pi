@@ -2,12 +2,9 @@
 
 Deterministic context compaction for [Pi](https://pi.dev/), with session-backed
 recovery. By default, replaces Pi's model-generated compaction summary with a verbatim
-compaction, with a checkpoint
-built mechanically from conversation text. Thinking and tool outputs are removed
+compaction, with a checkpoint built mechanically from conversation text. Thinking and tool outputs are removed
 from the active model context, while user inputs, assistant text, and tool call stubs are retained verbatim.
-
-Verbatim compaction itself makes no model call. When a
-missing detail is needed, `context_lookup` runs a subagent over the session's
+Verbatim compaction itself makes no model call. When a missing detail is needed, `context_lookup` runs a subagent over the session's
 full raw branch and returns only relevant findings.
 
 The goal is to let the agent withstand many (but finite) rounds of compaction without the copy-of-a-copy degradation of model-summary compaction, which is exacerbated in sub-frontier models.
@@ -15,6 +12,9 @@ The goal is to let the agent withstand many (but finite) rounds of compaction wi
 The defining property of transparent-compact is the guarantee up to the checkpoint cap (10+ rounds of compaction)  that all history is either kept verbatim in context or stripped entirely from it with transparent signposting; nothing is compressed in between. Every verbatim compaction is also followed by a re-orientation block that tells the agent what was removed and what remaining information must be verified before being relied on.
 All removed sections are systematically signposted and the recovery protocol is strictly defined so
 that the model is maximally informed about how to interpret its own history.
+
+
+
 Tests indicate that this helps weaker models to avoid confabulating the historical context and to more carefully verify what it does and does not know.
 
 The primary intended use case is on a strong local LLM with a reasonably large context window (128k+) : for example, **Qwen 3.8 27B through
@@ -24,7 +24,7 @@ Performance improvements over compaction are greatest in this use case, but the 
 
 ## Install
 
-Requires Pi and Node.js 22.19 or newer. Tests currently target **Pi 1.1.0**;
+Requires Pi and Node.js 22.19 or newer.
 
 ### Package installation
 
@@ -65,11 +65,6 @@ cp -r skills/context-retrieval ~/.pi/agent/skills/
 
 Then `/reload`. Project equivalents are `.pi/extensions/` and `.pi/skills/`.
 
-### Uninstallation
-
-To uninstall a package, use `pi remove <the-source-you-installed>` and `/reload`.
-For manual installation, remove the copied extension and skill, then `/reload`.
-Pi's existing session files are unaffected.
 
 ## Usage
 
@@ -90,33 +85,12 @@ To compact manually:
 
 `/compaction-method` is available to opt-in to Pi's builtin summary compaction for the current session.
 
-With no argument, the command reports the current method. A summary-mode warning
-appears when actually switching to summary, but not on repeated selections,
-resume, or compaction.
-The choice applies to
-manual `/compact`, automatic threshold compaction, and context-overflow recovery.
+The choice applies to manual `/compact`, automatic threshold compaction, and context-overflow recovery.
+With no argument, the command reports the current method. 
 
 The choice persists in the existing session, follows branch history through
 reload, resume, fork, and tree navigation, and needs no extra configuration file.
-New sessions default to verbatim. The footer is unchanged. On Pi versions with
-`addAutocompleteProvider`, `/compact`'s description changes to “Manually compact
-with transparent-compact” or “Manually compact with summary compaction”; older
-versions retain the built-in description. The `/compact` command itself is not
-replaced, and Pi handles custom summary instructions normally in summary mode.
-
-> **Applying summary compaction weakens the verbatim guarantee.** Changing this
-> setting does not alter active context; switching back to verbatim before summary
-> compaction runs leaves the guarantee unchanged. If summary compaction runs
-> (manually or automatically), it replaces older active context with a
-> model-generated summary, which may omit or reinterpret details. Switching back
-> afterward does not undo this: only subsequent verbatim spans retain the
-> guarantee. Original history remains recoverable through `context_lookup`, but
-> is no longer directly present in active context.
-
-Later verbatim checkpoints containing a model-summary base prominently warn:
-**Mixed context: earlier material is model-summarized, not verbatim.** The
-verbatim guarantee applies only to the labelled verbatim spans and uncompacted
-tail—not to the opaque summary base.
+New sessions default to verbatim. 
 
 ### Control the compaction cap
 
@@ -129,8 +103,7 @@ The default is **`warn 25%`**: a conversation-section budget estimated at 25% of
 the current model's context window, using **4 characters per token**, not an
 exact tokenizer. When content would actually be trimmed, choose **Apply trimming**,
 **Disable cap for this session**, **Change budget**, or **Cancel compaction**. Disabling persists as `off`, rather than
-bypassing just once. Cancel or Esc cancels compaction; it does not fall through
-to summary compaction.
+bypassing just once. 
 
 ```text
 /cap-compaction                 # report mode and budget
@@ -150,14 +123,10 @@ Pi's auto-compaction enabled setting.
 
 Tokens are estimated with `ceil(chars / 4)`, not an exact tokenizer. For a
 192,000-token window, `25%` gives 48,000 estimated tokens, equivalent to 192,000
-characters. Percentages follow the current model's context window after model
-changes; fractional token budgets round down, with a minimum of one token.
-`80000c` preserves the existing budget scope and trimming algorithm exactly.
-
+characters. 
 
 The budget is a size guard, not a guarantee that the whole model context fits.
-Instructions and file lists remain outside it; inherited opaque bases remain
-uncapped and the minimum line budget remains 500 characters. Disabling the cap
+Instructions and file lists remain outside it. Disabling the cap
 still removes thinking and tool outputs and abbreviates tool-call signatures.
 It may leave too much context for the model, particularly during overflow recovery.
 
@@ -202,7 +171,6 @@ The lookup model, turn budget, consecutive-call limit, and initial cap settings 
 Use `/cap-compaction` to change the session budget or mode without restarting. The
 session-file override is checked at each lookup. Restart Pi after changing its
 launching environment; `/reload` does not change inherited environment variables.
-The extension does not automatically load `.env` files.
 
 Leave the session-file override unset for ordinary use. When configured, lookup
 opens that file with `SessionManager.open()` and renders its branch. Relative,
@@ -240,7 +208,6 @@ extension builds a checkpoint without changing that boundary or calling a model:
 | Tool outputs | Removed from the checkpoint; retained in the raw session. |
 | Recent conversation | Pi keeps its normal verbatim tail. |
 | Earlier compacted spans | Re-rendered chronologically, without repeated model summarization. |
-| Inherited model/legacy summary | Kept once as an opaque base, when present. |
 | Read/modified file lists | Carried forward, with file contents marked as removed. |
 
 Checkpoints label tool outcomes as `ok`, `error`, or `unknown` and remind the
@@ -329,13 +296,6 @@ the count. Pending lookup calls in the same batch also count, preventing paralle
 calls from bypassing the limit. Blocked attempts return a short fallback note
 without launching a subagent; later lookups after other work remain available.
 
-Search responses are bounded pages, not necessarily complete entries or match
-lists. Follow all reported continuation parameters, keeping other search
-parameters unchanged. Listing and grep cursors include `throughEntry` to keep
-newly appended calls/results from expanding the search while paging. The raw
-history remains complete; oversized entries and individual lines remain
-accessible across pages.
-
 After compaction, the checkpoint instructs the agent to re-read required documents,
 even if previously read, re-acquire missing task information, inspect Git state
 when in a Git repository, and re-read files before modifying them.
@@ -347,9 +307,6 @@ Details to be added here
 
 ## Limitations and safety
 
-- Session history and lookup results can contain credentials, private code, and
-  conversation details. Do not commit or share them without review. A remote
-  lookup model receives the excerpts provided to the subagent.
 - Recovery can miss evidence or hit output/turn limits. Partial findings are
   labeled; they are not proof that every relevant fact was found.
 - Images are noted but not inlined in the text transcript. Binary image data and
@@ -360,22 +317,6 @@ Details to be added here
 - If checkpoint construction fails, Pi's normal compaction is used. A lookup
   failure reports an error without changing the compaction or session context.
 
-
-
-## Development
-
-```bash
-npm ci --ignore-scripts
-npm test
-```
-
-Tests use synthetic sessions and stubbed model responses, including raw recovery
-across three compactions, branch scoping, override/error behavior, entry
-attribution, size guards, pagination, and the bundled skill. Real Pi agent-turn
-tests check tool-call persistence ordering, parallel-call limits, and recovery
-reset rules. No live model, GPU, or credentials are required. The suite also
-exercises Pi's real package and extension loaders and checks the packed resources.
-See [contributing](CONTRIBUTING.md).
 
 ## License
 
