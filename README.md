@@ -6,25 +6,21 @@ compaction, with a checkpoint built mechanically from conversation text. Thinkin
 from the active model context, while user inputs, assistant text, and tool call stubs are retained verbatim.
 Verbatim compaction itself makes no model call. When a missing detail is needed, `context_lookup` runs a subagent over the session's
 full raw branch and returns only relevant findings.
-
 The goal is to let the agent withstand many (but finite) rounds of compaction without the copy-of-a-copy degradation of model-summary compaction, which is exacerbated in sub-frontier models.
 
-The defining property of transparent-compact is the guarantee up to the checkpoint cap (10+ rounds of compaction)  that all history is either kept verbatim in context or stripped entirely from it with transparent signposting; nothing is compressed in between. Every verbatim compaction is also followed by a re-orientation block that tells the agent what was removed and what remaining information must be verified before being relied on.
-All removed sections are systematically signposted and the recovery protocol is strictly defined so
-that the model is maximally informed about how to interpret its own history.
+The method is functionally similar to pi-vcc, but is specifically aimed at lighter weight models
+such as **Qwen 3.8 27B** or **Luna**. The design principle is that:
 
+-(1) Algorithmic or model-based manipulation of text has the potential to confound the model later, and should be avoided.
+-(2) History retrieval should be parsimonious, explicitly clear to the agent, and agnostic to the task and session structure. 
 
+[This Study](docs/transparent-compact_vs_pi_vs_pi-vdd.pdf) demonstrated that a minimal system like
+this outperforms more complicated techniques with lightweight models and essentiallly matches pi-vcc and beats the default Pi compaction with frontier models as well. It helps weaker models to avoid confabulating the historical context and to more carefully verify what it does and does not know.
 
-Tests indicate that this helps weaker models to avoid confabulating the historical context and to more carefully verify what it does and does not know.
-
-The primary intended use case is on a strong local LLM with a reasonably large context window (128k+) : for example, **Qwen 3.8 27B through
-llama.cpp on an RTX 5090**. Recovery uses
-the session model by default and does not require a second model to be loaded.
-Performance improvements over compaction are greatest in this use case, but the tool is also effective with frontier models.
+The primary intended use case is on a strong local LLM with a reasonably large context window (128k+) : for example,  through
+**Qwen 3.8 27B llama.cpp on an RTX 5090**. Recovery uses the session model by default and does not require a second model to be loaded.
 
 ## Install
-
-Requires Pi and Node.js 22.19 or newer.
 
 ### Package installation
 
@@ -183,7 +179,6 @@ The character budget is not a token limit or a hard cap on the whole checkpoint.
 Instructions and file lists sit outside the conversation section; an inherited
 base is uncapped and the line budget has a 500-character minimum. Tune it
 alongside the model's context window and Pi's `compaction.keepRecentTokens`.
-[Design details](docs/design.md).
 
 ### Local inference engines
 
