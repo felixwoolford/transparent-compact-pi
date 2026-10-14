@@ -11,7 +11,7 @@ The goal is to let the agent withstand many (but finite) rounds of compaction wi
 The method is functionally similar to pi-vcc, but is specifically aimed at lighter weight models
 such as **Qwen 3.8 27B** or **Luna**. The design principle is that:
 
-- Algorithmic or model-based manipulation of text has the potential to confound the model later, and should be avoided.
+- Algorithmic or model-based manipulation of prose has the potential to confound the model later, and should be avoided.
 - History retrieval should be parsimonious, explicitly clear to the agent, and agnostic to the task and session structure. 
 
 [This study](docs/transparent-compact_vs_pi_vs_pi-vdd.pdf) demonstrated that a minimal system like
