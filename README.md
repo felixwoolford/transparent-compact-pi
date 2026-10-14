@@ -11,8 +11,8 @@ The goal is to let the agent withstand many (but finite) rounds of compaction wi
 The method is functionally similar to pi-vcc, but is specifically aimed at lighter weight models
 such as **Qwen 3.8 27B** or **Luna**. The design principle is that:
 
-- **(1)** Algorithmic or model-based manipulation of text has the potential to confound the model later, and should be avoided.
-- **(2)** History retrieval should be parsimonious, explicitly clear to the agent, and agnostic to the task and session structure. 
+- Algorithmic or model-based manipulation of text has the potential to confound the model later, and should be avoided.
+- History retrieval should be parsimonious, explicitly clear to the agent, and agnostic to the task and session structure. 
 
 [This study](docs/transparent-compact_vs_pi_vs_pi-vdd.pdf) demonstrated that a minimal system like
 this outperforms more complicated techniques with lightweight models and essentiallly matches pi-vcc and beats the default Pi compaction with frontier models as well. It helps weaker models to avoid confabulating the historical context and to more carefully verify what it does and does not know.
@@ -91,7 +91,7 @@ New sessions default to verbatim.
 ### Control the compaction cap
 
 Capping of the context eventually applies to strip further elements from the checkpoint.
-See [how cap trimming works](#how-cap-trimming-works) for the removal order.
+See [how cap trimming works](docs/DESIGN.md#how-cap-trimming-works) for the removal order.
 This is meant as a fallback option for allowing compaction rounds to run far in excess of the intended use case, and should probably be used to allow work to be wrapped up before handing off to a new session. 
 If you find that in normal usage you frequently work over the compaction cap, other compaction tools are likely to be more suitable.
 
@@ -145,7 +145,7 @@ starting Pi:
 | `MECH_COMPACT_MAX_SUMMARY_PERCENT` | `25` | Initial percentage of the model's context window, using estimated tokens. Accepts numbers greater than 0 and at most 100, including decimals; invalid values fall back to 25. |
 | `MECH_COMPACT_LOOKUP_MODEL` | Session model | Optional `provider/modelId` for lookups; must support tool calls and be available in Pi. An unresolved model falls back to the session model. |
 | `MECH_COMPACT_LOOKUP_TURNS` | `10` | Maximum substantive search turns. Valid continuation-only turns are exempt; total search-phase model calls are capped at 3× this budget (30 by default), plus one tool-free write-up on exhaustion. |
-| `MECH_COMPACT_LOOKUP_MAX_CALLS` | `1` | Maximum consecutive lookup attempts. `0` means unlimited; see [recovery reset rules](#recover-historical-details). Invalid values fall back to 1. |
+| `MECH_COMPACT_LOOKUP_MAX_CALLS` | `1` | Maximum consecutive lookup attempts. `0` means unlimited; see [recovery reset rules](docs/DESIGN.md#recover-historical-details). Invalid values fall back to 1. |
 | `MECH_COMPACT_LOOKUP_SESSION_FILE` | Unset | Optional absolute path to a full session JSONL, replacing the current branch as the lookup source. Intended for harnesses using pruned forks. |
 
 Cap-budget precedence is **session setting → explicit character setting → percentage setting**.
@@ -186,132 +186,6 @@ When lookups use the session model on a local server, they share its KV cache wi
 
 - **llama.cpp**: on a single-slot server (`-np 1`), each lookup call evicts the main session's KV cache. Enable host-memory prompt caching with `--cache-ram <MiB>`, sized to hold at least one full main-session state, so the main session resumes in seconds instead of re-processing its entire context.
 - **Other engines**: make sure the main session's prefix survives lookup calls, via prefix caching (on by default in vLLM and SGLang), host-RAM KV offloading where available, or enough parallel capacity to keep both sessions resident. Engines without these will re-prefill the main session after every lookup.
-
-## How it works
-
-### Deterministic checkpoint
-
-Pi selects the compacted messages and retained boundary. In verbatim mode, the
-extension builds a checkpoint without changing that boundary or calling a model:
-
-| Content | Treatment |
-|---|---|
-| User messages | Kept verbatim, subject to the size guard. |
-| Assistant prose | Kept, subject to the size guard. |
-| Tool calls | Short signatures with outcome labels; full arguments and outputs remain recoverable. |
-| Assistant thinking | Removed from the checkpoint; retained in the raw session. |
-| Tool outputs | Removed from the checkpoint; retained in the raw session. |
-| Recent conversation | Pi keeps its normal verbatim tail. |
-| Earlier compacted spans | Re-rendered chronologically, without repeated model summarization. |
-| Read/modified file lists | Carried forward, with file contents marked as removed. |
-
-Checkpoints label tool outcomes as `ok`, `error`, or `unknown` and remind the
-agent to recover missing evidence and re-read required documents before relying
-on them. These labels describe tool results, not a guarantee that tests passed.
-
-#### How cap trimming works
-
-**User messages are prioritized**—capping is not simply an oldest-first cutoff:
-
-1. Remove non-user content, oldest first.
-2. If still over budget, shorten long user messages to marked prefix stubs,
-   oldest first.
-3. As a last resort, remove the oldest remaining content, including user messages.
-
-Trimming stops once the budget is satisfied. Originals remain recoverable from
-the session. See [design notes](docs/design.md) for implementation details.
-
-
-### Session-backed lookup
-
-Pi normally saves append-only JSONL sessions under:
-
-```text
-~/.pi/agent/sessions/--<project-path>--/<timestamp>_<session-id>.jsonl
-```
-
-Compaction adds an entry; it does not delete earlier thinking, tool calls, or
-tool results. At each lookup, the extension obtains the current branch through
-`ctx.sessionManager.getBranch()`, **not** the compacted model-context projection.
-Custom session locations work automatically. In-memory sessions work while the
-process lives, but cannot be resumed after exit.
-
-The raw branch is mechanically rendered **in memory** into readable transcript
-lines. Blocks have `ENTRY` headers; assistant sections have `[thinking]`,
-`[text]`, and `[toolCall]` markers. Thinking, tool arguments, and textual tool
-outputs are preserved without truncation in that representation. An authoritative
-entry/section index prevents header-like text inside output from spoofing
-attribution.
-
-The subagent uses three internal tools: `list_entries`, `grep`, and `show_entry`.
-These search the rendered lines directly, so no temporary file, second session
-copy, or cleanup is needed. They share the fallback tools' paginated search
-functions. Individual results and the final answer have size limits. Follow
-pages only when omitted content is needed, not to exhaust every match or entry.
-
-Valid continuation-only turns do not spend the substantive search budget; new
-queries, changed parameters, or replayed cursors do. A separate ceiling caps all
-search-phase model calls at three times the configured turn budget (30 by default).
-When either budget ends searching, one final tool-free model call writes up
-partial findings; a failed write-up falls back to the latest text, explicitly
-labeled incomplete. Lookup requests use normal provider caching
-defaults rather than forcing caching off; actual cache behavior and savings vary
-by provider.
-
-### Recover historical details
-
-The extension registers a subagent lookup and three direct-search fallback tools:
-
-| Tool | Purpose |
-|---|---|
-| `context_lookup` | Recover specific historical details from the full raw session branch. Accepts only `question`. |
-| `context_list_entries` | Fallback: list entry ids, roles, timestamps, and previews. |
-| `context_grep` | Fallback: regex-search the raw branch with surrounding lines and entry attribution. |
-| `context_show_entry` | Fallback: retrieve an entry by id. |
-
-For example, ask the agent to recover the build error observed before compaction.
-It can call `context_lookup` with:
-
-```json
-{
-  "question": "What exact build error did we observe for src/auth.ts before compaction? Include the ENTRY id and observed tool output."
-}
-```
-
-The subagent searches in its own context and returns findings with entry
-references. Its raw search results stay out of the main conversation. If findings
-are incomplete, the fallback tools run the same searches directly; their results
-enter the main context. Turn-limit write-ups include a note recommending these
-tools for further detail on the same query, even if the write-up fails.
-
-By default, only one `context_lookup` attempt is allowed until a user message,
-a bash execution, or a tool result outside these four recovery tools resets the
-limit. Fallback searches, assistant text, and thinking neither increase nor reset
-the count. Pending lookup calls in the same batch also count, preventing parallel
-calls from bypassing the limit. Blocked attempts return a short fallback note
-without launching a subagent; later lookups after other work remain available.
-
-After compaction, the checkpoint instructs the agent to re-read required documents,
-even if previously read, re-acquire missing task information, inspect Git state
-when in a Git repository, and re-read files before modifying them.
-
-
-## Benchmark and controlled study
-
-Details to be added here
-
-## Limitations and safety
-
-- Recovery can miss evidence or hit output/turn limits. Partial findings are
-  labeled; they are not proof that every relevant fact was found.
-- Images are noted but not inlined in the text transcript. Binary image data and
-  some system/metadata fields remain only in Pi's session storage.
-- Lookup is branch-scoped. It does not search history that was actually deleted
-  or excluded from its source session.
-- Branch summarization is unchanged: Pi still uses model-based `/tree` summaries.
-- If checkpoint construction fails, Pi's normal compaction is used. A lookup
-  failure reports an error without changing the compaction or session context.
-
 
 ## License
 
