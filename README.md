@@ -9,13 +9,14 @@ full raw branch and returns only relevant findings.
 The goal is to let the agent withstand many (but finite) rounds of compaction without the copy-of-a-copy degradation of model-summary compaction, which is exacerbated in sub-frontier models.
 
 The method is functionally similar to pi-vcc, but is specifically aimed at lighter weight models
-such as **Qwen 3.8 27B** or **Luna**. The design principle is that:
+such as **Qwen 3.8 27B** or **GPT-6 Luna**. The design principle is that:
 
 - Algorithmic or model-based manipulation of prose has the potential to confound the model later, and should be avoided.
 - History retrieval should be parsimonious, explicitly clear to the agent, and agnostic to the task and session structure. 
 
 [This study](docs/transparent-compact_vs_pi_vs_pi-vdd.pdf) demonstrated that a minimal system like
-this outperforms more complicated techniques with lightweight models and essentiallly matches pi-vcc and beats the default Pi compaction with frontier models as well. It helps weaker models to avoid confabulating the historical context and to more carefully verify what it does and does not know.
+this outperforms more complicated techniques with lightweight models, and is at least as effective with frontier models too. 
+It helps weaker models to avoid confabulating the historical context and to more carefully verify what it does and does not know.
 
 The primary intended use case is on a strong local LLM with a reasonably large context window (128k+) : for example,  through
 **Qwen 3.8 27B llama.cpp on an RTX 5090**. Recovery uses the session model by default and does not require a second model to be loaded.
