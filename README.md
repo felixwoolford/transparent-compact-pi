@@ -28,8 +28,15 @@ The primary intended use case is on a strong local LLM with a reasonably large c
 Install from npm:
 
 ```bash
-pi install npm:@foliox/transparent-compact
+pi install npm:@foliox/transparent-compact-pi
 ```
+
+or from github:
+
+```bash
+pi install git:github.com/felixwoolford/transparent-compact-pi
+```
+
 
 or from a downloaded or cloned checkout:
 
