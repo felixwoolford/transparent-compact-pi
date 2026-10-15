@@ -1,7 +1,7 @@
 {
   "name": "transparent-compact",
-  "version": "0.7.0",
-  "private": true,
+  "version": "0.8.0",
+  "private": false,
   "description": "Deterministic, transparent-preserving compaction for Pi, with session-backed subagent context recovery.",
   "license": "MIT",
   "homepage": "https://github.com/felixwoolford/transparent-compact-pi#readme",
