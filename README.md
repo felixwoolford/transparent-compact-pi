@@ -25,10 +25,10 @@ The primary intended use case is on a strong local LLM with a reasonably large c
 
 ### Package installation
 
-Install from git:
+Install from npm:
 
 ```bash
-pi install git:github.com/felixwoolford/transparent-compact-pi
+pi install npm:@foliox/transparent-compact
 ```
 
 or from a downloaded or cloned checkout:
@@ -36,32 +36,6 @@ or from a downloaded or cloned checkout:
 ```bash
 pi install /absolute/path/to/transparent-compact
 ```
-
-This installs both the extension and the `context-retrieval` skill. Run `/reload`
-in an existing Pi session, or restart Pi.
-
-Use `pi install --local <source>` for a project-only installation. To load a
-local checkout for one invocation without saving an installation:
-
-```bash
-pi -e /absolute/path/to/transparent-compact
-```
-
-Remove previously copied extensions and skills before installing the package,
-so only one copy loads. Replace older copies of **both** resources when updating.
-
-### Manual installation
-
-From the checkout directory:
-
-```bash
-mkdir -p ~/.pi/agent/extensions ~/.pi/agent/skills
-cp extensions/transparent-compact.ts ~/.pi/agent/extensions/
-cp -r skills/context-retrieval ~/.pi/agent/skills/
-```
-
-Then `/reload`. Project equivalents are `.pi/extensions/` and `.pi/skills/`.
-
 
 ## Usage
 
