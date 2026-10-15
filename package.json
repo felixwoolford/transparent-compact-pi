@@ -1,7 +1,6 @@
 {
-  "name": "@foliox/transparent-compact",
-  "version": "0.8.1",
-  "private": false,
+  "name": "@foliox/transparent-compact-pi",
+  "version": "0.8.2",
   "description": "Deterministic, transparent-preserving compaction for Pi, with session-backed subagent context recovery.",
   "keywords": [
     "pi-package",
@@ -18,7 +17,6 @@
     "url": "git+https://github.com/felixwoolford/transparent-compact-pi.git"
   },
   "license": "MIT",
-  "author": "Felix Woolford",
   "type": "module",
   "main": "index.js",
   "directories": {
