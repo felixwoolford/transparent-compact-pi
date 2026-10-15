@@ -9,7 +9,7 @@ npm ci --ignore-scripts
 npm test
 ```
 
-The development dependency pins Pi 1.0.3. Runtime imports are host-provided peer
+The development dependency pins Pi 1.1.0. Runtime imports are host-provided peer
 dependencies; do not bundle additional copies of Pi's runtime packages.
 
 To test against an existing Pi installation instead, point to its package root:
