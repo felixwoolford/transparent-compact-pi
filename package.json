@@ -1,26 +1,28 @@
 {
-  "name": "transparent-compact",
+  "name": "@foliox/transparent-compact",
   "version": "0.8.0",
   "private": false,
   "description": "Deterministic, transparent-preserving compaction for Pi, with session-backed subagent context recovery.",
-  "license": "MIT",
-  "homepage": "https://github.com/felixwoolford/transparent-compact-pi#readme",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/felixwoolford/transparent-compact-pi.git"
-  },
-  "bugs": {
-    "url": "https://github.com/felixwoolford/transparent-compact-pi/issues"
-  },
-  "type": "module",
   "keywords": [
     "pi-package",
     "pi-extension",
     "compaction",
     "context-recovery"
   ],
-  "engines": {
-    "node": ">=22.19.0"
+  "homepage": "https://github.com/felixwoolford/transparent-compact-pi#readme",
+  "bugs": {
+    "url": "https://github.com/felixwoolford/transparent-compact-pi/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/felixwoolford/transparent-compact-pi.git"
+  },
+  "license": "MIT",
+  "author": "Felix Woolford",
+  "type": "module",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs"
   },
   "files": [
     "extensions/",
@@ -30,10 +32,6 @@
     "LICENSE",
     "docs/"
   ],
-  "pi": {
-    "extensions": ["./extensions/transparent-compact.ts"],
-    "skills": ["./skills/context-retrieval"]
-  },
   "scripts": {
     "test": "node scripts/test-all.cjs",
     "test:integration": "node test.cjs",
@@ -42,13 +40,24 @@
     "test:capspans": "node test.cjs capspans",
     "test:package": "node scripts/test-package.cjs"
   },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "1.1.0"
+  },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
     "@earendil-works/pi-agent-core": "*",
     "@earendil-works/pi-coding-agent": "*",
     "typebox": "*"
   },
-  "devDependencies": {
-    "@earendil-works/pi-coding-agent": "1.0.3"
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions/transparent-compact.ts"
+    ],
+    "skills": [
+      "./skills/context-retrieval"
+    ]
   }
 }
