@@ -53,6 +53,14 @@ To compact manually:
 /compact
 ```
 
+The checkpoint begins with an explanation and full recovery instructions, and
+ends with an evidence-boundary warning. A mandatory re-orientation checklist and
+brief recovery recap follow **the retained recent history and any pending new
+user input**. They are saved in the session and remain available on later turns.
+After another compaction, only the current checklist is presented: older generated
+checklists are excluded from compacted spans and the retained tail. This is
+instruction delivery, not a guarantee of model compliance.
+
 ### Select the compaction method
 
 ```text

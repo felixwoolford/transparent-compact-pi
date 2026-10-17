@@ -488,7 +488,9 @@ function summarizeMessages(messages: AgentMessage[]): string[] {
         lines.push(`[BashExecution]: $ ${String(m.command ?? "")}  (output removed — use context_lookup)`);
         break;
       case "custom":
-        lines.push(`[Custom]: ${textOf(m.content).text}`);
+        // Our instruction envelope is regenerated, not conversation prose.
+        // Keep originals in raw history, but never carry old checklists into spans.
+        if (m.customType !== REORIENT_MESSAGE) lines.push(`[Custom]: ${textOf(m.content).text}`);
         break;
       case "branchSummary":
       case "compactionSummary":
@@ -604,15 +606,63 @@ function capSpans(spans: string[][], budget: number): string[][] {
   return spans.map((_, span) => items.filter((it) => it.span === span).map((it) => it.line));
 }
 
-const REORIENT_BLOCK = `**Re-orient before continuing.** Compaction may have removed information needed to follow the project instructions:
+const REORIENT_BLOCK = `**Post-compaction re-orientation — REQUIRED BEFORE CONTINUING.** Compaction may have removed information needed to follow the project instructions. Before planning or performing the next task, you MUST complete this checklist:
 1. Re-read documents required by the applicable instructions (such as files referenced by AGENTS.md / CLAUDE.md), even if you read them before compaction. Re-acquire any other information needed for the current task that is no longer in context. This means restoring inputs, not repeating completed work: do not redo writes, edits, or other state-changing actions merely because their results were dropped. If needed, recover those results with \`context_lookup\`, or verify current state.
 2. If this is a Git repository, run \`git status\` and review uncommitted work. Re-verify build/test state if you are about to rely on it.
 3. Re-read any file you are about to modify — do not trust content you only remember from before the compaction.
-4. **Treat other pre-compaction knowledge as unverified too.** Thinking and tool outputs were removed. Anything you know only from them — or from earlier assistant prose describing them — is a note, not evidence. Before you state it as fact or base a decision on it, re-read the source or ask \`context_lookup\`. If you cannot verify it, say explicitly that it is unverified.
+4. **Treat other pre-compaction knowledge as unverified too.** Thinking and tool outputs were removed. Anything you know only from them — or from earlier assistant prose describing them — is a note, not evidence. Before you state it as fact or base a decision on it, re-read the source or ask \`context_lookup\`. If you cannot verify it, say explicitly that it is unverified.`;
 
-**Recovering dropped details.** Information removed from your active context is preserved in the session, including earlier thinking and tool outputs. Prefer \`context_lookup\` with a specific question: a subagent searches the transcript in its own context and returns relevant findings. If its findings are incomplete, use the bounded fallback tools \`context_list_entries\`, \`context_grep\`, and \`context_show_entry\`; follow their pagination instructions for more detail. Do not read or grep raw session JSONL files or old dumps through filesystem tools in this conversation — use these recovery tools instead.`;
+const CHECKPOINT_EXPLANATION = "**Compacted conversation follows.** The earlier part of this conversation has been compacted into the checkpoint below. This is not the full transcript: assistant thinking and tool outputs have been removed from the compacted spans, but are preserved in the session and can be recovered.";
+
+const RECOVERY_INSTRUCTIONS = `**Recovering dropped details.** Information removed from your active context is preserved in the session, including earlier thinking and tool outputs. Prefer \`context_lookup\` with a specific question: a subagent searches the transcript in its own context and returns relevant findings. If its findings are incomplete, use the bounded fallback tools \`context_list_entries\`, \`context_grep\`, and \`context_show_entry\`; follow their pagination instructions for more detail. Do not read or grep raw session JSONL files or old dumps through filesystem tools in this conversation — use these recovery tools instead.`;
 
 const EVIDENCE_BOUNDARY_RULE = "**Evidence boundary:** Tool signatures and file lists do not contain command output, file contents, or rules from read documents; if a claim depends on that removed evidence, use `context_lookup` or re-read the source before relying on it.";
+
+const REORIENT_MESSAGE = "transparent-compact:reorient";
+const RECOVERY_RECAP = "**Recovery recap.** Re-read current sources or ask `context_lookup` a specific question about removed history. If its findings are incomplete, use `context_list_entries`, `context_grep`, or `context_show_entry`, following pagination instructions. Do not read raw session JSONL files or old dumps through filesystem tools. Keep these evidence/recovery rules in force as work continues.";
+
+function latestVerbatimCompaction(entries: SessionEntry[]) {
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const entry = entries[i];
+    if (entry.type === "compaction")
+      return (entry.details as { kind?: string } | undefined)?.kind === MECH_KIND ? entry : undefined;
+  }
+}
+
+function reorientationMessage(compactionId: string) {
+  return { customType: REORIENT_MESSAGE, content: `${REORIENT_BLOCK}\n\n${RECOVERY_RECAP}`,
+    display: false, details: { compactionId } };
+}
+
+function isReorientation(msg: AgentMessage): boolean {
+  return msg.role === "custom" && msg.customType === REORIENT_MESSAGE;
+}
+
+function reorientationFor(msg: AgentMessage, compactionId: string): boolean {
+  return msg.role === "custom" && msg.customType === REORIENT_MESSAGE &&
+    (msg.details as { compactionId?: string } | undefined)?.compactionId === compactionId;
+}
+
+/** Keep one current, persisted checklist. Obsolete managed messages can still be
+ * in Pi's retained tail, but are never presented as conversation or summarized.
+ * On the first request, move the checklist after pending input/other transforms.
+ * Later requests keep it in history before the work that followed it. */
+function projectReorientation(messages: AgentMessage[], entries: SessionEntry[]): AgentMessage[] {
+  const compaction = latestVerbatimCompaction(entries);
+  let selected = -1;
+  for (let i = 0; i < messages.length; i++)
+    if (compaction && reorientationFor(messages[i], compaction.id)) selected = i;
+  const result = messages.filter((m, i) => !isReorientation(m) || i === selected);
+  if (selected < 0 || !compaction) return result;
+  const answered = entries.slice(entries.indexOf(compaction) + 1).some((e) =>
+    e.type === "message" && e.message.role === "assistant" &&
+    e.message.stopReason !== "aborted" && e.message.stopReason !== "error");
+  if (!answered) {
+    const checklist = messages[selected];
+    return [...result.filter((m) => m !== checklist), checklist];
+  }
+  return result;
+}
 
 async function buildMechanicalSummary(opts: {
   reason: string; // pi's raw reason: "manual" | "threshold" | "overflow"
@@ -674,6 +724,7 @@ async function buildMechanicalSummary(opts: {
   const compactionCount = opts.branchEntries.filter((e) => e.type === "compaction").length + 1;
   const parts: string[] = [];
   parts.push(`## Verbatim compaction checkpoint (compaction ${compactionCount} on this branch)`);
+  parts.push(CHECKPOINT_EXPLANATION);
   if (base?.kind === "model-summary") {
     parts.push(MIXED_CONTEXT_WARNING);
     opts.notify(MIXED_CONTEXT_WARNING);
@@ -682,11 +733,11 @@ async function buildMechanicalSummary(opts: {
   parts.push("- In the compacted spans, user and assistant prose is kept verbatim, subject to budget trimming; tool calls are kept as one-line signatures (arguments truncated). Assistant thinking and tool outputs are removed. Retained prose is a record of what was said, not verification of its claims.");
   parts.push("- Tool status: ok = result not flagged as an error; error = result flagged as an error; unknown = no safely matched result/status. Output content is removed in all cases. ok does not prove a command or tests passed. Calls without a status in older spans have unknown outcomes.");
   parts.push(
-    "- pi keeps the most recent part of the conversation verbatim (its `keepRecentTokens` setting). The spans below cover only what came *before* that; everything after the last span is uncompacted.",
+    "- pi keeps the most recent part of the conversation verbatim (its `keepRecentTokens` setting). The spans below cover only what came *before* that. The retained verbatim conversation begins after the explicit boundary marker at the end of this checkpoint.",
   );
   parts.push("- The full transcript before this point is kept in the session; use `context_lookup` to recover details (including thinking and tool outputs).");
   parts.push("");
-  parts.push(REORIENT_BLOCK);
+  parts.push(RECOVERY_INSTRUCTIONS);
   parts.push("");
   parts.push(SECTION_HEADER);
   parts.push("");
@@ -1220,6 +1271,36 @@ function registerDirectTools(pi: ExtensionAPI): void {
 // ============================================================================
 
 export default function (pi: ExtensionAPI) {
+  // Starting/resuming a run persists the checklist AFTER the starting user
+  // message. Existing branch history, not an in-memory flag, prevents repeats.
+  pi.on("before_agent_start", (_event, ctx) => {
+    const entries = ctx.sessionManager.getBranch();
+    const compaction = latestVerbatimCompaction(entries);
+    if (!compaction) return;
+    const found = entries.some((e) => e.type === "custom_message" && e.customType === REORIENT_MESSAGE &&
+      (e.details as { compactionId?: string } | undefined)?.compactionId === compaction.id);
+    if (!found) return { message: reorientationMessage(compaction.id) };
+  });
+
+  // Between-turn compaction and overflow continuation do not necessarily pass
+  // through before_agent_start. Steering is consumed by Pi before that next
+  // request and persists the same custom message. Idle/post-run compactions wait
+  // for the next starting message instead; the checklist must not start a run.
+  pi.on("session_compact", (event, ctx) => {
+    if ((event.compactionEntry.details as { kind?: string } | undefined)?.kind !== MECH_KIND) return;
+    if (event.willRetry || ctx.signal)
+      pi.sendMessage(reorientationMessage(event.compactionEntry.id), { deliverAs: "steer" });
+  });
+
+  // Run after ordinary transforms and system/tool restoration. Preserve all
+  // non-managed messages, remove old checklists even if they survive in the tail,
+  // and keep the current one active on subsequent requests (not just the first).
+  pi.on("context_with_system", (event, ctx) => {
+    const messages = projectReorientation(event.messages, ctx.sessionManager.getBranch());
+    if (messages.length !== event.messages.length || messages.some((m, i) => m !== event.messages[i]))
+      return { messages };
+  });
+
   // Method selection never changes Pi's auto-compaction enabled setting.
   pi.registerCommand("compaction-method", {
     description: "Show or set the session compaction method: verbatim|summary (manual and automatic)",

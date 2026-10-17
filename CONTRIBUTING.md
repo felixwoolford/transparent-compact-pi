@@ -28,6 +28,12 @@ checks local dependencies and global npm installations.
 - Synthetic-session integration tests using real Pi session managers and stubbed
   model responses: recovery across three compactions, full thinking/output/args,
   flat spans, cumulative file lists, branch scoping, and exact entry rendering.
+- Instruction-envelope regressions: recovery guidance before the compacted spans,
+  boundary warning after them, and a mandatory checklist/recovery recap after a
+  roughly 20k-token retained tail. Real SDK turns cover persistence across responses,
+  repeated compaction without duplicate instructions, mid-run compaction and overflow
+  retry; branch tests cover reload/resume and old checklists in spans or the tail.
+  These test delivery, not model compliance.
 - Skill validation and agreement with the question-only lookup contract.
 - Header/section spoofing resistance and internal lookup tool dispatch.
 - Absolute session-file override tests, including pruned forks, reload at lookup

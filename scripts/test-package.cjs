@@ -11,7 +11,7 @@ const root = path.resolve(__dirname, "..");
 
 async function main() {
   const manifest = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
-  assert.equal(manifest.private, true, "GitHub-only staging must not publish accidentally");
+  assert.notEqual(manifest.private, true, "public npm package must remain publishable");
   assert.equal(manifest.license, "MIT");
   assert(manifest.keywords.includes("pi-package"));
   assert.deepEqual(manifest.pi.extensions, ["./extensions/transparent-compact.ts"]);

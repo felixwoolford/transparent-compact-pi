@@ -103,7 +103,46 @@ the count. Pending lookup calls in the same batch also count, preventing paralle
 calls from bypassing the limit. Blocked attempts return a short fallback note
 without launching a subagent; later lookups after other work remain available.
 
-After compaction, the checkpoint instructs the agent to re-read required documents,
-even if previously read, re-acquire missing task information, inspect Git state
-when in a Git repository, and re-read files before modifying them.
+### Instruction envelope and persistent re-orientation
+
+Pi projects the checkpoint before its retained recent history (normally about
+20,000 tokens). The extension separates explanations about that history from the
+instructions that must be prominent at the actual point of resumption:
+
+```text
+Checkpoint introduction: what was removed + full recovery instructions
+All compacted spans (oldest first), then read/modified file lists
+One evidence-boundary warning + start-of-verbatim-tail marker
+Retained verbatim tail
+Any pending new user input
+Mandatory re-orientation checklist + brief recovery recap
+```
+
+The numbered checklist requires re-reading required documents, restoring missing
+inputs rather than repeating completed writes, inspecting Git state, re-reading
+files before editing and verifying evidence before relying on it. It is a saved
+custom message tagged with the current compaction entry ID, not a temporary nudge:
+subsequent responses and user turns retain it in history before the work that
+followed it. `before_agent_start` adds it on normal starts/resume when missing;
+`session_compact` steers it into automatic mid-run and overflow continuations.
+Idle/post-run compaction waits for the next run and does not trigger extra work.
+
+The final `context_with_system` phase places the checklist last on the first
+post-compaction request, after ordinary context transforms and pending input.
+It also removes obsolete or duplicate **managed** checklist messages, including
+those Pi retained in its recent tail. On later turns the current message stays in
+history rather than being moved to the end again. Branch-based IDs make this
+work through reload, resume, forks and tree navigation without an in-memory flag.
+
+Subsequent verbatim compactions skip these managed messages when building spans,
+then regenerate one envelope around the entire accumulated compacted context.
+Old generated checklists therefore do not accumulate inside spans or the active
+tail. Their original entries remain in raw session history for recovery/audit.
+Ordinary user, assistant and custom prose is never stripped by matching instruction
+text. Opaque inherited model summaries/legacy checkpoints are likewise not rewritten
+to remove text that looks like an old instruction envelope.
+
+Offline tests inspect actual SDK requests with roughly 20k-token tails, multiple
+compactions, persisted instructions and interrupted/automatic continuations.
+These verify delivery and placement, not live-model compliance.
 

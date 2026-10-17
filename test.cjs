@@ -35,6 +35,10 @@ function load(factory, sessionRef) {
       assert(sessionRef?.current, "state writes must target the bound session");
       sessionRef.current.appendCustomEntry(type, data);
     },
+    sendMessage: (message) => {
+      assert(sessionRef?.current, "messages must target the bound session");
+      sessionRef.current.appendCustomMessageEntry(message.customType, message.content, message.display, message.details);
+    },
   });
   return { handlers, tools, commands };
 }
@@ -55,8 +59,9 @@ function makeContext(manager, cwd) {
 }
 async function compact(ext, ctx, ids, kept, reason = "manual", fileOps) {
   const entries = ctx.sessionManager.getBranch();
+  const { sessionEntryToContextMessages } = await jiti.import("@earendil-works/pi-coding-agent");
   const preparation = {
-    messagesToSummarize: ids.map((id) => ctx.sessionManager.getEntry(id).message),
+    messagesToSummarize: ids.flatMap((id) => sessionEntryToContextMessages(ctx.sessionManager.getEntry(id))),
     turnPrefixMessages: [], firstKeptEntryId: kept, tokensBefore: 123456,
     isSplitTurn: false, fileOps: fileOps ?? { read: new Set(), written: new Set(), edited: new Set() },
     settings: { enabled: true, reserveTokens: 16384, keepRecentTokens: 20000 },
@@ -76,15 +81,14 @@ async function compact(ext, ctx, ids, kept, reason = "manual", fileOps) {
   for (const tool of ["context_list_entries", "context_grep", "context_show_entry"]) {
     assert(c.summary.includes(tool), "checkpoint explicitly permits bounded fallback tools");
   }
-  assert(c.summary.includes("Re-read documents required by the applicable instructions"));
-  assert(c.summary.includes("even if you read them before compaction."));
-  assert(c.summary.includes("This means restoring inputs, not repeating completed work: do not redo writes, edits, or other state-changing actions merely because their results were dropped."));
-  assert(c.summary.includes("If needed, recover those results with `context_lookup`, or verify current state."));
+  assert(c.summary.includes("**Compacted conversation follows.** The earlier part of this conversation has been compacted into the checkpoint below."));
+  assert(c.summary.includes("**Recovering dropped details.**"));
+  assert(c.summary.indexOf("**Recovering dropped details.**") < c.summary.indexOf("### Compacted conversation"));
+  assert(!c.summary.includes("Post-compaction re-orientation"), "checklist belongs after the retained tail, not inside the checkpoint");
   assert(!c.summary.includes("Redo the startup process"));
   assert(c.summary.includes("user and assistant prose is kept verbatim, subject to budget trimming"));
   assert(c.summary.includes("Retained prose is a record of what was said, not verification of its claims."));
-  assert(c.summary.includes("If this is a Git repository, run `git status`"));
-  assert(c.summary.includes("Thinking and tool outputs were removed."));
+  assert(c.summary.includes("Assistant thinking and tool outputs are removed."));
   assert(c.summary.includes("**Evidence boundary:** Tool signatures and file lists do not contain command output, file contents, or rules from read documents;"));
   assert(c.summary.lastIndexOf("**Evidence boundary:**") < c.summary.lastIndexOf("Conversation"), "closing evidence rule stays above the uncompacted tail");
   assert(!c.summary.includes("EARLIEST_TOOL_OUTPUT"));
@@ -444,6 +448,7 @@ async function main() {
     await require("./scripts/pagination-tests.cjs")(hybridHelpers);
     await require("./scripts/lookup-paging-tests.cjs")(hybridHelpers);
     await require("./scripts/runtime-lookup-tests.cjs")({ ...hybridHelpers, jiti, piRoot });
+    await require("./scripts/reorientation-tests.cjs")({ ...hybridHelpers, factory, load, compact, jiti, piRoot });
     assert.deepEqual(Object.keys(ext.commands), ["compaction-method", "cap-compaction"]);
     await methodTests(factory, SessionManager, root);
     await require("./scripts/checkpoint-evidence-tests.cjs")({ ...hybridHelpers, compact });
@@ -487,7 +492,8 @@ async function main() {
     const final = f.manager.appendMessage(user("The final retained tail.", epoch + 3000));
     const c3 = await compact(ext, ctx, [next], final, "overflow");
     assert.equal((c3.summary.match(/## Verbatim compaction checkpoint/g) ?? []).length, 1);
-    assert.equal((c3.summary.match(/Re-orient before continuing/g) ?? []).length, 1);
+    assert.equal((c3.summary.match(/Post-compaction re-orientation/g) ?? []).length, 0);
+    assert.equal((c3.summary.match(/\*\*Recovering dropped details\.\*\*/g) ?? []).length, 1);
     assert.equal((c3.summary.match(/<compacted-span /g) ?? []).length, 3);
     for (const n of [1, 2, 3]) assert(c3.summary.includes(`<compacted-span n="${n}"`));
     assert(c3.summary.includes("src/foo.ts") && c3.summary.includes("src/bar.ts"), "file lists are cumulative");

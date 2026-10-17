@@ -9,6 +9,15 @@
   ambiguous outcomes are never inferred, including unlabelled older spans.
 - Read-file entries explicitly mark content as removed; a closing evidence rule
   requires lookup or re-reading before relying on removed outputs or document rules.
+- The instruction envelope now has recovery explanations before all compacted
+  spans, one evidence-boundary warning after them, and a mandatory numbered
+  re-orientation checklist plus brief recovery recap after the retained tail.
+  The checklist is persisted and remains active after the first response. Later
+  compactions regenerate the envelope: old generated checklists are neither
+  summarized into spans nor replayed from the retained tail. Raw originals remain
+  available for audit/recovery. Offline SDK tests cover ~20k-token tail placement,
+  persistence, repeated compaction, reload/resume, mid-run and overflow continuation,
+  without making a live-model compliance claim.
 - Flat chronological spans avoid repeatedly summarizing earlier facts.
 - Session-persistent `/compaction-method verbatim|summary` selects manual,
   automatic, and overflow-recovery compaction independently of auto-compaction
