@@ -118,9 +118,16 @@ Any pending new user input
 Mandatory re-orientation checklist + brief recovery recap
 ```
 
-The numbered checklist requires re-reading required documents, restoring missing
-inputs rather than repeating completed writes, inspecting Git state, re-reading
-files before editing and verifying evidence before relying on it. It is a saved
+The numbered checklist requires identifying documents mandated by system,
+developer and applicable project instructions, then re-reading each in its
+entirety before task planning or changes. For this step, a document is required
+reading if and only if those instructions explicitly instruct the agent to read
+it; merely mentioning or linking a document does not qualify. Grep matches, selected sections,
+summaries and reading only edit targets explicitly do not satisfy this step;
+truncated reads must continue to the end, and unavailable documents must be
+reported rather than silently skipped. It also requires restoring missing inputs
+rather than repeating completed writes, inspecting Git state, re-reading files
+before editing and verifying evidence before relying on it. It is a saved
 custom message tagged with the current compaction entry ID, not a temporary nudge:
 subsequent responses and user turns retain it in history before the work that
 followed it. `before_agent_start` adds it on normal starts/resume when missing;

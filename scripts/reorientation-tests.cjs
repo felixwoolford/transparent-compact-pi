@@ -8,6 +8,24 @@ const heading = "Post-compaction re-orientation — REQUIRED BEFORE CONTINUING."
 const reminders = (messages) => messages.filter((m) => m.role === "custom" && m.customType === kind);
 const count = (s, needle) => s.split(needle).length - 1;
 
+function checkChecklist(content) {
+  for (const phrase of [heading, "Compaction may have removed information needed to follow the project instructions.",
+    "Before planning or performing the next task, you MUST complete this checklist",
+    "1. **Re-read every required document IN ITS ENTIRETY.**",
+    "For this step, a document is required reading **if and only if** your applicable system prompt, developer instructions, or project instructions",
+    "including AGENTS.md / CLAUDE.md) explicitly instruct you to read it.",
+    "Merely mentioning or linking a document does not qualify.",
+    "Identify all such documents and re-read each from beginning to end", "even if you read them before compaction",
+    "Grep matches, selected sections, summaries, and reading only files you intend to edit do NOT satisfy this requirement.",
+    "If output is truncated, continue reading until you reach the end.",
+    "Complete these reads before planning or changing anything; intending or promising to read does not count.",
+    "If a required document is unavailable, report the blocker rather than silently skipping it.",
+    "run `git status`", "Re-read any file you are about to modify", "note, not evidence", "do not redo writes",
+    "If you cannot verify it", "**Recovery recap.**", "context_lookup", "context_list_entries", "context_grep",
+    "context_show_entry", "Do not read raw session JSONL"])
+    assert(content.includes(phrase), phrase);
+}
+
 function checkEnvelope(summary) {
   assert.equal(count(summary, "**Compacted conversation follows.**"), 1);
   assert(summary.includes("The earlier part of this conversation has been compacted into the checkpoint below."));
@@ -63,13 +81,7 @@ module.exports = async function (h) {
   const reminder = reminders(output)[0];
   assert.equal(reminders(output).length, 1);
   assert.equal(output.at(-1), reminder);
-  assert(reminder.content.includes(heading));
-  assert(reminder.content.includes("Compaction may have removed information needed to follow the project instructions."));
-  assert(reminder.content.includes("Before planning or performing the next task, you MUST complete this checklist"));
-  for (const phrase of ["Re-read documents required", "even if you read them before compaction", "run `git status`",
-    "Re-read any file you are about to modify", "note, not evidence", "do not redo writes", "If you cannot verify it",
-    "**Recovery recap.**", "context_lookup", "context_list_entries", "context_grep", "context_show_entry", "Do not read raw session JSONL"])
-    assert(reminder.content.includes(phrase), phrase);
+  checkChecklist(reminder.content);
   const before = JSON.stringify(manager.getBranch());
   const delta = { role: "system", content: "Late system/tool update", timestamp: 0 };
   const withDelta = [...input, delta];
@@ -223,7 +235,7 @@ async function runtimeTests(h) {
       const request = requests[startsCompacted ? 0 : 1];
       assert(JSON.stringify(request.messages).includes("state=ready signature=engine-20-41"));
       assert.equal(request.messages.at(-1).role, "user");
-      assert(JSON.stringify(request.messages.at(-1)).includes(heading));
+      checkChecklist(JSON.stringify(request.messages.at(-1)));
       assert(JSON.stringify(request.messages.at(-2)).includes("LATE_CONTEXT_TRANSFORM"));
       const footers = () => manager.getBranch().filter((e) => e.type === "custom_message" && e.customType === kind);
       assert.equal(footers().length, 1, "one saved checklist, not an ephemeral request-only nudge");
@@ -243,7 +255,7 @@ async function runtimeTests(h) {
       assert.equal(count(JSON.stringify(secondRequest), "**Recovering dropped details.**"), 1);
       assert.equal(count(JSON.stringify(secondRequest), "**Evidence boundary:**"), 1);
       assert.equal(count(JSON.stringify(secondRequest), "**Recovery recap.**"), 1);
-      assert(JSON.stringify(secondRequest.messages.at(-1)).includes(heading));
+      checkChecklist(JSON.stringify(secondRequest.messages.at(-1)));
       assert.equal(footers().length, 2, "raw audit history keeps the old and current managed entries");
       assert(footers().some((e) => e.id === firstFooterId));
       assert.equal(footers().at(-1).details.compactionId, c2.id);
