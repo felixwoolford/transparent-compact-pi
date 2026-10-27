@@ -728,7 +728,7 @@ const REORIENT_BLOCK = `**Post-compaction re-orientation.** Retained startup rea
 
 const CHECKPOINT_EXPLANATION = "**Compacted conversation follows.** The earlier part of this conversation has been compacted into the checkpoint below. This is not the full transcript: assistant thinking and tool outputs have been removed from the compacted spans, but are preserved in the session and can be recovered.";
 
-const RECOVERY_FILESYSTEM_RULE = "For recovery of details lost to compaction, do not read or grep raw session JSONL files through filesystem tools; use the recovery tools instead. This restriction does not apply to user-requested session audits, debugging, or cross-session analysis.";
+const RECOVERY_FILESYSTEM_RULE = "For recovery of details lost from the context in this session due to compaction, do not read or grep raw session JSONL files through filesystem tools; use the recovery tools instead.";
 
 const RECOVERY_INSTRUCTIONS = `**Recovering dropped details.** Information removed from your active context is preserved in this conversation's history, including earlier thinking and tool outputs. Recover only specific details previously present on this conversation's active branch and now missing because of compaction, not information never supplied. Prefer \`context_lookup\` for this recovery with a specific question: a subagent searches the transcript in its own context and returns relevant findings. If its findings are incomplete, use the bounded fallback tools \`context_list_entries\`, \`context_grep\`, and \`context_show_entry\`; follow their pagination instructions for more detail. ${RECOVERY_FILESYSTEM_RULE}`;
 
@@ -1613,8 +1613,7 @@ export default function (pi: ExtensionAPI) {
     executionMode: "sequential",
     description:
       "Recover a specific detail previously present earlier on this conversation's active branch but now missing because of compaction, including thinking, tool outputs, error text, file contents, or earlier decisions. Use only when the visible conversation or compaction checkpoint establishes relevant earlier history; do not call this tool to discover whether such history exists. Not for session startup, new-project orientation, missing requirements, or information never supplied: inspect project files or ask the user instead. Spawns a subagent that searches this conversation's full raw active branch (across all compactions) in its OWN context and returns relevant findings. Does not search abandoned branches or other sessions. For this recovery workflow, prefer this tool first; if findings are incomplete, use the bounded context_list_entries, context_grep, and context_show_entry fallback tools. Follow their pagination instructions. " +
-      RECOVERY_FILESYSTEM_RULE + " " +
-      "Repeated lookup calls without a non-recovery tool result, user message, or bash execution are limited. The three fallback tools neither increase nor reset the lookup count; narration and thinking do not reset it either.",
+      RECOVERY_FILESYSTEM_RULE + "",
     promptSnippet: "Recover specific earlier conversation details lost through compaction",
     parameters: Type.Object({
       question: Type.String({ description: "The specific detail from earlier in this conversation that compaction removed (exact error text, previously read file, decision, command output…)." }),
