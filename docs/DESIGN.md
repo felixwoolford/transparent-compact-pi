@@ -114,6 +114,18 @@ by provider.
 
 ### Recover historical details
 
+Recovery is for a specific detail previously present on this conversation's active
+branch and now missing because of compaction. The visible conversation or checkpoint
+must establish relevant earlier history; the agent should not call recovery tools
+to discover whether that history exists. Session startup, project discovery, missing
+requirements, and information never supplied are not recovery triggers: inspect
+project files or ask the user instead.
+
+For this recovery workflow, use the recovery tools rather than reading raw session
+files through filesystem tools. This restriction does not apply to user-requested
+session audits, debugging, or cross-session analysis, which can use ordinary file
+tools. Lookup itself still cannot search other sessions or abandoned branches.
+
 The extension registers a subagent lookup and three direct-search fallback tools:
 
 | Tool | Purpose |

@@ -1,14 +1,11 @@
 /**
  * transparent-compact — transparent compaction with session-backed recovery.
  *
- * Builds a deterministic checkpoint without writing local transcript dumps. context_lookup renders the current raw
+ * Builds a deterministic checkpoint from retained session history. context_lookup renders the current raw
  * session branch in memory at call time, including earlier compactions,
  * thinking, full tool outputs, and tool-call arguments. Pi normally persists
  * this history under ~/.pi/agent/sessions/; custom session locations and
  * ephemeral sessions work too. Only the active branch is searched.
- *
- * Does not register dump_context or /dump-context, and does not read, write,
- * or prune old dumps.
  *
  * Optional env settings:
  *   MECH_COMPACT_MAX_SUMMARY_CHARS    initial character budget override (takes precedence over percent)
@@ -357,9 +354,8 @@ function branchToTranscript(entries: SessionEntry[]): { lines: string[]; index: 
         break;
       }
       case "compaction": {
-        const e = entry as SessionEntry & { tokensBefore?: number; firstKeptEntryId?: string; summary?: string; details?: { dumpDir?: string } };
+        const e = entry as SessionEntry & { tokensBefore?: number; firstKeptEntryId?: string; summary?: string };
         lines.push(`ENTRY ${entry.id}  compaction  ${t}  tokensBefore=${e.tokensBefore ?? "?"}  firstKeptEntryId=${e.firstKeptEntryId ?? "?"}`);
-        if (e.details?.dumpDir) lines.push(`  previous dump: ${e.details.dumpDir}`);
         lines.push("[summary]");
         lines.push(...String(e.summary ?? "").split("\n"));
         break;
@@ -732,12 +728,14 @@ const REORIENT_BLOCK = `**Post-compaction re-orientation.** Retained startup rea
 
 const CHECKPOINT_EXPLANATION = "**Compacted conversation follows.** The earlier part of this conversation has been compacted into the checkpoint below. This is not the full transcript: assistant thinking and tool outputs have been removed from the compacted spans, but are preserved in the session and can be recovered.";
 
-const RECOVERY_INSTRUCTIONS = `**Recovering dropped details.** Information removed from your active context is preserved in the session, including earlier thinking and tool outputs. Prefer \`context_lookup\` with a specific question: a subagent searches the transcript in its own context and returns relevant findings. If its findings are incomplete, use the bounded fallback tools \`context_list_entries\`, \`context_grep\`, and \`context_show_entry\`; follow their pagination instructions for more detail. Do not read or grep raw session JSONL files or old dumps through filesystem tools in this conversation — use these recovery tools instead.`;
+const RECOVERY_FILESYSTEM_RULE = "For recovery of details lost to compaction, do not read or grep raw session JSONL files through filesystem tools; use the recovery tools instead. This restriction does not apply to user-requested session audits, debugging, or cross-session analysis.";
+
+const RECOVERY_INSTRUCTIONS = `**Recovering dropped details.** Information removed from your active context is preserved in this conversation's history, including earlier thinking and tool outputs. Recover only specific details previously present on this conversation's active branch and now missing because of compaction, not information never supplied. Prefer \`context_lookup\` for this recovery with a specific question: a subagent searches the transcript in its own context and returns relevant findings. If its findings are incomplete, use the bounded fallback tools \`context_list_entries\`, \`context_grep\`, and \`context_show_entry\`; follow their pagination instructions for more detail. ${RECOVERY_FILESYSTEM_RULE}`;
 
 const EVIDENCE_BOUNDARY_RULE = "**Evidence boundary:** Tool signatures and file lists do not contain command output, file contents, or rules from read documents; if a claim depends on that removed evidence, use `context_lookup` or re-read the source before relying on it.";
 
 const REORIENT_MESSAGE = "transparent-compact:reorient";
-const RECOVERY_RECAP = "**Recovery recap.** When needed evidence is missing, re-read its source or ask `context_lookup` a specific question about removed history. If its findings are incomplete, use `context_list_entries`, `context_grep`, or `context_show_entry`, following pagination instructions. Do not read raw session JSONL files or old dumps through filesystem tools. Keep these evidence/recovery rules in force as work continues.";
+const RECOVERY_RECAP = `**Recovery recap.** When needed evidence from earlier in this conversation is missing because of compaction, re-read its source or ask \`context_lookup\` a specific question about that removed history. Missing requirements or unfamiliar project details are not evidence of forgotten history: inspect project files or ask the user instead. If its findings are incomplete, use \`context_list_entries\`, \`context_grep\`, or \`context_show_entry\`, following pagination instructions. ${RECOVERY_FILESYSTEM_RULE} Keep these evidence/recovery rules in force as work continues.`;
 
 function latestVerbatimCompaction(entries: SessionEntry[]) {
   for (let i = entries.length - 1; i >= 0; i--) {
@@ -1349,7 +1347,7 @@ function consecutiveLookups(ctx: { sessionManager: { getBranch: () => SessionEnt
 }
 
 function registerDirectTools(pi: ExtensionAPI): void {
-  const pre = "Fallback after context_lookup, when its findings are incomplete: ";
+  const pre = "Fallback after context_lookup, when its findings are incomplete: recover specific earlier details lost to compaction on this conversation's active branch, not project discovery or information never supplied. Cannot search other sessions or abandoned branches. ";
   const run = (ctx: { sessionManager: { getBranch: () => SessionEntry[] } }, f: (t: Transcript[]) => string) => {
     try {
       const transcript = sessionTranscript(ctx);
@@ -1363,7 +1361,7 @@ function registerDirectTools(pi: ExtensionAPI): void {
     name: "context_list_entries",
     label: "Context: list entries",
     description: pre + "List raw session ENTRY headers and previews, including compacted entries, in pages of up to 12000 payload characters, plus cursor notes. Follow all reported continuation parameters (offset and throughEntry).",
-    promptSnippet: "Fallback: list session entries when subagent findings are incomplete",
+    promptSnippet: "Fallback: list this conversation's entries for post-compaction recovery",
     parameters: Type.Object(LIST_FIELDS),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       return run(ctx, (t) => listEntries(t, params));
@@ -1373,7 +1371,7 @@ function registerDirectTools(pi: ExtensionAPI): void {
     name: "context_grep",
     label: "Context: grep",
     description: pre + "Regex-search the full raw session branch, including compacted thinking and tool outputs, with surrounding lines and authoritative entry attribution. pattern is a JS regex (case-insensitive). Up to 12000 payload characters per page, plus cursor notes. Follow all reported continuation parameters (offset, charOffset, throughEntry) for remaining matches or oversized lines. Historical thinking is not verified fact.",
-    promptSnippet: "Fallback: search session evidence when subagent findings are incomplete",
+    promptSnippet: "Fallback: search this conversation's evidence lost through compaction",
     parameters: Type.Object(GREP_FIELDS),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       return run(ctx, (t) => grepTranscript(t, params));
@@ -1383,7 +1381,7 @@ function registerDirectTools(pi: ExtensionAPI): void {
     name: "context_show_entry",
     label: "Context: show entry",
     description: pre + "Retrieve an indexed session entry by ENTRY id (from context_list_entries or context_grep) in pages of up to 24000 payload characters and maxLines lines, plus attribution/cursor notes. Follow the reported offset for the rest; a page may not contain the entire entry.",
-    promptSnippet: "Fallback: retrieve session entry pages when subagent findings are incomplete",
+    promptSnippet: "Fallback: retrieve this conversation's entries for post-compaction recovery",
     parameters: Type.Object(SHOW_FIELDS),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       return run(ctx, (t) => showEntry(t, params));
@@ -1614,10 +1612,12 @@ export default function (pi: ExtensionAPI) {
     label: "Context lookup",
     executionMode: "sequential",
     description:
-      "Recover information preserved in the session but removed from your active context by verbatim compaction—including thinking, tool outputs, error text, file contents, and earlier decisions. Spawns a subagent that searches the full raw session branch (across all compactions) in its OWN context and returns only relevant findings. Does not search abandoned branches or other sessions. Prefer this tool first; if findings are incomplete, use the bounded context_list_entries, context_grep, and context_show_entry fallback tools. Follow their pagination instructions. Do not read or grep raw session JSONL files or old dumps through filesystem tools. Repeated lookup calls without a non-recovery tool result, user message, or bash execution are limited. The three fallback tools neither increase nor reset the lookup count; narration and thinking do not reset it either.",
-    promptSnippet: "Ask a subagent to research dropped context in the session transcript",
+      "Recover a specific detail previously present earlier on this conversation's active branch but now missing because of compaction, including thinking, tool outputs, error text, file contents, or earlier decisions. Use only when the visible conversation or compaction checkpoint establishes relevant earlier history; do not call this tool to discover whether such history exists. Not for session startup, new-project orientation, missing requirements, or information never supplied: inspect project files or ask the user instead. Spawns a subagent that searches this conversation's full raw active branch (across all compactions) in its OWN context and returns relevant findings. Does not search abandoned branches or other sessions. For this recovery workflow, prefer this tool first; if findings are incomplete, use the bounded context_list_entries, context_grep, and context_show_entry fallback tools. Follow their pagination instructions. " +
+      RECOVERY_FILESYSTEM_RULE + " " +
+      "Repeated lookup calls without a non-recovery tool result, user message, or bash execution are limited. The three fallback tools neither increase nor reset the lookup count; narration and thinking do not reset it either.",
+    promptSnippet: "Recover specific earlier conversation details lost through compaction",
     parameters: Type.Object({
-      question: Type.String({ description: "What to find in the dropped context. Be specific (exact error text, file, decision, command output…)." }),
+      question: Type.String({ description: "The specific detail from earlier in this conversation that compaction removed (exact error text, previously read file, decision, command output…)." }),
     }),
     async execute(toolCallId, params, signal, _onUpdate, ctx) {
       if (cfg.lookupMaxCalls > 0 && consecutiveLookups(ctx, toolCallId) >= cfg.lookupMaxCalls) {

@@ -72,11 +72,10 @@ async function compact(ext, ctx, ids, kept, reason = "manual", fileOps) {
   assert.equal(c.firstKeptEntryId, kept);
   assert.equal(c.tokensBefore, preparation.tokensBefore);
   assert.equal(c.details.kind, "mech-compact");
-  assert(!("dumpDir" in c.details));
+  assert.deepEqual(Object.keys(c.details), ["kind", "readFiles", "modifiedFiles", "startupReads", "span"],
+    "checkpoint metadata contains only the current session-backed contract");
   assert(!c.summary.includes("conversation.md"));
-  assert(!c.summary.includes(".pi/context-dumps"));
   assert(!c.summary.includes(ctx.cwd), "checkpoint does not disclose the transcript path");
-  assert(!c.summary.includes("see dump"));
   assert(c.summary.includes("kept in the session; use `context_lookup`"));
   for (const tool of ["context_list_entries", "context_grep", "context_show_entry"]) {
     assert(c.summary.includes(tool), "checkpoint explicitly permits bounded fallback tools");
@@ -445,6 +444,7 @@ async function main() {
     }
     assert.deepEqual(Object.keys(ext.tools), ["context_list_entries", "context_grep", "context_show_entry", "context_lookup"]);
     await hybridTests(hybridHelpers);
+    require("./scripts/recovery-guidance-tests.cjs")({ ...hybridHelpers, factory, load });
     await require("./scripts/pagination-tests.cjs")(hybridHelpers);
     await require("./scripts/lookup-paging-tests.cjs")(hybridHelpers);
     await require("./scripts/runtime-lookup-tests.cjs")({ ...hybridHelpers, jiti, piRoot });
@@ -455,7 +455,6 @@ async function main() {
     await require("./scripts/checkpoint-evidence-tests.cjs")({ ...hybridHelpers, compact });
     await capPolicyTests(capHelpers);
     assert.deepEqual(Object.keys(ext.tools.context_lookup.parameters.properties), ["question"]);
-    assert(!ext.tools.context_lookup.description.includes(".pi/context-dumps"));
 
     console.log("== Skill validates and matches the session-backed tool contract ==");
     const skillDir = path.join(__dirname, "skills", "context-retrieval");
@@ -470,16 +469,18 @@ async function main() {
     assert(skillText.includes("only supply `question`"));
     assert(skillText.includes("Bounded fallback and pagination"));
     assert(!skillText.includes("Always use `context_lookup`"));
-    assert(!skillText.includes("dumpDir"));
-    assert(!skillText.includes(".pi/context-dumps/"));
-    assert(skillText.includes("Never grep or read session JSONL files"));
+    require("./scripts/recovery-guidance-tests.cjs").checkFilesystemScope(skillText);
     assert(skillText.includes("does **not** search abandoned branches"));
-    assert(skillText.includes("no extra snapshot is required"));
+    assert(!skillText.includes("Before a long, tool-heavy task"), "ordinary task startup is not a recovery trigger");
+    assert(loadedSkills.skills[0].description.includes("compaction has removed a specific detail from earlier in this same conversation"));
+    assert(loadedSkills.skills[0].description.includes("Not for session startup, project discovery, missing requirements, or auditing session files"));
+    assert(skillText.includes("do not call recovery tools to discover whether such history exists"));
     assert(skillText.includes("Retained startup reads and the uncompacted tail remain available as evidence"));
     assert(!skillText.includes("re-read required project documents"));
     assert(!skillText.includes("Re-read any file you are about to modify"));
     assert(skillText.includes("reasoning at the time"));
-    assert(!skillText.split("## Explicit snapshot requests")[0].includes("call `dump_context`"));
+    assert(skillText.includes("## Independent exports"));
+    assert(skillText.includes("Pi provides `/export` for independent session exports"));
 
     console.log("== Three compactions retain raw thinking, arguments, and full output ==");
     const cwd = path.join(root, "project");
@@ -504,7 +505,7 @@ async function main() {
     assert(c3.summary.includes("src/foo.ts") && c3.summary.includes("src/bar.ts"), "file lists are cumulative");
     assert(c3.summary.endsWith("onward continues verbatim below — it was not compacted."));
     assert(!JSON.stringify(f.manager.buildSessionContext()).includes(output), "evidence is absent from model context");
-    assert.deepEqual(fs.readdirSync(cwd), [], "compaction does not write local dumps or any other files");
+    assert.deepEqual(fs.readdirSync(cwd), [], "compaction does not write additional files");
     await search(ext, ctx, [
       toolCall("show_entry", { id: f.t, file: "session" }),
       toolCall("show_entry", { id: f.a }),

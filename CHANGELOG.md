@@ -2,6 +2,15 @@
 
 ## Unreleased — initial release preparation
 
+- Scope recovery guidance to specific earlier details lost to compaction in the
+  current conversation, not startup, project discovery, or missing requirements.
+  Filesystem restrictions apply only to that recovery workflow, not user-requested
+  session audits, debugging, or cross-session analysis. Remove the misleading
+  pre-task skill trigger and align lookup, fallback, and checkpoint descriptions.
+- Remove obsolete recovery-interface guidance and legacy metadata rendering.
+  Agent-facing instructions describe only the current session-backed tools;
+  independent exports are documented through Pi's `/export`.
+
 - Rename the extension entry point to `extensions/index.ts` so Pi's compact
   extension list shows the npm package name without a `:transparent-compact.ts` suffix.
 
@@ -44,7 +53,8 @@
   after applying a summary cannot restore earlier model-summarized context to verbatim.
 - Session-backed `context_lookup` searches the full raw active branch across all
   compactions, using an in-memory transcript with authoritative entry attribution.
-- No local transcript dump, temporary file, ownership matching, or pruning.
+- Transcript rendering uses retained session history in memory, without additional
+  files, ownership matching, or pruning.
 - Optional `MECH_COMPACT_LOOKUP_SESSION_FILE` supports full-session recovery from
   pruned harness forks, with explicit failures for invalid overrides.
 - Subagent lookup provides list, grep, and entry-retrieval tools; exhausted lookups
@@ -98,8 +108,7 @@
   Non-interactive mode warns and caps; cancellation never falls through to summary.
   For unattended interactive sessions, use `/cap-compaction on` to avoid waiting
   for trim dialogs. The `warn` default and conversion factor are unchanged.
-- Removed `/dump-context`, `dump_context`, and the `dumpDir` lookup argument;
-  old dump-directory and git-ignore warning settings are unused.
+- Removed obsolete file-backed recovery interfaces and their configuration.
 - Bundled `context-retrieval` skill describes session-backed evidence recovery,
   branch scope, historical provenance, and re-verification after compaction.
 - Deterministic tests cover session recovery, overrides, attribution, size guards,
@@ -110,6 +119,6 @@
   cursor-error recovery, truncation boundaries, provider caching options, and
   real Pi agent-turn persistence ordering with a stubbed model (no live inference).
 - Preliminary synthetic pilot figures are preserved as historical results from
-  the dump-based implementation, not measurements of the current implementation.
+  the earlier file-backed implementation, not measurements of the current implementation.
 
 No version has been published from this staging directory. Full evaluation is pending.

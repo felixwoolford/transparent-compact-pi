@@ -35,6 +35,15 @@ module.exports = async function hybridTests(h) {
     toolCall("show_entry", { id: f.a }),
   ], (results) => assert.deepEqual(results, directResults, "fallback shares the subagent's renderer and search behavior"));
 
+  // Compaction metadata is internal state, not an advertised recovery source.
+  const metadataSession = SessionManager.inMemory(cwd);
+  const metadataTail = metadataSession.appendMessage(user("Retained metadata-test tail"));
+  const metadata = new Proxy({}, { get() { throw new Error("Transcript rendering must not inspect compaction metadata"); } });
+  const compactionId = metadataSession.appendCompaction("HISTORICAL_SUMMARY", metadataTail, 1000, metadata);
+  const renderedCompaction = await direct("context_show_entry", { id: compactionId }, makeContext(metadataSession, cwd));
+  assert(renderedCompaction.includes("[summary]\nHISTORICAL_SUMMARY"), "compaction summary remains recoverable without reading metadata");
+  assert(!renderedCompaction.includes("Transcript rendering must not inspect"));
+
   const shared = f.manager.getLeafId();
   const abandoned = f.manager.appendMessage(user("ABANDONED_HYBRID_BRANCH"));
   f.manager.branch(shared);

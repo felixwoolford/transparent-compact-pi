@@ -27,6 +27,11 @@ async function main() {
   // npm 12 keys results by package name; earlier versions return an array.
   const [packed] = Array.isArray(packResult) ? packResult : Object.values(packResult);
   const packedPaths = new Set(packed.files.map((file) => file.path));
+  const { checkCurrentRecoveryLanguage } = require("./recovery-guidance-tests.cjs");
+  for (const file of packedPaths) {
+    if (/\.(?:md|ts)$/i.test(file))
+      checkCurrentRecoveryLanguage(fs.readFileSync(path.join(root, file), "utf8"));
+  }
   for (const resource of ["extensions/index.ts", "skills/context-retrieval/SKILL.md", "CHANGELOG.md"]) {
     assert(packedPaths.has(resource), `npm package includes ${resource}`);
   }
@@ -57,9 +62,9 @@ async function main() {
     assert.equal(loaded.extensions.length, 1);
     const extension = loaded.extensions[0];
     assert.deepEqual([...extension.tools.keys()], ["context_list_entries", "context_grep", "context_show_entry", "context_lookup"], "session lookup and three direct fallback tools are registered");
-    assert.deepEqual([...extension.commands.keys()], ["compaction-method", "cap-compaction"], "method and cap selection are registered, with no dump or replacement compact command");
+    assert.deepEqual([...extension.commands.keys()], ["compaction-method", "cap-compaction"], "only method and cap selection commands are registered");
     const lookup = extension.tools.get("context_lookup");
-    assert.deepEqual(Object.keys(lookup.definition.parameters.properties), ["question"], "lookup has no dump-selection argument");
+    assert.deepEqual(Object.keys(lookup.definition.parameters.properties), ["question"], "lookup accepts only question");
     const skills = loadSkills({ cwd: root, agentDir: temp, skillPaths, includeDefaults: false });
     assert.equal(skills.skills.length, 1);
     assert.equal(skills.skills[0].name, "context-retrieval");

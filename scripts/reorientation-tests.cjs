@@ -16,8 +16,10 @@ function checkChecklist(content) {
     "except for the separately retained startup reads. The uncompacted tail is unchanged.",
     "note, not evidence", "do not redo writes",
     "If you cannot verify it", "**Recovery recap.**", "context_lookup", "context_list_entries", "context_grep",
-    "context_show_entry", "Do not read raw session JSONL"])
+    "context_show_entry", "earlier in this conversation is missing because of compaction",
+    "Missing requirements or unfamiliar project details are not evidence of forgotten history"])
     assert(content.includes(phrase), phrase);
+  require("./recovery-guidance-tests.cjs").checkFilesystemScope(content);
   assert(!content.includes("Re-read any file you are about to modify"), "no blanket edit-target reread");
   assert(!content.includes("Re-read every required document"), "no required-document reread checklist");
   assert(!content.includes("Identify all such documents"), "no rediscovery of reading requirements");
@@ -33,6 +35,8 @@ function checkEnvelope(summary) {
   assert(summary.includes("The retained verbatim conversation begins after the explicit boundary marker at the end of this checkpoint."));
   assert(!summary.includes("everything after the last span is uncompacted"));
   assert.equal(count(summary, "**Recovering dropped details.**"), 1);
+  require("./recovery-guidance-tests.cjs").checkFilesystemScope(summary);
+  assert(summary.includes("specific details previously present on this conversation's active branch and now missing because of compaction, not information never supplied"));
   assert(summary.indexOf("**Recovering dropped details.**") < summary.indexOf("### Compacted conversation"));
   assert.equal(count(summary, "**Evidence boundary:**"), 1);
   assert(summary.indexOf("**Evidence boundary:**") > summary.lastIndexOf("</compacted-span>"));

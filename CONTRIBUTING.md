@@ -57,7 +57,8 @@ Load the checkout with `pi -e /absolute/path/to/transparent-compact`, avoiding d
 installed copies. In a disposable project, produce a distinctive tool result,
 trigger `/compact`, and ask for the exact earlier result through `context_lookup`.
 Repeat across several compactions. Verify the retained boundary, file lists,
-entry citations, and that no local transcript dump is created.
+entry citations, and that recovery uses retained session history without creating
+additional files.
 
 Do not use real credentials or private session history in fixtures. Reports
 should include the Pi version, model/provider, relevant settings, and a minimal
