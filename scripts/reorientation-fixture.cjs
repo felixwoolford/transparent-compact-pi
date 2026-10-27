@@ -54,7 +54,7 @@ function seedScenario(manager, cwd) {
 async function createSession({ jiti, piRoot, cwd, manager, runtime, model, customTools = [], settings = {}, instructions = "Synthetic re-orientation regression." }) {
   const { createAgentSession, SettingsManager } = await jiti.import("@earendil-works/pi-coding-agent");
   const { loadExtensions } = await import(pathToFileURL(path.join(piRoot, "dist/core/extensions/loader.js")).href);
-  const loaded = await loadExtensions([path.resolve(__dirname, "../extensions/transparent-compact.ts")], cwd);
+  const loaded = await loadExtensions([path.resolve(__dirname, "../extensions/index.ts")], cwd);
   if (loaded.errors.length) throw new Error(JSON.stringify(loaded.errors));
   const loader = {
     getExtensions: () => loaded,

@@ -44,6 +44,9 @@ or from a downloaded or cloned checkout:
 pi install /absolute/path/to/transparent-compact
 ```
 
+The extension entry point is `extensions/index.ts`, so Pi's compact extension list
+shows `@foliox/transparent-compact-pi` without a filename suffix for npm installs.
+
 ## Usage
 
 Pi's compaction uses transparent-compact by default once the extension is loaded.

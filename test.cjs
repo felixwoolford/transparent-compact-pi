@@ -1,4 +1,4 @@
-/* Deterministic integration tests for transparent-compact.ts.
+/* Deterministic integration tests for extensions/index.ts.
  * Run: node test.cjs [cap|caphang|capspans|capdefault|capenv <percent> <expected budget> [chars]|lookupenv <limit> <expected limit>]
  * Uses pi's jiti loader, real SessionManager branches, and stubbed model calls.
  * No credentials, network requests, or pilot runs are needed.
@@ -421,7 +421,7 @@ async function main() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "transparent-compact-test-"));
   try {
     const { SessionManager, loadSkillsFromDir } = await jiti.import("@earendil-works/pi-coding-agent");
-    const { default: factory } = await jiti.import(path.join(__dirname, "extensions", "transparent-compact.ts"));
+    const { default: factory } = await jiti.import(path.join(__dirname, "extensions", "index.ts"));
     const ext = load(factory);
     const hybridTests = require("./scripts/hybrid-tests.cjs");
     const hybridHelpers = { ext, SessionManager, root, fixture, makeContext, assistant, text, toolCall, toolText, search, saveSession, output, thinking, argumentsText, user };
@@ -464,7 +464,8 @@ async function main() {
     assert.equal(loadedSkills.skills[0].name, "context-retrieval");
     assert(loadedSkills.skills[0].description.includes("context_lookup"));
     const skillText = fs.readFileSync(path.join(skillDir, "SKILL.md"), "utf8");
-    assert(skillText.includes("transparent-compact.ts"));
+    assert(skillText.includes("`@foliox/transparent-compact-pi` extension"));
+    assert(!skillText.includes("extensions/index.ts"));
     assert(skillText.includes("only supply `question`"));
     assert(skillText.includes("Bounded fallback and pagination"));
     assert(!skillText.includes("Always use `context_lookup`"));

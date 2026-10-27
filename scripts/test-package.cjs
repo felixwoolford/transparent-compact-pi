@@ -14,7 +14,7 @@ async function main() {
   assert.notEqual(manifest.private, true, "public npm package must remain publishable");
   assert.equal(manifest.license, "MIT");
   assert(manifest.keywords.includes("pi-package"));
-  assert.deepEqual(manifest.pi.extensions, ["./extensions/transparent-compact.ts"]);
+  assert.deepEqual(manifest.pi.extensions, ["./extensions/index.ts"]);
   assert.deepEqual(manifest.pi.skills, ["./skills/context-retrieval"]);
   assert(!manifest.dependencies, "host-provided runtime packages must not be bundled");
 
@@ -27,7 +27,7 @@ async function main() {
   // npm 12 keys results by package name; earlier versions return an array.
   const [packed] = Array.isArray(packResult) ? packResult : Object.values(packResult);
   const packedPaths = new Set(packed.files.map((file) => file.path));
-  for (const resource of ["extensions/transparent-compact.ts", "skills/context-retrieval/SKILL.md", "CHANGELOG.md"]) {
+  for (const resource of ["extensions/index.ts", "skills/context-retrieval/SKILL.md", "CHANGELOG.md"]) {
     assert(packedPaths.has(resource), `npm package includes ${resource}`);
   }
 
@@ -35,6 +35,7 @@ async function main() {
   const { SettingsManager } = await import(pathToFileURL(path.join(piRoot, "dist/core/settings-manager.js")).href);
   const { loadExtensions } = await import(pathToFileURL(path.join(piRoot, "dist/core/extensions/loader.js")).href);
   const { loadSkills } = await import(pathToFileURL(path.join(piRoot, "dist/core/skills.js")).href);
+  const { InteractiveMode } = await import(pathToFileURL(path.join(piRoot, "dist/modes/interactive/interactive-mode.js")).href);
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), "transparent-compact-package-"));
   try {
     const settingsManager = SettingsManager.inMemory();
@@ -42,7 +43,14 @@ async function main() {
     const resources = await manager.resolveExtensionSources([root], { temporary: true });
     const extensionPaths = resources.extensions.filter((r) => r.enabled).map((r) => r.path);
     const skillPaths = resources.skills.filter((r) => r.enabled).map((r) => r.path);
-    assert.deepEqual(extensionPaths, [path.join(root, "extensions", "transparent-compact.ts")], "Pi discovers exactly the intended extension");
+    assert.deepEqual(extensionPaths, [path.join(root, "extensions", "index.ts")], "Pi discovers exactly the intended extension");
+    // Exercise Pi's real formatter without starting a TUI or model session.
+    const display = Object.create(InteractiveMode.prototype);
+    assert.equal(display.getCompactExtensionLabel(extensionPaths[0], {
+      source: `npm:${manifest.name}`,
+      scope: "user",
+      baseDir: root,
+    }), manifest.name, "npm extension label is just the package name, with no filename suffix");
     assert.deepEqual(skillPaths, [path.join(root, "skills", "context-retrieval", "SKILL.md")], "Pi discovers the bundled skill");
     const loaded = await loadExtensions(extensionPaths, root);
     assert.deepEqual(loaded.errors, [], "real Pi extension loader reports no errors");
@@ -58,7 +66,7 @@ async function main() {
     assert.deepEqual(skills.diagnostics, []);
     assert.equal([...packedPaths].filter((p) => p.startsWith("extensions/")).length, 1, "package ships one extension, with no wrapper");
     assert(![...packedPaths].some((p) => p.startsWith("source/")), "package has no obsolete source tree");
-    console.log("PACKAGE TEST OK — manifest, packed resources, real Pi loader, session lookup, and bundled skill");
+    console.log("PACKAGE TEST OK — manifest, packed resources, package-only label, real Pi loader, session lookup, and bundled skill");
   } finally {
     fs.rmSync(temp, { recursive: true, force: true });
   }

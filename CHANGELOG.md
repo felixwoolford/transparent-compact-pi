@@ -2,6 +2,9 @@
 
 ## Unreleased — initial release preparation
 
+- Rename the extension entry point to `extensions/index.ts` so Pi's compact
+  extension list shows the npm package name without a `:transparent-compact.ts` suffix.
+
 - Deterministic checkpoints retain user messages and assistant prose, subject to
   a size guard; thinking, full tool outputs, and arguments remain in Pi's session.
 - Tool signatures record per-call `ok`, `error`, or `unknown` outcomes from

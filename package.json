@@ -52,7 +52,7 @@
   },
   "pi": {
     "extensions": [
-      "./extensions/transparent-compact.ts"
+      "./extensions/index.ts"
     ],
     "skills": [
       "./skills/context-retrieval"
