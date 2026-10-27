@@ -1613,7 +1613,7 @@ export default function (pi: ExtensionAPI) {
     executionMode: "sequential",
     description:
       "Recover a specific detail previously present earlier on this conversation's active branch but now missing because of compaction, including thinking, tool outputs, error text, file contents, or earlier decisions. Use only when the visible conversation or compaction checkpoint establishes relevant earlier history; do not call this tool to discover whether such history exists. Not for session startup, new-project orientation, missing requirements, or information never supplied: inspect project files or ask the user instead. Spawns a subagent that searches this conversation's full raw active branch (across all compactions) in its OWN context and returns relevant findings. Does not search abandoned branches or other sessions. For this recovery workflow, prefer this tool first; if findings are incomplete, use the bounded context_list_entries, context_grep, and context_show_entry fallback tools. Follow their pagination instructions. " +
-      RECOVERY_FILESYSTEM_RULE + "",
+      RECOVERY_FILESYSTEM_RULE,
     promptSnippet: "Recover specific earlier conversation details lost through compaction",
     parameters: Type.Object({
       question: Type.String({ description: "The specific detail from earlier in this conversation that compaction removed (exact error text, previously read file, decision, command output…)." }),

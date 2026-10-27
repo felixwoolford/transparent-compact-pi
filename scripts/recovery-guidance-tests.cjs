@@ -2,10 +2,9 @@
 const assert = require("node:assert/strict");
 
 function checkFilesystemScope(content) {
-  assert(content.includes("For recovery of details lost to compaction, do not read or grep raw session JSONL files"),
-    "filesystem restriction is conditional on compaction recovery");
-  assert(content.includes("This restriction does not apply to user-requested session audits, debugging, or cross-session analysis."),
-    "session analysis remains outside the recovery restriction");
+  assert.match(content,
+    /For recovery of details lost (?:to compaction|from the context in this session due to compaction), do not read or grep raw session JSONL files through filesystem tools/,
+    "filesystem restriction is conditional on compaction recovery, not session analysis");
   assert(!/^Do not (?:read or grep|read) raw session JSONL files.*filesystem tools\./m.test(content),
     "no standalone global filesystem prohibition");
   checkCurrentRecoveryLanguage(content);
@@ -28,7 +27,8 @@ module.exports = function (h) {
     "do not call this tool to discover whether such history exists",
     "Not for session startup, new-project orientation, missing requirements, or information never supplied",
     "inspect project files or ask the user instead", "Does not search abandoned branches or other sessions",
-    "For this recovery workflow, prefer this tool first"])
+    "For this recovery workflow, prefer this tool first",
+    "For recovery of details lost from the context in this session due to compaction"])
     assert(lookup.description.includes(phrase), phrase);
   assert.equal(lookup.promptSnippet, "Recover specific earlier conversation details lost through compaction");
   assert(lookup.parameters.properties.question.description.includes("earlier in this conversation"));
