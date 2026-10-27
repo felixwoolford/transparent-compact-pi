@@ -189,8 +189,8 @@ async function methodTests(factory, SessionManager, root) {
   suggestions = null;
   assert.equal(await suggest(), null);
   suggestions = original;
-  const { CombinedAutocompleteProvider } = await jiti.import(path.join(piRoot,
-    "node_modules/@earendil-works/pi-tui/dist/autocomplete.js"));
+  const { CombinedAutocompleteProvider } = await jiti.import(require.resolve(
+    "@earendil-works/pi-tui/dist/autocomplete.js", { paths: [piRoot] }));
   const realProvider = wrap(new CombinedAutocompleteProvider([
     { name: "compact", description: "Manually compact the session context" },
     { name: "compaction-method", description: "Select method" },
@@ -449,6 +449,7 @@ async function main() {
     await require("./scripts/lookup-paging-tests.cjs")(hybridHelpers);
     await require("./scripts/runtime-lookup-tests.cjs")({ ...hybridHelpers, jiti, piRoot });
     await require("./scripts/reorientation-tests.cjs")({ ...hybridHelpers, factory, load, compact, jiti, piRoot });
+    await require("./scripts/startup-reads-tests.cjs")({ ...hybridHelpers, factory, load });
     assert.deepEqual(Object.keys(ext.commands), ["compaction-method", "cap-compaction"]);
     await methodTests(factory, SessionManager, root);
     await require("./scripts/checkpoint-evidence-tests.cjs")({ ...hybridHelpers, compact });
@@ -474,6 +475,9 @@ async function main() {
     assert(skillText.includes("Never grep or read session JSONL files"));
     assert(skillText.includes("does **not** search abandoned branches"));
     assert(skillText.includes("no extra snapshot is required"));
+    assert(skillText.includes("Retained startup reads and the uncompacted tail remain available as evidence"));
+    assert(!skillText.includes("re-read required project documents"));
+    assert(!skillText.includes("Re-read any file you are about to modify"));
     assert(skillText.includes("reasoning at the time"));
     assert(!skillText.split("## Explicit snapshot requests")[0].includes("call `dump_context`"));
 

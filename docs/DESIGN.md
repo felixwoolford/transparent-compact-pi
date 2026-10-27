@@ -12,20 +12,54 @@ extension builds a checkpoint without changing that boundary or calling a model:
 | Assistant prose | Kept, subject to the size guard. |
 | Tool calls | Short signatures with outcome labels; full arguments and outputs remain recoverable. |
 | Assistant thinking | Removed from the checkpoint; retained in the raw session. |
-| Tool outputs | Removed from the checkpoint; retained in the raw session. |
+| Tool outputs | Removed from the checkpoint except selected startup reads; all remain in the raw session. |
 | Custom messages | Short type stubs marked `content removed`; bodies remain in the raw session. Managed re-orientation messages are regenerated instead. |
 | Recent conversation | Pi keeps its normal verbatim tail. |
 | Earlier compacted spans | Re-rendered chronologically, without repeated model summarization. |
-| Read/modified file lists | Carried forward, with file contents marked as removed. |
+| Read/modified file lists | Carried forward, distinguishing retained startup reads from removed content. |
 
 Checkpoints label tool outcomes as `ok`, `error`, or `unknown` and remind the
-agent to recover missing evidence and re-read required documents before relying
-on them. These labels describe tool results, not a guarantee that tests passed.
+agent to recover missing evidence when needed. These labels describe tool
+results, not a guarantee that tests passed. There is no required-document reread
+checklist: retained reads remain available as evidence.
 
 All newly compacted custom messages follow the same stub policy, regardless of
 extension, display setting, or content format. Long type names are abbreviated
 like tool-call arguments. This applies even with the cap disabled. Previously
 saved spans are not rewritten; older custom-message bodies may remain in them.
+
+### Retained startup reads
+
+On the first verbatim compaction, the extension scans successful text-only `read`
+call/result pairs between the first and second user messages on the active branch.
+It retains outputs whose file paths or bare names occur literally in AGENTS/CLAUDE
+context files supplied by Pi, or in AGENTS/CLAUDE files read during that interval.
+`AGENTS.override.md` is recognized too. Named project-instruction blocks in the
+rendered system prompt provide a fallback when structured context files are not
+available. No files are opened and no model or agent action is involved.
+
+Matching accepts absolute paths, paths relative to the working directory or
+instruction file, and standalone basenames. It rejects substrings of other paths
+or filenames. A bare basename can select multiple same-named files. This is a
+lexical heuristic, not a required-reading parser: optional links can qualify;
+indirect references, shell reads, nested tool calls and reads after the second
+user message do not. Custom messages do not close the startup interval.
+
+All selected output chunks are preserved verbatim, with entry IDs, paths, offsets
+and limits. Pagination/truncation notices are retained too; retention never
+invents missing pages or claims a partial read is a complete document. Failed,
+ambiguous and non-text results are excluded. Selection respects explicit context
+omissions/replacements. It does not check on-disk freshness.
+
+The selection is stored in compaction details, separately from conversation spans.
+Subsequent verbatim compactions carry it forward unchanged, without re-compacting
+checkpoint text. If the second user message has not arrived yet, selection remains
+open: later compactions scan the startup interval again and add newly qualifying
+reads until it closes. Reads still in the uncompacted tail are not duplicated in
+the checkpoint; they move into its retained-read section when the cut passes them.
+Reload, resume and branch navigation follow the stored state on the active branch.
+An older checkpoint without retention metadata initializes selection from the
+original branch, not from its summary prose.
 
 #### How cap trimming works
 
@@ -36,8 +70,10 @@ saved spans are not rewritten; older custom-message bodies may remain in them.
    oldest first.
 3. As a last resort, remove the oldest remaining content, including user messages.
 
-Trimming stops once the budget is satisfied. Originals remain recoverable from
-the session.
+Retained startup reads count as fixed budget overhead and are never trimmed.
+Like an inherited base, they can exceed the budget by themselves; in that case
+the extension warns and preserves them. The conversation-line budget still has
+a 500-character minimum. Originals remain recoverable from the session.
 
 
 ### Session-backed lookup
@@ -117,23 +153,19 @@ instructions that must be prominent at the actual point of resumption:
 
 ```text
 Checkpoint introduction: what was removed + full recovery instructions
-All compacted spans (oldest first), then read/modified file lists
+All compacted spans (oldest first), then retained startup reads and file lists
 One evidence-boundary warning + start-of-verbatim-tail marker
 Retained verbatim tail
 Any pending new user input
-Mandatory re-orientation checklist + brief recovery recap
+Task-relevant recovery reminders + brief recovery recap
 ```
 
-The numbered checklist requires identifying documents mandated by system,
-developer and applicable project instructions, then re-reading each in its
-entirety before task planning or changes. For this step, a document is required
-reading if and only if those instructions explicitly instruct the agent to read
-it; merely mentioning or linking a document does not qualify. Grep matches, selected sections,
-summaries and reading only edit targets explicitly do not satisfy this step;
-truncated reads must continue to the end, and unavailable documents must be
-reported rather than silently skipped. It also requires restoring missing inputs
-rather than repeating completed writes, inspecting Git state, re-reading files
-before editing and verifying evidence before relying on it. It is a saved
+The recovery reminders identify retained startup reads and the uncompacted tail
+as available evidence. They ask for recovery only when task-relevant inputs are
+missing, not for rediscovery of reading requirements or blanket document rereads.
+They also distinguish restoring inputs from repeating completed writes, call for
+inspecting Git state, and require verification before relying on removed evidence.
+There is no blanket edit-target reread. It is a saved
 custom message tagged with the current compaction entry ID, not a temporary nudge:
 subsequent responses and user turns retain it in history before the work that
 followed it. `before_agent_start` adds it on normal starts/resume when missing;

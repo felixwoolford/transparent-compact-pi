@@ -7,6 +7,14 @@
 
 - Deterministic checkpoints retain user messages and assistant prose, subject to
   a size guard; thinking, full tool outputs, and arguments remain in Pi's session.
+- Startup text reads whose names appear in AGENTS/CLAUDE instructions are retained
+  verbatim, including pagination chunks. Selection scans the first user-prompt
+  interval without model calls, agent action or filesystem reads, then freezes
+  after the second prompt. Later compactions carry the outputs forward separately
+  from conversation spans, without duplicating reads still in the recent tail.
+  Retained reads count as fixed cap overhead but are never silently trimmed.
+- Remove the required-document and edit-target reread checklist. Recovery guidance
+  now asks only for missing task-relevant evidence; retained reads remain usable.
 - Newly compacted custom messages become bounded type stubs marked `content
   removed`, regardless of their source extension. Bodies remain recoverable from
   raw session history; previously saved spans are not rewritten. Managed
@@ -14,11 +22,11 @@
 - Tool signatures record per-call `ok`, `error`, or `unknown` outcomes from
   matched tool-result metadata, always marking output as removed. Missing or
   ambiguous outcomes are never inferred, including unlabelled older spans.
-- Read-file entries explicitly mark content as removed; a closing evidence rule
+- Read-file entries distinguish retained startup reads from removed content; a closing evidence rule
   requires lookup or re-reading before relying on removed outputs or document rules.
 - The instruction envelope now has recovery explanations before all compacted
-  spans, one evidence-boundary warning after them, and a mandatory numbered
-  re-orientation checklist plus brief recovery recap after the retained tail.
+  spans, one evidence-boundary warning after them, and numbered
+  recovery reminders plus brief recovery recap after the retained tail.
   The checklist is persisted and remains active after the first response. Later
   compactions regenerate the envelope: old generated checklists are neither
   summarized into spans nor replayed from the retained tail. Raw originals remain

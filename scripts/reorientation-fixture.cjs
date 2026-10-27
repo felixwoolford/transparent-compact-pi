@@ -51,7 +51,7 @@ function seedScenario(manager, cwd) {
   return { token, instructions, specEntry };
 }
 
-async function createSession({ jiti, piRoot, cwd, manager, runtime, model, customTools = [], settings = {}, instructions = "Synthetic re-orientation regression." }) {
+async function createSession({ jiti, piRoot, cwd, manager, runtime, model, customTools = [], settings = {}, instructions = "Synthetic re-orientation regression.", contextFiles = [] }) {
   const { createAgentSession, SettingsManager } = await jiti.import("@earendil-works/pi-coding-agent");
   const { loadExtensions } = await import(pathToFileURL(path.join(piRoot, "dist/core/extensions/loader.js")).href);
   const loaded = await loadExtensions([path.resolve(__dirname, "../extensions/index.ts")], cwd);
@@ -61,7 +61,7 @@ async function createSession({ jiti, piRoot, cwd, manager, runtime, model, custo
     getSkills: () => ({ skills: [], diagnostics: [] }),
     getPrompts: () => ({ prompts: [], diagnostics: [] }),
     getThemes: () => ({ themes: [], diagnostics: [] }),
-    getAgentsFiles: () => ({ agentsFiles: [] }),
+    getAgentsFiles: () => ({ agentsFiles: contextFiles }),
     getSystemPrompt: () => `You are a coding agent. Use tools to do the requested work.\n<project_instructions>\n${instructions}\n</project_instructions>`,
     getSystemPromptSource: () => undefined,
     getAppendSystemPrompt: () => [], getAppendSystemPromptSources: () => [],

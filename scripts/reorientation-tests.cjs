@@ -4,26 +4,24 @@ const fs = require("node:fs");
 const path = require("node:path");
 const scenario = require("./reorientation-fixture.cjs");
 const kind = "transparent-compact:reorient";
-const heading = "Post-compaction re-orientation — REQUIRED BEFORE CONTINUING.";
+const heading = "Post-compaction re-orientation.";
 const reminders = (messages) => messages.filter((m) => m.role === "custom" && m.customType === kind);
 const count = (s, needle) => s.split(needle).length - 1;
 
 function checkChecklist(content) {
-  for (const phrase of [heading, "Compaction may have removed information needed to follow the project instructions.",
-    "Before planning or performing the next task, you MUST complete this checklist",
-    "1. **Re-read every required document IN ITS ENTIRETY.**",
-    "For this step, a document is required reading **if and only if** your applicable system prompt, developer instructions, or project instructions",
-    "including AGENTS.md / CLAUDE.md) explicitly instruct you to read it.",
-    "Merely mentioning or linking a document does not qualify.",
-    "Identify all such documents and re-read each from beginning to end", "even if you read them before compaction",
-    "Grep matches, selected sections, summaries, and reading only files you intend to edit do NOT satisfy this requirement.",
-    "If output is truncated, continue reading until you reach the end.",
-    "Complete these reads before planning or changing anything; intending or promising to read does not count.",
-    "If a required document is unavailable, report the blocker rather than silently skipping it.",
-    "run `git status`", "Re-read any file you are about to modify", "note, not evidence", "do not redo writes",
+  for (const phrase of [heading, "Retained startup reads and the uncompacted tail remain available as evidence.",
+    "Recover only missing information needed for the current task.",
+    "1. Re-acquire information needed for the current task that is no longer in context.",
+    "run `git status`", "3. **Treat knowledge from removed evidence as unverified.**",
+    "except for the separately retained startup reads. The uncompacted tail is unchanged.",
+    "note, not evidence", "do not redo writes",
     "If you cannot verify it", "**Recovery recap.**", "context_lookup", "context_list_entries", "context_grep",
     "context_show_entry", "Do not read raw session JSONL"])
     assert(content.includes(phrase), phrase);
+  assert(!content.includes("Re-read any file you are about to modify"), "no blanket edit-target reread");
+  assert(!content.includes("Re-read every required document"), "no required-document reread checklist");
+  assert(!content.includes("Identify all such documents"), "no rediscovery of reading requirements");
+  assert(!content.includes("4."), "three recovery steps only");
 }
 
 function checkEnvelope(summary) {
@@ -169,8 +167,8 @@ async function runtimeTests(h) {
     reasoning: false, input: ["text"], contextWindow: 100000, maxTokens: 4096,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
   console.log("== Real Pi requests: ~20k tail, persistent checklist, repeated compaction, automatic and overflow continuation ==");
-  for (const mode of ["manual", "pre-run", "threshold", "overflow", "post-run"]) {
-    const cwd = path.join(root, `reorientation-runtime-${mode}`);
+  for (const retain of [false, true]) for (const mode of ["manual", "pre-run", "threshold", "overflow", "post-run"]) {
+    const cwd = path.join(root, `reorientation-runtime-${mode}-${retain}`);
     const manager = SessionManager.inMemory(cwd);
     const fixture = scenario.seedScenario(manager, cwd);
     if (mode === "pre-run") {
@@ -205,6 +203,7 @@ async function runtimeTests(h) {
     };
     const { session, loaded } = await scenario.createSession({ jiti, piRoot, cwd, manager, runtime, model,
       customTools: [tool], instructions: fixture.instructions,
+      contextFiles: retain ? [{ path: path.join(cwd, "AGENTS.md"), content: fixture.instructions }] : [],
       settings: { enabled: mode !== "manual", keepRecentTokens: 20000 },
     });
     loaded.extensions[0].handlers.set("context", [({ messages }) => ({ messages: [...messages, {
@@ -223,8 +222,10 @@ async function runtimeTests(h) {
       checkEnvelope(c.summary);
       assert.equal(c.details.kind, "mech-compact");
       if (mode === "threshold" || mode === "overflow" || mode === "pre-run") assert.equal(c.details.span.reason, mode === "pre-run" ? "threshold" : mode);
-      assert(!c.summary.includes(fixture.token));
-      assert(!JSON.stringify(manager.buildSessionContext()).includes(fixture.token), "spec contents really were removed");
+      assert.equal(c.summary.includes(fixture.token), retain);
+      assert.equal(JSON.stringify(manager.buildSessionContext()).includes(fixture.token), retain,
+        "spec contents survive only when an identified AGENTS/CLAUDE file mentions them");
+      assert.equal(c.details.startupReads.reads.length, retain ? 2 : 0);
       const marked = requests.map((r) => JSON.stringify(r).includes(heading));
       const startsCompacted = mode === "manual" || mode === "pre-run";
       assert.deepEqual(marked, startsCompacted ? [true, true] : mode === "post-run" ? [false, true] : [false, true, true], mode);
@@ -236,13 +237,17 @@ async function runtimeTests(h) {
       assert(keptTokens >= 18000 && keptTokens <= 22000, `expected ~20k tokens retained, got ${keptTokens}`);
       const request = requests[startsCompacted ? 0 : 1];
       assert(JSON.stringify(request.messages).includes("state=ready signature=engine-20-41"));
+      assert.equal(count(JSON.stringify(request), fixture.token), retain ? 1 : 0,
+        "actual provider request includes exactly one retained copy");
       assert.equal(request.messages.at(-1).role, "user");
       checkChecklist(JSON.stringify(request.messages.at(-1)));
       assert(JSON.stringify(request.messages.at(-2)).includes("LATE_CONTEXT_TRANSFORM"));
       const footers = () => manager.getBranch().filter((e) => e.type === "custom_message" && e.customType === kind);
       assert.equal(footers().length, 1, "one saved checklist, not an ephemeral request-only nudge");
       const firstFooterId = footers()[0].id;
-      await session.prompt("Another ordinary task.");
+      // Enough new context to advance the next cut even when retained startup
+      // outputs change Pi's split-turn token estimates.
+      await session.prompt("Another ordinary task.\n" + "Additional task context. ".repeat(300));
       assert.equal(footers().length, 1, "subsequent tasks retain, rather than re-insert, the checklist");
       assert.equal(count(JSON.stringify(requests.at(-1)), heading), 1);
       assert(!JSON.stringify(requests.at(-1).messages.at(-1)).includes(heading), "completed re-orientation stays in history, not as a new last instruction every turn");
@@ -258,10 +263,13 @@ async function runtimeTests(h) {
       assert.equal(count(JSON.stringify(secondRequest), "**Evidence boundary:**"), 1);
       assert.equal(count(JSON.stringify(secondRequest), "**Recovery recap.**"), 1);
       checkChecklist(JSON.stringify(secondRequest.messages.at(-1)));
+      assert.equal(count(JSON.stringify(secondRequest), fixture.token), retain ? 1 : 0);
+      assert.deepEqual(c2.details.startupReads.reads, c.details.startupReads.reads,
+        "subsequent compaction carries retained read bytes unchanged");
       assert.equal(footers().length, 2, "raw audit history keeps the old and current managed entries");
       assert(footers().some((e) => e.id === firstFooterId));
       assert.equal(footers().at(-1).details.compactionId, c2.id);
-      console.log(`  ${mode}: ${keptTokens} estimated tokens retained; current checklist persists; second envelope has no duplicates`);
+      console.log(`  ${mode} (startup retention=${retain}): ${keptTokens} estimated tokens retained; current checklist persists; second envelope has no duplicates`);
     } finally { session.dispose(); }
   }
 }

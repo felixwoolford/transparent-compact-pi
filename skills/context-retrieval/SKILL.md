@@ -7,7 +7,7 @@ description: Recover earlier pi session context through the context_lookup subag
 
 This skill pairs with the `@foliox/transparent-compact-pi` extension, which provides:
 
-- **Verbatim compaction** — a deterministic checkpoint retains user messages, assistant prose, and compact tool-call signatures. Thinking and tool outputs are removed from the active model context, not from the raw session history. Earlier spans are re-rendered flat, with recovery guidance before them and an evidence-boundary warning after them. A persistent mandatory re-orientation checklist and recovery recap follow the retained tail; later compactions replace the old generated checklist rather than duplicating it. An inherited opaque base is kept when needed.
+- **Verbatim compaction** — a deterministic checkpoint retains user messages, assistant prose, and compact tool-call signatures. Thinking and most tool outputs are removed from the active model context, not from the raw session history. Selected startup read outputs remain verbatim in the checkpoint or uncompacted tail. Earlier spans are re-rendered flat, with recovery guidance before them and an evidence-boundary warning after them. Persistent task-relevant recovery reminders and a recap follow the retained tail; later compactions replace the old generated reminders rather than duplicating them. An inherited opaque base is kept when needed.
 - **`context_lookup`** — the preferred first step: a subagent searches the full raw session branch in its **own** context and returns relevant findings. At lookup time, the extension mechanically renders the branch into entry-anchored text with an authoritative entry/section index, in memory. There is no local dump or temporary transcript file to manage.
 - **Bounded fallback tools** — if those findings are incomplete, use `context_list_entries`, `context_grep`, and `context_show_entry` for direct evidence recovery. Their results enter this conversation. These are the permitted fallback, not filesystem access to session files.
 
@@ -18,8 +18,8 @@ If `context_lookup` is not in your tool list, say that subagent recovery is unav
 ## When to use
 
 - After a compaction, you need an exact error message, a full tool output, previously read file content, full tool-call arguments, an earlier instruction or decision, or reasoning that was dropped → call `context_lookup` with a **specific** question.
-- A checkpoint or your memory contains a claim based on pre-compaction tool output → re-read the current source or ask `context_lookup` for the historical evidence before relying on the claim. If you cannot verify it, explicitly label it unverified.
-- Before a long, tool-heavy task → no extra snapshot is required for recovery. Pi's raw session history already retains finalized entries. Follow the mandatory post-tail re-orientation checklist after compaction: re-read required project documents before planning or acting, even if earlier prose says you already read them. The checklist and recovery recap remain in context on subsequent turns; the evidence/recovery rules continue to apply.
+- A checkpoint or your memory contains a claim whose supporting tool output is no longer in context → re-read the current source or ask `context_lookup` for the historical evidence before relying on the claim. If you cannot verify it, explicitly label it unverified.
+- Before a long, tool-heavy task → no extra snapshot is required for recovery. Pi's raw session history already retains finalized entries. Retained startup reads and the uncompacted tail remain available as evidence; compaction does not require rediscovering or rereading project instructions. Recover only missing information needed for the task. The recovery reminders remain in context on subsequent turns.
 
 ## How to ask
 
@@ -67,7 +67,7 @@ intended context parameters.
 2. Ask narrowly scoped questions using exact error strings, file paths, function names, or the command whose output you need. Recover tightly related details together; use separate queries for independent facts. Ask the subagent for evidence, not for a solution to the broader task.
 3. Findings cite ENTRY ids and the logical transcript name. Retain these citations when relying on recovered facts. The renderer preserves full thinking, text, tool-call arguments, and tool results, although individual search results have output limits.
 4. Distinguish **user instructions**, **observed tool output**, and **reasoning at the time**. A recovered `[thinking]` block is a historical hypothesis, not verified fact. Earlier assistant prose is not independently observed evidence either.
-5. Historical tool output proves what was observed then, not what is true now. Re-read any file you are about to modify, review uncommitted work, and re-verify current build/test state as required by the checkpoint.
+5. Historical tool output proves what was observed then, not what is true now. Review uncommitted work and re-verify current build/test state when needed; compaction alone does not require rereading edit targets.
 6. Lookups can return incomplete findings or fail. State what remains missing; do not invent details or treat a partial answer as exhaustive.
 
 ## Explicit snapshot requests

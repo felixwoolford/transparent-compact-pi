@@ -162,7 +162,7 @@ async function chooseCapBudget(pi: ExtensionAPI, ctx: ExtensionContext, signal: 
       // Exactly the existing cap's test, including its minimum 500-char line budget.
       const needsTrim = size.lineChars > Math.max(500, limit - size.overhead);
       if (state.mode !== "warn" || !needsTrim) return limit;
-      const warning = `Verbatim compaction would trim content: ~${(size.overhead + size.lineChars).toLocaleString()} conversation-section chars; budget ${capBudgetText(state.budget)} (${limit.toLocaleString()} chars).`;
+      const warning = `Verbatim compaction would trim content: ~${(size.overhead + size.lineChars).toLocaleString()} conversation/retained-read chars; budget ${capBudgetText(state.budget)} (${limit.toLocaleString()} chars).`;
       if (!ctx.hasUI || typeof ctx.ui.select !== "function") {
         ctx.ui.notify(`${warning} Applying the cap because no interactive UI is available.`, "warning");
         return limit;
@@ -504,6 +504,124 @@ function summarizeMessages(messages: AgentMessage[]): string[] {
   return lines;
 }
 
+// Startup reference retention is a lexical heuristic, not an interpretation of
+// required-reading prose. Snapshot actual text read results; never open files.
+interface StartupRead {
+  entryId: string;
+  path: string;
+  offset?: number;
+  limit?: number;
+  text: string[];
+}
+interface StartupReads {
+  version: 1;
+  closed: boolean;
+  reads: StartupRead[];
+}
+
+function isInstructionFile(file: string): boolean {
+  return /^(AGENTS(?:\.override)?|CLAUDE)\.md$/i.test(path.basename(file));
+}
+
+function mentionsPath(content: string, name: string): boolean {
+  if (!name) return false;
+  // A bare name can match, but not as a substring of another path or filename.
+  // Permit sentence-final punctuation, Markdown delimiters and link anchors.
+  const word = /[\p{L}\p{N}_./\\-]/u;
+  for (let at = content.indexOf(name); at >= 0; at = content.indexOf(name, at + 1)) {
+    const end = at + name.length;
+    const before = content[at - 1];
+    const after = content[end];
+    if ((!before || !word.test(before)) &&
+        (!after || !word.test(after) || (after === "." && (!content[end + 1] || /\s/.test(content[end + 1]))))) return true;
+  }
+  return false;
+}
+
+function startupReads(entries: SessionEntry[], ctx: ExtensionContext): StartupReads {
+  const latest = entries.findLast((e) => e.type === "compaction");
+  const previous = latest?.type === "compaction" &&
+    (latest.details as { kind?: string })?.kind === MECH_KIND
+    ? (latest.details as { startupReads?: StartupReads }).startupReads : undefined;
+  // Once the second user prompt has arrived, the selection and output bytes are
+  // frozen. Repeated compaction does not parse or compact an earlier checkpoint.
+  if (previous?.version === 1 && previous.closed) return previous;
+
+  const prompts = entries.filter((e) => e.type === "message" && e.message.role === "user");
+  const first = prompts[0] ? entries.indexOf(prompts[0]) : -1;
+  const second = prompts[1] ? entries.indexOf(prompts[1]) : entries.length;
+  const state: StartupReads = { version: 1, closed: prompts.length >= 2, reads: previous?.reads.slice() ?? [] };
+  if (first < 0) return state;
+
+  const sources = (ctx.getSystemPromptOptions?.().contextFiles ?? [])
+    .filter((f) => isInstructionFile(f.path)).map((f) => ({ path: f.path, content: f.content }));
+  // Older/custom contexts may expose only the rendered prompt. Restrict fallback
+  // extraction to named project-instruction blocks, never arbitrary prompt prose.
+  if (sources.length === 0) {
+    for (const match of (ctx.getSystemPrompt?.() ?? "").matchAll(/<project_instructions path="([^"]+)">\n?([\s\S]*?)<\/project_instructions>/g)) {
+      if (isInstructionFile(match[1])) sources.push({ path: match[1], content: match[2] });
+    }
+  }
+
+  // Respect explicit context omissions/replacements when selecting original
+  // reads. Raw session text remains recoverable, but is not silently resurrected.
+  const edits = new Map(entries.filter((e) => e.type === "context_edit").map((e) => [e.targetId, e.replacement]));
+  const pending = new Map<string, { name: string; args: Record<string, any> } | null>();
+  const reads: StartupRead[] = [];
+  for (const entry of entries.slice(first + 1, second)) {
+    if (entry.type !== "message" || edits.get(entry.id) === null) continue;
+    const msg = entry.message;
+    const content = edits.get(entry.id)?.content ?? (msg as { content?: unknown }).content;
+    const blocks = typeof content === "string" ? [{ type: "text", text: content }] : content;
+    if (!Array.isArray(blocks)) continue;
+    if (msg.role === "assistant") {
+      for (const b of blocks) {
+        if (b.type !== "toolCall" || typeof b.id !== "string") continue;
+        pending.set(b.id, pending.has(b.id) ? null : { name: b.name, args: b.arguments ?? {} });
+      }
+    } else if (msg.role === "toolResult") {
+      const call = pending.get(msg.toolCallId);
+      if (!call || call.name !== msg.toolName) continue;
+      pending.delete(msg.toolCallId);
+      if (call.name !== "read" || msg.isError !== false || typeof call.args.path !== "string" ||
+          blocks.length === 0 || blocks.some((b) => b.type !== "text" || typeof b.text !== "string")) continue;
+      const read: StartupRead = { entryId: entry.id, path: call.args.path,
+        ...(typeof call.args.offset === "number" ? { offset: call.args.offset } : {}),
+        ...(typeof call.args.limit === "number" ? { limit: call.args.limit } : {}),
+        text: blocks.map((b) => b.text) };
+      reads.push(read);
+      // Also recognize instruction files explicitly read during startup, e.g.
+      // nested AGENTS.md files not automatically loaded into the system prompt.
+      if (isInstructionFile(read.path)) sources.push({ path: read.path, content: read.text.join("\n") });
+    }
+  }
+  const known = new Set(state.reads.map((r) => r.entryId));
+  for (const read of reads) {
+    const absolute = path.resolve(ctx.cwd, read.path);
+    const names = [read.path, absolute, path.relative(ctx.cwd, absolute), path.basename(absolute)];
+    if (!known.has(read.entryId) && sources.some((source) =>
+      [...names, path.relative(path.dirname(path.resolve(ctx.cwd, source.path)), absolute)]
+        .some((name) => mentionsPath(source.content, name)))) {
+      state.reads.push(read);
+      known.add(read.entryId);
+    }
+  }
+  return state;
+}
+
+function renderStartupReads(state: StartupReads, entries: SessionEntry[], firstKeptEntryId?: string): string {
+  const cut = entries.findIndex((e) => e.id === firstKeptEntryId);
+  const tail = new Set(cut < 0 ? [] : entries.slice(cut).map((e) => e.id));
+  const retained = state.reads.filter((r) => !tail.has(r.entryId));
+  if (retained.length === 0) return "";
+  return ["### Retained startup reads",
+    "Original read outputs, preserved verbatim. Offsets and truncation notices are part of the original reads. These are not new filesystem reads. Tool stubs marked 'output removed' refer to the conversation spans, not these retained copies.",
+    ...retained.map((r) => `<retained-read entry=${JSON.stringify(r.entryId)} path=${JSON.stringify(r.path)} offset=${r.offset ?? 1}${r.limit === undefined ? "" : ` limit=${r.limit}`}>
+${r.text.join("\n")}
+</retained-read>`),
+  ].join("\n\n");
+}
+
 const SECTION_HEADER = "### Compacted conversation (oldest first)";
 const SPAN_CLOSE = "</compacted-span>";
 const SPAN_TRIMMED_NOTE = "(trimmed for size — use context_lookup)";
@@ -607,12 +725,10 @@ function capSpans(spans: string[][], budget: number): string[][] {
   return spans.map((_, span) => items.filter((it) => it.span === span).map((it) => it.line));
 }
 
-const REORIENT_BLOCK = `**Post-compaction re-orientation — REQUIRED BEFORE CONTINUING.** Compaction may have removed information needed to follow the project instructions. Before planning or performing the next task, you MUST complete this checklist:
-1. **Re-read every required document IN ITS ENTIRETY.** For this step, a document is required reading **if and only if** your applicable system prompt, developer instructions, or project instructions (including AGENTS.md / CLAUDE.md) explicitly instruct you to read it. Merely mentioning or linking a document does not qualify. Identify all such documents and re-read each from beginning to end, even if you read them before compaction. Grep matches, selected sections, summaries, and reading only files you intend to edit do NOT satisfy this requirement. If output is truncated, continue reading until you reach the end. Complete these reads before planning or changing anything; intending or promising to read does not count. If a required document is unavailable, report the blocker rather than silently skipping it.
-2. Re-acquire any other information needed for the current task that is no longer in context. This means restoring inputs, not repeating completed work: do not redo writes, edits, or other state-changing actions merely because their results were dropped. If needed, recover those results with \`context_lookup\`, or verify current state.
-3. If this is a Git repository, run \`git status\` and review uncommitted work. Re-verify build/test state if you are about to rely on it.
-4. Re-read any file you are about to modify — do not trust content you only remember from before the compaction.
-5. **Treat other pre-compaction knowledge as unverified too.** Thinking and tool outputs were removed. Anything you know only from them — or from earlier assistant prose describing them — is a note, not evidence. Before you state it as fact or base a decision on it, re-read the source or ask \`context_lookup\`. If you cannot verify it, say explicitly that it is unverified.`;
+const REORIENT_BLOCK = `**Post-compaction re-orientation.** Retained startup reads and the uncompacted tail remain available as evidence. Recover only missing information needed for the current task.
+1. Re-acquire information needed for the current task that is no longer in context. This means restoring inputs, not repeating completed work: do not redo writes, edits, or other state-changing actions merely because their results were dropped. If needed, recover those results with \`context_lookup\`, or verify current state.
+2. If this is a Git repository, run \`git status\` and review uncommitted work. Re-verify build/test state if you are about to rely on it.
+3. **Treat knowledge from removed evidence as unverified.** Thinking and tool outputs were removed from the compacted spans, except for the separately retained startup reads. The uncompacted tail is unchanged. Anything you know only from removed material — or from earlier assistant prose describing it — is a note, not evidence. Before you state it as fact or base a decision on it, re-read the source or ask \`context_lookup\`. If you cannot verify it, say explicitly that it is unverified.`;
 
 const CHECKPOINT_EXPLANATION = "**Compacted conversation follows.** The earlier part of this conversation has been compacted into the checkpoint below. This is not the full transcript: assistant thinking and tool outputs have been removed from the compacted spans, but are preserved in the session and can be recovered.";
 
@@ -621,7 +737,7 @@ const RECOVERY_INSTRUCTIONS = `**Recovering dropped details.** Information remov
 const EVIDENCE_BOUNDARY_RULE = "**Evidence boundary:** Tool signatures and file lists do not contain command output, file contents, or rules from read documents; if a claim depends on that removed evidence, use `context_lookup` or re-read the source before relying on it.";
 
 const REORIENT_MESSAGE = "transparent-compact:reorient";
-const RECOVERY_RECAP = "**Recovery recap.** Re-read current sources or ask `context_lookup` a specific question about removed history. If its findings are incomplete, use `context_list_entries`, `context_grep`, or `context_show_entry`, following pagination instructions. Do not read raw session JSONL files or old dumps through filesystem tools. Keep these evidence/recovery rules in force as work continues.";
+const RECOVERY_RECAP = "**Recovery recap.** When needed evidence is missing, re-read its source or ask `context_lookup` a specific question about removed history. If its findings are incomplete, use `context_list_entries`, `context_grep`, or `context_show_entry`, following pagination instructions. Do not read raw session JSONL files or old dumps through filesystem tools. Keep these evidence/recovery rules in force as work continues.";
 
 function latestVerbatimCompaction(entries: SessionEntry[]) {
   for (let i = entries.length - 1; i >= 0; i--) {
@@ -677,6 +793,8 @@ async function buildMechanicalSummary(opts: {
   firstKeptEntryId?: string; // start of the verbatim (uncompacted) tail
   readFiles: string[];
   modifiedFiles: string[];
+  startupReads: StartupReads;
+  cwd: string;
   notify: (msg: string) => void;
   chooseCap: (size: { overhead: number; lineChars: number }) => Promise<number | undefined | null>;
 }): Promise<string | undefined> {
@@ -684,12 +802,12 @@ async function buildMechanicalSummary(opts: {
   const allSpans = [...spans, { at: opts.now, reason: opts.reason, from: opts.spanFrom, to: opts.spanTo, lines: opts.spanLines }];
   const coversOf = (s: { from?: string; to?: string }): string | undefined => (s.from && s.to ? `${s.from} → ${s.to}` : undefined);
 
-  // Size guard: the budget applies to the WHOLE conversation section (base +
-  // all spans). The fixed tag overhead is computed exactly (tags are known
-  // strings), so the rendered section is guaranteed <= budget. The base block
-  // itself is NOT capped — if it alone exceeds the budget, warn.
+  // Size guard: the budget covers the conversation section plus retained reads.
+  // The base and retained reads are fixed overhead, never trimmed. Either can
+  // exceed the budget by itself; warn rather than silently dropping evidence.
   const baseOpen = base ? `<compacted-base kind="${base.kind}" compacted-at="${base.at}">` : "";
-  let overhead = SECTION_HEADER.length + 2;
+  const retainedReads = renderStartupReads(opts.startupReads, opts.branchEntries, opts.firstKeptEntryId);
+  let overhead = SECTION_HEADER.length + 2 + (retainedReads ? retainedReads.length + 2 : 0);
   if (base) overhead += baseOpen.length + 1 + BASE_CLOSE.length + 2 + base.summary.length;
   overhead += allSpans.reduce(
     (a, s, i) => a + spanOpen(i + 1, s.at, s.reason, coversOf(s)).length + SPAN_TRIMMED_ATTR.length + 2 + SPAN_TRIMMED_NOTE.length + 1 + SPAN_CLOSE.length + 2,
@@ -711,6 +829,8 @@ async function buildMechanicalSummary(opts: {
   if (maxChars === null) return undefined;
   if (maxChars !== undefined && base && base.summary.length > maxChars)
     opts.notify(`transparent-compact: the base block alone is ${base.summary.length.toLocaleString()} chars (budget ${maxChars.toLocaleString()}); it is kept un-capped`);
+  if (maxChars !== undefined && retainedReads.length > maxChars)
+    opts.notify(`transparent-compact: retained startup reads alone are ${retainedReads.length.toLocaleString()} chars (budget ${maxChars.toLocaleString()}); they are kept un-capped`);
   const capped = maxChars === undefined ? lines : capSpans(lines, Math.max(500, maxChars - overhead));
 
   const blocks: string[] = [];
@@ -748,10 +868,12 @@ async function buildMechanicalSummary(opts: {
   // The file lists describe the compacted spans, so they belong above the
   // verbatim boundary line. That closing line is the LAST line of the
   // checkpoint; everything after it is pi's retained verbatim tail.
+  if (retainedReads) parts.push("", retainedReads);
+  const retainedPaths = new Set(opts.startupReads.reads.map((r) => path.resolve(opts.cwd, r.path)));
   const hasFileLists = opts.readFiles.length > 0 || opts.modifiedFiles.length > 0;
   if (hasFileLists) parts.push("");
   if (opts.readFiles.length > 0)
-    parts.push(`<read-files note="read before compaction; content removed — re-read or use context_lookup">\n${opts.readFiles.map((file) => `${file} (content removed)`).join("\n")}\n</read-files>`);
+    parts.push(`<read-files note="read before compaction; unless marked retained, content removed — re-read or use context_lookup">\n${opts.readFiles.map((file) => `${file} (${retainedPaths.has(path.resolve(opts.cwd, file)) ? "startup read output retained in checkpoint or tail; may be partial" : "content removed"})`).join("\n")}\n</read-files>`);
   if (opts.modifiedFiles.length > 0)
     parts.push(`<modified-files note="modified before compaction; current contents NOT in context">\n${opts.modifiedFiles.join("\n")}\n</modified-files>`);
   parts.push("");
@@ -1435,7 +1557,9 @@ export default function (pi: ExtensionAPI) {
       const spanTo = toIso(msgTs(allMessages[allMessages.length - 1]));
       const spanLines = summarizeMessages(allMessages);
 
-      // 3) Build the mechanical summary (no LLM call).
+      // 3) Freeze startup references after the second user prompt, then carry
+      // their original outputs forward outside the trimmable conversation spans.
+      const retained = startupReads(branchEntries, ctx);
       const summary = await buildMechanicalSummary({
         reason, // pi's raw reason, passed through unchanged
         tokensBefore: preparation.tokensBefore,
@@ -1447,6 +1571,8 @@ export default function (pi: ExtensionAPI) {
         firstKeptEntryId: preparation.firstKeptEntryId,
         readFiles,
         modifiedFiles,
+        startupReads: retained,
+        cwd: ctx.cwd,
         notify: (m) => ctx.ui?.notify?.(m, "warning"),
         chooseCap: (size) => chooseCapBudget(pi, ctx, signal, reason, size),
       });
@@ -1466,6 +1592,7 @@ export default function (pi: ExtensionAPI) {
             kind: MECH_KIND,
             readFiles,
             modifiedFiles,
+            startupReads: retained,
             // Only this compaction's own span (un-capped lines). Earlier spans
             // are re-rendered from the earlier entries' details — no nesting.
             span: { at: nowIso, from: spanFrom, to: spanTo, reason, tokensBefore: preparation.tokensBefore, lines: spanLines },

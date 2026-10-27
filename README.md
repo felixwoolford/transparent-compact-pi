@@ -2,8 +2,8 @@
 
 Deterministic context compaction for [Pi](https://pi.dev/), with session-backed
 recovery. By default, replaces Pi's model-generated compaction summary with a verbatim
-compaction, with a checkpoint built mechanically from conversation text. Thinking and tool outputs are removed
-from the active model context, while user inputs and assistant text are retained verbatim.
+compaction, with a checkpoint built mechanically from conversation text. Thinking and most tool outputs are removed
+from the active model context, while user inputs, assistant text and selected startup reads are retained verbatim.
 Tool calls and custom messages are reduced to short stubs; custom-message bodies remain recoverable from the session.
 Verbatim compaction itself makes no model call. When a missing detail is needed, `context_lookup` runs a subagent over the session's
 full raw branch and returns only relevant findings.
@@ -58,12 +58,27 @@ To compact manually:
 ```
 
 The checkpoint begins with an explanation and full recovery instructions, and
-ends with an evidence-boundary warning. A mandatory re-orientation checklist and
+ends with an evidence-boundary warning. Task-relevant recovery reminders and a
 brief recovery recap follow **the retained recent history and any pending new
 user input**. They are saved in the session and remain available on later turns.
 After another compaction, only the current checklist is presented: older generated
 checklists are excluded from compacted spans and the retained tail. This is
 instruction delivery, not a guarantee of model compliance.
+
+### Automatic startup-read retention
+
+Successful text reads between the first and second user prompts are retained when
+their paths or filenames appear in AGENTS.md / CLAUDE.md instructions. Selection
+is purely mechanical: no model call, agent tagging, or extra filesystem reads.
+Original output chunks, including paginated reads, survive in a separate checkpoint
+section and carry forward across later compactions. Copies still in the recent
+tail are not duplicated. If compaction happens before the second prompt, collection
+continues until that prompt arrives.
+
+This is a literal filename-matching heuristic, not an interpretation of required
+reading. It does not capture every possible reference or fill in incomplete reads.
+The agent is no longer given a required-document reread checklist; recovery is for
+missing task-relevant evidence. See [selection details](docs/DESIGN.md#retained-startup-reads).
 
 ### Select the compaction method
 
@@ -89,7 +104,7 @@ See [how cap trimming works](docs/DESIGN.md#how-cap-trimming-works) for the remo
 This is meant as a fallback option for allowing compaction rounds to run far in excess of the intended use case, and should probably be used to allow work to be wrapped up before handing off to a new session. 
 If you find that in normal usage you frequently work over the compaction cap, other compaction tools are likely to be more suitable.
 
-The default is **`warn 25%`**: a conversation-section budget estimated at 25% of
+The default is **`warn 25%`**: a conversation-and-retained-reads budget estimated at 25% of
 the current model's context window, using **4 characters per token**, not an
 exact tokenizer. When content would actually be trimmed, choose **Apply trimming**,
 **Disable cap for this session**, **Change budget**, or **Cancel compaction**. Disabling persists as `off`, rather than
@@ -116,8 +131,10 @@ Tokens are estimated with `ceil(chars / 4)`, not an exact tokenizer. For a
 characters. 
 
 The budget is a size guard, not a guarantee that the whole model context fits.
-Instructions and file lists remain outside it. Disabling the cap
-still removes thinking and tool outputs and abbreviates tool-call signatures.
+Instructions and file lists remain outside it. Retained startup reads count as
+fixed overhead but are never trimmed; if they alone exceed the budget, the
+extension warns and keeps them. Disabling the cap still removes thinking and
+unselected tool outputs and abbreviates tool-call signatures.
 It may leave too much context for the model, particularly during overflow recovery.
 
 With no interactive UI, `warn` emits a warning and applies the cap. TUI and
@@ -135,7 +152,7 @@ starting Pi:
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `MECH_COMPACT_MAX_SUMMARY_CHARS` | Unset (uses percentage budget) | Initial conversation-section character budget override; takes precedence over the percentage setting. |
+| `MECH_COMPACT_MAX_SUMMARY_CHARS` | Unset (uses percentage budget) | Initial conversation-and-retained-reads character budget override; takes precedence over the percentage setting. |
 | `MECH_COMPACT_MAX_SUMMARY_PERCENT` | `25` | Initial percentage of the model's context window, using estimated tokens. Accepts numbers greater than 0 and at most 100, including decimals; invalid values fall back to 25. |
 | `MECH_COMPACT_LOOKUP_MODEL` | Session model | Optional `provider/modelId` for lookups; must support tool calls and be available in Pi. An unresolved model falls back to the session model. |
 | `MECH_COMPACT_LOOKUP_TURNS` | `10` | Maximum substantive search turns. Valid continuation-only turns are exempt; total search-phase model calls are capped at 3× this budget (30 by default), plus one tool-free write-up on exhaustion. |
@@ -170,8 +187,8 @@ migration. The override is extension configuration, not a tool argument or a
 filesystem search route for the main agent.
 
 The character budget is not a token limit or a hard cap on the whole checkpoint.
-Instructions and file lists sit outside the conversation section; an inherited
-base is uncapped and the line budget has a 500-character minimum. Tune it
+Instructions and file lists sit outside the budget; an inherited base and retained
+startup reads are uncapped, and the line budget has a 500-character minimum. Tune it
 alongside the model's context window and Pi's `compaction.keepRecentTokens`.
 
 ### Local inference engines
