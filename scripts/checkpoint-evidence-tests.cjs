@@ -83,14 +83,57 @@ module.exports = async function ({ ext, SessionManager, root, compact, makeConte
   const old = SessionManager.inMemory(cwd);
   const oldTail = old.appendMessage(user("Old retained tail"));
   const oldLine = '[Assistant tool calls] (outputs removed): read(path="OLD.md")';
+  const oldCustom = '[Custom]: LEGACY_CUSTOM_BODY';
   old.appendCompaction("OLD_CHECKPOINT", oldTail, 1000, {
     kind: "mech-compact", readFiles: ["OLD.md"], modifiedFiles: [],
-    span: { at: "2026-01-01T00:00:00Z", reason: "manual", lines: [oldLine] },
+    span: { at: "2026-01-01T00:00:00Z", reason: "manual", lines: [oldLine, oldCustom] },
   }, true);
   const newTail = old.appendMessage(user("New retained tail"));
   const legacy = await compact(ext, makeContext(old, cwd), [oldTail], newTail);
   assert(legacy.summary.includes(oldLine), "old spans are not rewritten with guessed outcomes");
+  assert(legacy.summary.includes(oldCustom), "previously saved custom-message bodies are not migrated");
   assert(legacy.summary.includes("Calls without a status in older spans have unknown outcomes."));
   assert(legacy.summary.includes("OLD.md (content removed)"));
+  console.log("== Custom messages: generic bounded stubs, raw recovery, and repeated compaction ==");
+  const custom = SessionManager.inMemory(cwd);
+  // The cap is off: removing bodies is compaction policy, not size trimming.
+  custom.appendCustomEntry("transparent-compact:cap-compaction", { mode: "off", budget: { unit: "chars", value: 80000 } });
+  const cases = [
+    { type: "third-party:background-result", content: "CUSTOM_OUTPUT_SECRET\n" + "output\n".repeat(500), display: true },
+    { type: "unrelated:instructions", content: [text("CUSTOM_INSTRUCTIONS_SECRET"),
+      { type: "image", data: "CUSTOM_IMAGE_SECRET", mimeType: "image/png" }], display: false },
+    { type: "empty", content: "", display: true },
+    { type: 'long\n"' + "x".repeat(1000), content: "CUSTOM_LONG_TYPE_SECRET", display: false },
+  ];
+  const customIds = cases.map((c) => custom.appendCustomMessageEntry(c.type, c.content, c.display,
+    { arbitrary: "CUSTOM_DETAILS_SECRET" }));
+  const originals = customIds.map((id) => structuredClone(custom.getEntry(id)));
+  const customTail = custom.appendCustomMessageEntry("retained", "CUSTOM_TAIL_VERBATIM", true);
+  const customCtx = makeContext(custom, cwd);
+  const customResult = await compact(ext, customCtx, customIds, customTail);
+  const stubs = customResult.details.span.lines;
+  assert.equal(stubs.length, cases.length);
+  for (const c of cases.slice(0, 3)) {
+    assert(stubs.includes(`[Custom message]: custom(type=${JSON.stringify(c.type)}) [content removed — use context_lookup]`));
+  }
+  assert(stubs.every((line) => line.length < 300 && !line.includes("\n") && line.endsWith("[content removed — use context_lookup]")),
+    "even multiline/oversized types produce bounded one-line stubs");
+  assert(stubs.at(-1).includes("…[+"), "long custom types are abbreviated like tool arguments");
+  for (const checkpoint of [customResult.summary, JSON.stringify(stubs)]) {
+    for (const secret of ["CUSTOM_OUTPUT_SECRET", "CUSTOM_INSTRUCTIONS_SECRET", "CUSTOM_IMAGE_SECRET", "CUSTOM_DETAILS_SECRET", "CUSTOM_LONG_TYPE_SECRET"])
+      assert(!checkpoint.includes(secret), secret);
+  }
+  assert.deepEqual(customIds.map((id) => custom.getEntry(id)), originals, "original session entries remain intact");
+  const raw = await ext.tools.context_show_entry.execute("recover-custom", { id: customIds[0], maxLines: 1000 },
+    new AbortController().signal, undefined, customCtx);
+  const recovered = raw.content.map((b) => b.text ?? "").join("");
+  assert(recovered.includes(cases[0].content), "the full custom body remains recoverable from raw history");
+  assert(custom.buildSessionContext().messages.some((m) => m.role === "custom" && m.content === "CUSTOM_TAIL_VERBATIM"),
+    "custom messages in Pi's retained tail remain verbatim");
+  const customNextTail = custom.appendMessage(user("Next custom tail"));
+  const customRepeated = await compact(ext, customCtx, [customTail], customNextTail);
+  for (const stub of stubs) assert(customRepeated.summary.includes(stub), "saved stubs survive repeated compaction");
+  assert(!customRepeated.summary.includes("CUSTOM_OUTPUT_SECRET"));
+  assert(!customRepeated.summary.includes("CUSTOM_TAIL_VERBATIM"), "the former tail body is removed when newly compacted");
   assert.deepEqual(fs.readdirSync(cwd), [], "evidence metadata requires no disk snapshots");
 };

@@ -3,7 +3,8 @@
 Deterministic context compaction for [Pi](https://pi.dev/), with session-backed
 recovery. By default, replaces Pi's model-generated compaction summary with a verbatim
 compaction, with a checkpoint built mechanically from conversation text. Thinking and tool outputs are removed
-from the active model context, while user inputs, assistant text, and tool call stubs are retained verbatim.
+from the active model context, while user inputs and assistant text are retained verbatim.
+Tool calls and custom messages are reduced to short stubs; custom-message bodies remain recoverable from the session.
 Verbatim compaction itself makes no model call. When a missing detail is needed, `context_lookup` runs a subagent over the session's
 full raw branch and returns only relevant findings.
 The goal is to let the agent withstand many (but finite) rounds of compaction without the copy-of-a-copy degradation of model-summary compaction, which is exacerbated in sub-frontier models.

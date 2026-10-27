@@ -128,16 +128,18 @@ module.exports = async function (h) {
   manager.appendMessage(assistant([text("Round two complete.")]));
   assert.equal(reminders(project()).length, 1, "current recovery instructions remain on subsequent turns");
 
-  // A third cut that SUMMARIZES both old managed messages. Ordinary custom/user
-  // text, even instruction-like text, must not be stripped by string matching.
-  const ordinary = manager.appendCustomMessageEntry("ordinary", "CUSTOM_PROSE_MUST_SURVIVE", true);
+  // A third cut that SUMMARIZES both old managed messages. Ordinary custom
+  // messages become stubs; user quotes must not be stripped by string matching.
+  const ordinary = manager.appendCustomMessageEntry("ordinary", "CUSTOM_CONTENT_REMOVED", true);
   const quoted = manager.appendMessage(user("Quoted text: **Evidence boundary:** is the label we discussed."));
   const nextTail = manager.appendMessage(user("Third retained tail."));
   const c3 = await compact(ext, ctx, [task, firstFooter, answer, secondFooter, ordinary, quoted], nextTail, "overflow");
   assert.equal(count(c3.summary, "**Recovering dropped details.**"), 1);
   assert(!c3.summary.includes(heading));
   assert(!c3.summary.includes("**Recovery recap.**"));
-  assert(c3.summary.includes("[Custom]: CUSTOM_PROSE_MUST_SURVIVE"));
+  assert(c3.summary.includes('[Custom message]: custom(type="ordinary") [content removed — use context_lookup]'));
+  assert(!c3.summary.includes("CUSTOM_CONTENT_REMOVED"));
+  assert(!JSON.stringify(c3.details.span.lines).includes("CUSTOM_CONTENT_REMOVED"));
   assert(c3.summary.includes("Quoted text: **Evidence boundary:**"), "user prose is not mistaken for generated envelope text");
   assert(!JSON.stringify(c3.details.span.lines).includes(heading));
   assert(start());

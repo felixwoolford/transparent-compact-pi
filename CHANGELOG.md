@@ -7,6 +7,10 @@
 
 - Deterministic checkpoints retain user messages and assistant prose, subject to
   a size guard; thinking, full tool outputs, and arguments remain in Pi's session.
+- Newly compacted custom messages become bounded type stubs marked `content
+  removed`, regardless of their source extension. Bodies remain recoverable from
+  raw session history; previously saved spans are not rewritten. Managed
+  re-orientation messages continue to be regenerated instead.
 - Tool signatures record per-call `ok`, `error`, or `unknown` outcomes from
   matched tool-result metadata, always marking output as removed. Missing or
   ambiguous outcomes are never inferred, including unlabelled older spans.

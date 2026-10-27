@@ -13,6 +13,7 @@ extension builds a checkpoint without changing that boundary or calling a model:
 | Tool calls | Short signatures with outcome labels; full arguments and outputs remain recoverable. |
 | Assistant thinking | Removed from the checkpoint; retained in the raw session. |
 | Tool outputs | Removed from the checkpoint; retained in the raw session. |
+| Custom messages | Short type stubs marked `content removed`; bodies remain in the raw session. Managed re-orientation messages are regenerated instead. |
 | Recent conversation | Pi keeps its normal verbatim tail. |
 | Earlier compacted spans | Re-rendered chronologically, without repeated model summarization. |
 | Read/modified file lists | Carried forward, with file contents marked as removed. |
@@ -20,6 +21,11 @@ extension builds a checkpoint without changing that boundary or calling a model:
 Checkpoints label tool outcomes as `ok`, `error`, or `unknown` and remind the
 agent to recover missing evidence and re-read required documents before relying
 on them. These labels describe tool results, not a guarantee that tests passed.
+
+All newly compacted custom messages follow the same stub policy, regardless of
+extension, display setting, or content format. Long type names are abbreviated
+like tool-call arguments. This applies even with the cap disabled. Previously
+saved spans are not rewritten; older custom-message bodies may remain in them.
 
 #### How cap trimming works
 
@@ -145,8 +151,9 @@ Subsequent verbatim compactions skip these managed messages when building spans,
 then regenerate one envelope around the entire accumulated compacted context.
 Old generated checklists therefore do not accumulate inside spans or the active
 tail. Their original entries remain in raw session history for recovery/audit.
-Ordinary user, assistant and custom prose is never stripped by matching instruction
-text. Opaque inherited model summaries/legacy checkpoints are likewise not rewritten
+User and assistant prose is never stripped by matching instruction text. Other
+custom messages become type stubs regardless of whether their content resembles
+instructions. Opaque inherited model summaries/legacy checkpoints are likewise not rewritten
 to remove text that looks like an old instruction envelope.
 
 Offline tests inspect actual SDK requests with roughly 20k-token tails, multiple

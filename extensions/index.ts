@@ -490,7 +490,8 @@ function summarizeMessages(messages: AgentMessage[]): string[] {
       case "custom":
         // Our instruction envelope is regenerated, not conversation prose.
         // Keep originals in raw history, but never carry old checklists into spans.
-        if (m.customType !== REORIENT_MESSAGE) lines.push(`[Custom]: ${textOf(m.content).text}`);
+        if (m.customType !== REORIENT_MESSAGE)
+          lines.push(`[Custom message]: ${toolCallSignature("custom", { type: m.customType })} [content removed — use context_lookup]`);
         break;
       case "branchSummary":
       case "compactionSummary":
@@ -733,6 +734,7 @@ async function buildMechanicalSummary(opts: {
   parts.push(`- Latest: ${opts.now} (trigger: ${opts.reason}, ~${opts.tokensBefore.toLocaleString()} tokens before compaction)`);
   parts.push("- In the compacted spans, user and assistant prose is kept verbatim, subject to budget trimming; tool calls are kept as one-line signatures (arguments truncated). Assistant thinking and tool outputs are removed. Retained prose is a record of what was said, not verification of its claims.");
   parts.push("- Tool status: ok = result not flagged as an error; error = result flagged as an error; unknown = no safely matched result/status. Output content is removed in all cases. ok does not prove a command or tests passed. Calls without a status in older spans have unknown outcomes.");
+  parts.push("- Newly compacted custom messages are kept only as type stubs (long types abbreviated); their content is removed and remains recoverable in the session through context_lookup. Previously saved spans are unchanged.");
   parts.push(
     "- pi keeps the most recent part of the conversation verbatim (its `keepRecentTokens` setting). The spans below cover only what came *before* that. The retained verbatim conversation begins after the explicit boundary marker at the end of this checkpoint.",
   );
