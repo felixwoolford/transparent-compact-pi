@@ -1,6 +1,6 @@
 {
   "name": "@foliox/transparent-compact-pi",
-  "version": "0.8.7",
+  "version": "0.8.8",
   "description": "Deterministic, verbatim-preserving compaction for Pi, with session-backed subagent context recovery.",
   "keywords": [
     "pi-package",
