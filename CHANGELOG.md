@@ -2,6 +2,14 @@
 
 ## Unreleased — initial release preparation
 
+- Make compaction tool signatures leaner: short outcome labels, relative project
+  paths, write sizes and edit counts instead of payload previews, and a single
+  ellipsis for abbreviated arguments. Keep bash previews at 160 characters and
+  preserve complete file-tool paths. Bound user bash-execution stubs too. Raw
+  history, retained outputs, and user/assistant prose are unchanged.
+- Mark all size-trimmed spans, including partial removals and shortened user
+  messages; no longer label originally empty spans as trimmed.
+
 - Scope recovery guidance to specific earlier details lost to compaction in the
   current conversation, not startup, project discovery, or missing requirements.
   Filesystem restrictions apply only to that recovery workflow, not user-requested
@@ -29,7 +37,7 @@
   raw session history; previously saved spans are not rewritten. Managed
   re-orientation messages continue to be regenerated instead.
 - Tool signatures record per-call `ok`, `error`, or `unknown` outcomes from
-  matched tool-result metadata, always marking output as removed. Missing or
+  matched tool-result metadata; the header explains that outputs are removed. Missing or
   ambiguous outcomes are never inferred, including unlabelled older spans.
 - Read-file entries distinguish retained startup reads from removed content; a closing evidence rule
   requires lookup or re-reading before relying on removed outputs or document rules.

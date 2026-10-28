@@ -20,8 +20,20 @@ extension builds a checkpoint without changing that boundary or calling a model:
 
 Checkpoints label tool outcomes as `ok`, `error`, or `unknown` and remind the
 agent to recover missing evidence when needed. These labels describe tool
-results, not a guarantee that tests passed. There is no required-document reread
-checklist: retained reads remain available as evidence.
+results, not a guarantee that tests passed. Output removal is explained once in
+the checkpoint header rather than repeated beside every outcome. There is no
+required-document reread checklist: retained reads remain available as evidence.
+
+File-tool signatures keep complete identifying paths, made relative to the session
+working directory where possible. Shell commands abbreviate that directory to
+`.` at path boundaries, without changing raw arguments. This is display notation,
+not a replayable command. Read/modified file lists use the same relative paths.
+Write bodies become `content=<N chars>`; edit arrays become `edits=K` (individual
+`oldText`/`newText` arguments become character counts). Other argument previews,
+including bash commands, retain a 160-character JSON-encoded prefix with a single
+ellipsis when abbreviated. Multi-line command prefixes are not reduced to their
+first line. These changes affect only checkpoint signatures, never conversation
+prose, retained read outputs, or raw session evidence.
 
 All newly compacted custom messages follow the same stub policy, regardless of
 extension, display setting, or content format. Long type names are abbreviated
@@ -73,7 +85,10 @@ original branch, not from its summary prose.
 Retained startup reads count as fixed budget overhead and are never trimmed.
 Like an inherited base, they can exceed the budget by themselves; in that case
 the extension warns and preserves them. The conversation-line budget still has
-a 500-character minimum. Originals remain recoverable from the session.
+a 500-character minimum. Every span changed by the cap carries `trimmed="true"`
+and a recovery note, including partial line removal and shortened user messages.
+An originally empty span is not marked as trimmed. Originals remain recoverable
+from the session.
 
 
 ### Session-backed lookup

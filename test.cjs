@@ -453,6 +453,7 @@ async function main() {
     assert.deepEqual(Object.keys(ext.commands), ["compaction-method", "cap-compaction"]);
     await methodTests(factory, SessionManager, root);
     await require("./scripts/checkpoint-evidence-tests.cjs")({ ...hybridHelpers, compact });
+    await require("./scripts/compaction-format-tests.cjs")({ ...hybridHelpers, compact });
     await capPolicyTests(capHelpers);
     assert.deepEqual(Object.keys(ext.tools.context_lookup.parameters.properties), ["question"]);
 
@@ -491,7 +492,7 @@ async function main() {
     assert(c1.summary.includes("Please fix the N=7 bug."));
     assert(c1.summary.includes("I will inspect the file."));
     assert(c1.summary.includes("[Assistant tool calls]: read("));
-    assert(c1.summary.includes("[ok; output removed]"));
+    assert(c1.summary.includes("[ok]"));
     assert(!c1.summary.includes(argumentsText), "checkpoint truncates long arguments");
     const next = f.manager.appendMessage(user("The next retained tail.", epoch + 2000));
     const c2 = await compact(ext, ctx, [f.kept], next, "threshold");

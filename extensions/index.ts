@@ -419,22 +419,49 @@ function branchToTranscript(entries: SessionEntry[]): { lines: string[]; index: 
 // Mechanical summary (what replaces the model summary in the session)
 // ============================================================================
 
-function toolCallSignature(name: string, args: Record<string, unknown> | undefined): string {
+// Display-only shortening: never change raw arguments or resolve symlinks.
+function checkpointPath(value: string, cwd: string): string {
+  const prefix = cwd.endsWith(path.sep) ? cwd : cwd + path.sep;
+  if (value === cwd) return ".";
+  return value.startsWith(prefix) ? value.slice(prefix.length) : value;
+}
+
+function checkpointCommand(command: string, cwd: string): string {
+  const escaped = cwd.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // Match complete path prefixes, not sibling directories or URL fragments.
+  return command.replace(new RegExp(`(^|[\\s"'=<>|;&(])${escaped}(?=$|[/\\s"'<>|;&)])`, "g"), "$1.");
+}
+
+function argumentSnippet(value: unknown): string {
+  let s: string;
+  try {
+    s = JSON.stringify(value) ?? String(value);
+  } catch {
+    s = String(value);
+  }
+  return s.length > cfg.argSnippetChars ? `${s.slice(0, cfg.argSnippetChars)}…` : s;
+}
+
+function toolCallSignature(name: string, args: Record<string, unknown> | undefined, cwd: string): string {
   const parts: string[] = [];
   for (const [k, v] of Object.entries(args ?? {})) {
     let s: string;
-    try {
-      s = JSON.stringify(v) ?? String(v);
-    } catch {
-      s = String(v);
-    }
-    if (s.length > cfg.argSnippetChars) s = `${s.slice(0, cfg.argSnippetChars)}…[+${s.length - cfg.argSnippetChars} chars]`;
+    if (["read", "write", "edit"].includes(name) && k === "path" && typeof v === "string")
+      s = JSON.stringify(checkpointPath(v, cwd)); // Keep the whole identifying path.
+    else if (name === "write" && k === "content" && typeof v === "string")
+      s = `<${v.length} chars>`;
+    else if (name === "edit" && k === "edits" && Array.isArray(v))
+      s = String(v.length);
+    else if (name === "edit" && (k === "oldText" || k === "newText") && typeof v === "string")
+      s = `<${v.length} chars>`;
+    else
+      s = argumentSnippet(name === "bash" && k === "command" && typeof v === "string" ? checkpointCommand(v, cwd) : v);
     parts.push(`${k}=${s}`);
   }
   return `${name}(${parts.join(", ")})`;
 }
 
-function summarizeMessages(messages: AgentMessage[]): string[] {
+function summarizeMessages(messages: AgentMessage[], cwd: string): string[] {
   // Pair calls with later results in Pi's selected messages only. Never infer
   // outcomes from result text, assistant claims, or another branch/the kept tail.
   const outcomes = new Map<object, "ok" | "error">();
@@ -470,7 +497,7 @@ function summarizeMessages(messages: AgentMessage[]): string[] {
         for (const block of m.content ?? []) {
           if (block.type === "text") prose += (prose ? "\n" : "") + String(block.text ?? "");
           else if (block.type === "toolCall")
-            calls.push(`${toolCallSignature(String(block.name), block.arguments)} [${outcomes.get(block) ?? "unknown"}; output removed]`);
+            calls.push(`${toolCallSignature(String(block.name), block.arguments, cwd)} [${outcomes.get(block) ?? "unknown"}]`);
           // thinking blocks: removed by design (kept in the session)
         }
         if (prose.trim()) lines.push(`[Assistant]: ${prose.trim()}`);
@@ -481,13 +508,13 @@ function summarizeMessages(messages: AgentMessage[]): string[] {
         // removed by design (kept in the session)
         break;
       case "bashExecution":
-        lines.push(`[BashExecution]: $ ${String(m.command ?? "")}  (output removed — use context_lookup)`);
+        lines.push(`[BashExecution]: ${toolCallSignature("bash", { command: String(m.command ?? "") }, cwd)} [output removed]`);
         break;
       case "custom":
         // Our instruction envelope is regenerated, not conversation prose.
         // Keep originals in raw history, but never carry old checklists into spans.
         if (m.customType !== REORIENT_MESSAGE)
-          lines.push(`[Custom message]: ${toolCallSignature("custom", { type: m.customType })} [content removed — use context_lookup]`);
+          lines.push(`[Custom message]: ${toolCallSignature("custom", { type: m.customType }, cwd)} [content removed — use context_lookup]`);
         break;
       case "branchSummary":
       case "compactionSummary":
@@ -611,7 +638,7 @@ function renderStartupReads(state: StartupReads, entries: SessionEntry[], firstK
   const retained = state.reads.filter((r) => !tail.has(r.entryId));
   if (retained.length === 0) return "";
   return ["### Retained startup reads",
-    "Original read outputs, preserved verbatim. Offsets and truncation notices are part of the original reads. These are not new filesystem reads. Tool stubs marked 'output removed' refer to the conversation spans, not these retained copies.",
+    "Original read outputs, preserved verbatim. Offsets and truncation notices are part of the original reads. These are not new filesystem reads. Tool-call status labels refer to the conversation spans, where outputs are removed, not these retained copies.",
     ...retained.map((r) => `<retained-read entry=${JSON.stringify(r.entryId)} path=${JSON.stringify(r.path)} offset=${r.offset ?? 1}${r.limit === undefined ? "" : ` limit=${r.limit}`}>
 ${r.text.join("\n")}
 </retained-read>`),
@@ -835,10 +862,14 @@ async function buildMechanicalSummary(opts: {
   if (base) blocks.push(`${baseOpen}\n${base.summary.replace(/\n+$/, "")}\n${BASE_CLOSE}`);
   capped.forEach((lines, i) => {
     const s = allSpans[i];
+    const trimmed = lines.length !== s.lines.length || lines.some((line, j) => line !== s.lines[j]);
     const open = spanOpen(i + 1, s.at, s.reason, coversOf(s));
-    blocks.push(
-      lines.length > 0 ? `${open}\n${lines.join("\n")}\n${SPAN_CLOSE}` : `${open.slice(0, -1)}${SPAN_TRIMMED_ATTR}>\n${SPAN_TRIMMED_NOTE}\n${SPAN_CLOSE}`,
-    );
+    blocks.push([
+      trimmed ? `${open.slice(0, -1)}${SPAN_TRIMMED_ATTR}>` : open,
+      ...(trimmed ? [SPAN_TRIMMED_NOTE] : []),
+      ...lines,
+      SPAN_CLOSE,
+    ].join("\n"));
   });
 
   const compactionCount = opts.branchEntries.filter((e) => e.type === "compaction").length + 1;
@@ -850,7 +881,7 @@ async function buildMechanicalSummary(opts: {
     opts.notify(MIXED_CONTEXT_WARNING);
   }
   parts.push(`- Latest: ${opts.now} (trigger: ${opts.reason}, ~${opts.tokensBefore.toLocaleString()} tokens before compaction)`);
-  parts.push("- In the compacted spans, user and assistant prose is kept verbatim, subject to budget trimming; tool calls are kept as one-line signatures (arguments truncated). Assistant thinking and tool outputs are removed. Retained prose is a record of what was said, not verification of its claims.");
+  parts.push("- In the compacted spans, user and assistant prose is kept verbatim, subject to budget trimming; tool calls are kept as one-line signatures. Paths under the session working directory are shown relative to it (as `.` in shell commands). Write contents and edit payloads are replaced by sizes/counts; other argument snippets keep up to 160 characters followed by an ellipsis when abbreviated. Assistant thinking and tool outputs are removed. Retained prose is a record of what was said, not verification of its claims.");
   parts.push("- Tool status: ok = result not flagged as an error; error = result flagged as an error; unknown = no safely matched result/status. Output content is removed in all cases. ok does not prove a command or tests passed. Calls without a status in older spans have unknown outcomes.");
   parts.push("- Newly compacted custom messages are kept only as type stubs (long types abbreviated); their content is removed and remains recoverable in the session through context_lookup. Previously saved spans are unchanged.");
   parts.push(
@@ -871,9 +902,9 @@ async function buildMechanicalSummary(opts: {
   const hasFileLists = opts.readFiles.length > 0 || opts.modifiedFiles.length > 0;
   if (hasFileLists) parts.push("");
   if (opts.readFiles.length > 0)
-    parts.push(`<read-files note="read before compaction; unless marked retained, content removed — re-read or use context_lookup">\n${opts.readFiles.map((file) => `${file} (${retainedPaths.has(path.resolve(opts.cwd, file)) ? "startup read output retained in checkpoint or tail; may be partial" : "content removed"})`).join("\n")}\n</read-files>`);
+    parts.push(`<read-files note="read before compaction; unless marked retained, content removed — re-read or use context_lookup">\n${opts.readFiles.map((file) => `${checkpointPath(file, opts.cwd)} (${retainedPaths.has(path.resolve(opts.cwd, file)) ? "startup read output retained in checkpoint or tail; may be partial" : "content removed"})`).join("\n")}\n</read-files>`);
   if (opts.modifiedFiles.length > 0)
-    parts.push(`<modified-files note="modified before compaction; current contents NOT in context">\n${opts.modifiedFiles.join("\n")}\n</modified-files>`);
+    parts.push(`<modified-files note="modified before compaction; current contents NOT in context">\n${opts.modifiedFiles.map((file) => checkpointPath(file, opts.cwd)).join("\n")}\n</modified-files>`);
   parts.push("");
   parts.push(EVIDENCE_BOUNDARY_RULE);
   parts.push("");
@@ -1553,7 +1584,7 @@ export default function (pi: ExtensionAPI) {
       const msgTs = (m: AgentMessage): unknown => (m as unknown as { timestamp?: unknown }).timestamp;
       const spanFrom = toIso(msgTs(allMessages[0]));
       const spanTo = toIso(msgTs(allMessages[allMessages.length - 1]));
-      const spanLines = summarizeMessages(allMessages);
+      const spanLines = summarizeMessages(allMessages, ctx.cwd);
 
       // 3) Freeze startup references after the second user prompt, then carry
       // their original outputs forward outside the trimmable conversation spans.

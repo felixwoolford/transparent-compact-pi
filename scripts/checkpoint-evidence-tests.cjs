@@ -48,12 +48,12 @@ module.exports = async function ({ ext, SessionManager, root, compact, makeConte
   const c = await compact(ext, ctx, ids, kept, "manual", {
     read: new Set(["SPEC.md", "docs/a guide.md"]), written: new Set(), edited: new Set(["changed.ts"]),
   });
-  assert(c.summary.includes('bash(command="check") [ok; output removed]; read(path="missing.md") [error; output removed]'));
+  assert(c.summary.includes('bash(command="check") [ok]; read(path="missing.md") [error]'));
   assert(c.summary.includes('[Assistant]: All checks passed.'), "assistant prose stays verbatim, not endorsed");
-  assert(c.summary.includes('bash(command="first-reuse") [ok; output removed]'));
-  assert(c.summary.includes('bash(command="second-reuse") [error; output removed]'));
+  assert(c.summary.includes('bash(command="first-reuse") [ok]'));
+  assert(c.summary.includes('bash(command="second-reuse") [error]'));
   for (const file of ["unfinished.md", "missing-status.md", "wrong-name.md", "before-call.md", "duplicate-a.md", "duplicate-b.md", "outside-selection.md"]) {
-    assert(c.summary.includes(`read(path="${file}") [unknown; output removed]`), file);
+    assert(c.summary.includes(`read(path="${file}") [unknown]`), file);
   }
   assert(!c.summary.includes("REMOVED_EVIDENCE_SECRET"), "neither successful nor failed output bodies leak");
   assert(c.summary.includes("ok does not prove a command or tests passed."));
@@ -64,7 +64,7 @@ module.exports = async function ({ ext, SessionManager, root, compact, makeConte
   assert(c.summary.includes(`</modified-files>\n\n${rule}\n\nConversation`), "rule sits after file lists, immediately before the tail boundary");
   const next = manager.appendMessage(user("Next retained tail"));
   const repeated = await compact(ext, ctx, [kept], next);
-  assert(repeated.summary.includes('bash(command="check") [ok; output removed]'), "statuses persist in saved uncapped spans");
+  assert(repeated.summary.includes('bash(command="check") [ok]'), "statuses persist in saved uncapped spans");
   assert(repeated.summary.includes("SPEC.md (content removed)"), "cumulative read lists keep content-removal labels");
   assert.equal(repeated.summary.split(rule).length - 1, 1, "closing rule is not nested on repeated compaction");
 
@@ -77,7 +77,7 @@ module.exports = async function ({ ext, SessionManager, root, compact, makeConte
     preparation: { messagesToSummarize: [split.getEntry(a).message], turnPrefixMessages: [split.getEntry(t).message],
       isSplitTurn: true, firstKeptEntryId: tail, tokensBefore: 1000 },
   }, makeContext(split, cwd));
-  assert(splitResult.compaction.summary.includes('read(path="split.md") [error; output removed]'), "pairing spans both preparation arrays");
+  assert(splitResult.compaction.summary.includes('read(path="split.md") [error]'), "pairing spans both preparation arrays");
   assert(splitResult.compaction.summary.includes(rule), "rule is present without any file lists");
 
   const old = SessionManager.inMemory(cwd);
@@ -118,7 +118,7 @@ module.exports = async function ({ ext, SessionManager, root, compact, makeConte
   }
   assert(stubs.every((line) => line.length < 300 && !line.includes("\n") && line.endsWith("[content removed — use context_lookup]")),
     "even multiline/oversized types produce bounded one-line stubs");
-  assert(stubs.at(-1).includes("…[+"), "long custom types are abbreviated like tool arguments");
+  assert(stubs.at(-1).includes("…"), "long custom types are abbreviated like tool arguments");
   for (const checkpoint of [customResult.summary, JSON.stringify(stubs)]) {
     for (const secret of ["CUSTOM_OUTPUT_SECRET", "CUSTOM_INSTRUCTIONS_SECRET", "CUSTOM_IMAGE_SECRET", "CUSTOM_DETAILS_SECRET", "CUSTOM_LONG_TYPE_SECRET"])
       assert(!checkpoint.includes(secret), secret);
