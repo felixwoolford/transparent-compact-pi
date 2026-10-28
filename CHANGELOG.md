@@ -2,6 +2,15 @@
 
 ## Unreleased — initial release preparation
 
+- Advertise recovery positively as retrieving history hidden by compaction, with
+  explicit provenance and contradiction triggers in the lookup description, skill,
+  and post-compaction reminders. Distinguish historical observations from current
+  source contents; allow cheap rereads/recomputations and avoid blanket fact
+  re-verification. Re-orientation leads with ordinary input restoration and makes
+  lookup conditional on a hidden historical need, rather than reusing the tool
+  advertisement. Shorten fallback descriptions by referring to lookup's scope
+  rather than repeating it. Keep recovery scope, fallback, and filesystem boundaries.
+
 - Make compaction tool signatures leaner: short outcome labels, relative project
   paths, write sizes and edit counts instead of payload previews, and a single
   ellipsis for abbreviated arguments. Keep bash previews at 160 characters and
@@ -10,7 +19,7 @@
 - Mark all size-trimmed spans, including partial removals and shortened user
   messages; no longer label originally empty spans as trimmed.
 
-- Scope recovery guidance to specific earlier details lost to compaction in the
+- Scope recovery guidance to specific earlier details hidden by compaction in the
   current conversation, not startup, project discovery, or missing requirements.
   Filesystem restrictions apply only to that recovery workflow, not user-requested
   session audits, debugging, or cross-session analysis. Remove the misleading
@@ -39,8 +48,9 @@
 - Tool signatures record per-call `ok`, `error`, or `unknown` outcomes from
   matched tool-result metadata; the header explains that outputs are removed. Missing or
   ambiguous outcomes are never inferred, including unlabelled older spans.
-- Read-file entries distinguish retained startup reads from removed content; a closing evidence rule
-  requires lookup or re-reading before relying on removed outputs or document rules.
+- Read-file entries distinguish retained startup reads from removed content; a closing
+  evidence rule directs historical evidence/provenance questions to lookup and
+  current-state questions to the source.
 - The instruction envelope now has recovery explanations before all compacted
   spans, one evidence-boundary warning after them, and numbered
   recovery reminders plus brief recovery recap after the retained tail.

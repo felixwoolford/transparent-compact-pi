@@ -1,22 +1,21 @@
 ---
 name: context-retrieval
-description: Use context_lookup when compaction has removed a specific detail from earlier in this same conversation and that detail is needed again. Not for session startup, project discovery, missing requirements, or auditing session files.
+description: Use context_lookup to recover earlier conversation details hidden by compaction, trace where an earlier finding came from, or investigate contradictions between earlier notes and new evidence.
 ---
 
 # Session context recovery
 
 ## Applicability
 
-Use this skill only to recover a specific detail previously present on this
-conversation's active branch and now missing because of compaction. The visible
-conversation or compaction checkpoint must establish relevant earlier history;
-do not call recovery tools to discover whether such history exists. Missing
-requirements or an unfamiliar project do not imply forgotten context: inspect
-project files or ask the user instead.
+Compaction hides earlier details from your current view. The original conversation
+history, including recorded tool outputs and your reasoning, is preserved in the
+session and can be retrieved. Retained startup reads and the uncompacted tail
+remain available as evidence; recover only hidden information needed for the task.
 
-Retained startup reads and the uncompacted tail remain available as evidence.
-Do not recover information that is still visible, or information never supplied.
-These tools cannot search other sessions or abandoned branches.
+Use the recovery tools for history established by this conversation or its checkpoint,
+not project discovery, requirements never supplied, other sessions, or abandoned branches.
+For unfamiliar project details or missing requirements, inspect project files or
+ask the user instead.
 
 User-requested session audits, debugging, and cross-session analysis are separate
 tasks, not this recovery workflow. Its filesystem restrictions do not apply to
@@ -26,7 +25,7 @@ This skill pairs with the `@foliox/transparent-compact-pi` extension, which prov
 
 - **Verbatim compaction** — a deterministic checkpoint retains user messages, assistant prose, and compact tool-call signatures. Thinking and most tool outputs are removed from the active model context, not from the raw session history. Selected startup read outputs remain verbatim in the checkpoint or uncompacted tail. Earlier spans are re-rendered flat, with recovery guidance before them and an evidence-boundary warning after them. Persistent task-relevant recovery reminders and a recap follow the retained tail; later compactions replace the old generated reminders rather than duplicating them. An inherited opaque base is kept when needed.
 - **`context_lookup`** — the preferred first step for this recovery workflow: a subagent searches the full raw session branch in its **own** context and returns relevant findings. At lookup time, the extension mechanically renders the branch into entry-anchored text with an authoritative entry/section index, in memory.
-- **Bounded fallback tools** — if those findings are incomplete, use `context_list_entries`, `context_grep`, and `context_show_entry` for direct evidence recovery. Their results enter this conversation. For recovery of details lost to compaction, these are the permitted fallback, not filesystem access to session files.
+- **Bounded fallback tools** — if those findings are incomplete, use `context_list_entries`, `context_grep`, and `context_show_entry` for direct evidence recovery. Their results enter this conversation. For recovery of details hidden by compaction, these are the permitted fallback, not filesystem access to session files.
 
 Pi normally saves sessions under `~/.pi/agent/sessions/`; custom session locations also work. In-memory sessions retain history only while the process lives and cannot be resumed after exit.
 
@@ -34,8 +33,21 @@ If `context_lookup` is not in your tool list, say that subagent recovery is unav
 
 ## When to use
 
-- After a compaction, you need an exact error message, a full tool output, previously read file content, full tool-call arguments, an earlier instruction or decision, or reasoning that was dropped → call `context_lookup` with a **specific** question.
-- A compaction checkpoint contains a claim whose supporting tool output was removed → re-read the current source or ask `context_lookup` for that historical evidence before relying on the claim. If you cannot verify it, explicitly label it unverified.
+- You need an earlier output, exact error, previously read content, full tool-call arguments, instruction, decision, or reasoning hidden by compaction.
+- You are unsure where an earlier finding came from, what a command actually printed, or why you reached a conclusion.
+- Earlier notes conflict with new evidence and you need to check the historical evidence behind them.
+
+Ask `context_lookup` a **specific historical question** to recover hidden supporting
+evidence. This can avoid repeating slow or unreliable research. For example:
+"Where did our earlier Holi 2026 date come from: a
+published source or our own computation? Include the observed output and ENTRY id."
+
+### Lookup or inspect the source?
+
+- Re-read project files when you need their current contents.
+- Prefer lookup when you need what was observed earlier, or when recovering earlier external research or expensive computations would avoid repeating slow or unreliable work.
+- Cheap local rereads (including downloaded sources) and recomputations remain reasonable; needing a current external fact may require fresh research.
+- Retained prose can guide continuation without re-verifying every fact. When uncertainty or a contradiction matters to the current task, check the supporting output or verify current state; label unresolved claims unverified. Retrieval establishes what was recorded, not whether an earlier conclusion was correct.
 
 ## How to ask
 
@@ -79,7 +91,7 @@ intended context parameters.
 
 ## Rules
 
-1. **For recovery of details lost to compaction, do not read or grep raw session JSONL files through filesystem tools.** Prefer `context_lookup`; when its findings are incomplete, use the bounded fallback tools above. Raw filesystem recovery would refill the compacted context. This restriction does not apply to user-requested session audits, debugging, or cross-session analysis.
+1. **For recovery of details hidden by compaction, do not read or grep raw session JSONL files through filesystem tools.** Prefer `context_lookup`; when its findings are incomplete, use the bounded fallback tools above. Raw filesystem recovery would refill the compacted context. This restriction does not apply to user-requested session audits, debugging, or cross-session analysis.
 2. Ask narrowly scoped questions using exact error strings, file paths, function names, or the command whose output you need. Recover tightly related details together; use separate queries for independent facts. Ask the subagent for evidence, not for a solution to the broader task.
 3. Findings cite ENTRY ids and the logical transcript name. Retain these citations when relying on recovered facts. The renderer preserves full thinking, text, tool-call arguments, and tool results, although individual search results have output limits.
 4. Distinguish **user instructions**, **observed tool output**, and **reasoning at the time**. A recovered `[thinking]` block is a historical hypothesis, not verified fact. Earlier assistant prose is not independently observed evidence either.

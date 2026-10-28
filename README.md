@@ -65,6 +65,13 @@ After another compaction, only the current checklist is presented: older generat
 checklists are excluded from compacted spans and the retained tail. This is
 instruction delivery, not a guarantee of model compliance.
 
+Compaction hides earlier details from the model's view; recorded history remains
+retrievable. Recovery guidance explicitly names uncertain provenance (where a
+finding came from or why a conclusion was reached) and contradictions between
+earlier notes and new evidence. Prefer lookup for historical observations or to
+avoid repeating costly research; inspect project files for current contents.
+Cheap local rereads and recomputations remain reasonable.
+
 ### Automatic startup-read retention
 
 Successful text reads between the first and second user prompts are retained when

@@ -81,8 +81,8 @@ async function compact(ext, ctx, ids, kept, reason = "manual", fileOps) {
     assert(c.summary.includes(tool), "checkpoint explicitly permits bounded fallback tools");
   }
   assert(c.summary.includes("**Compacted conversation follows.** The earlier part of this conversation has been compacted into the checkpoint below."));
-  assert(c.summary.includes("**Recovering dropped details.**"));
-  assert(c.summary.indexOf("**Recovering dropped details.**") < c.summary.indexOf("### Compacted conversation"));
+  assert(c.summary.includes("**Recovering hidden details.**"));
+  assert(c.summary.indexOf("**Recovering hidden details.**") < c.summary.indexOf("### Compacted conversation"));
   assert(!c.summary.includes("Post-compaction re-orientation"), "checklist belongs after the retained tail, not inside the checkpoint");
   assert(!c.summary.includes("Redo the startup process"));
   assert(c.summary.includes("user and assistant prose is kept verbatim, subject to budget trimming"));
@@ -473,10 +473,9 @@ async function main() {
     require("./scripts/recovery-guidance-tests.cjs").checkFilesystemScope(skillText);
     assert(skillText.includes("does **not** search abandoned branches"));
     assert(!skillText.includes("Before a long, tool-heavy task"), "ordinary task startup is not a recovery trigger");
-    assert(loadedSkills.skills[0].description.includes("compaction has removed a specific detail from earlier in this same conversation"));
-    assert(loadedSkills.skills[0].description.includes("Not for session startup, project discovery, missing requirements, or auditing session files"));
-    assert(skillText.includes("do not call recovery tools to discover whether such history exists"));
-    assert(skillText.includes("Retained startup reads and the uncompacted tail remain available as evidence"));
+    assert.match(loadedSkills.skills[0].description, /hidden by compaction.*where an earlier finding came from.*contradictions/);
+    assert.match(skillText, /history established by this conversation or its checkpoint,\s+not project\s+discovery/);
+    assert.match(skillText, /Retained startup reads and the uncompacted tail\s+remain available as evidence/);
     assert(!skillText.includes("re-read required project documents"));
     assert(!skillText.includes("Re-read any file you are about to modify"));
     assert(skillText.includes("reasoning at the time"));
@@ -500,7 +499,7 @@ async function main() {
     const c3 = await compact(ext, ctx, [next], final, "overflow");
     assert.equal((c3.summary.match(/## Verbatim compaction checkpoint/g) ?? []).length, 1);
     assert.equal((c3.summary.match(/Post-compaction re-orientation/g) ?? []).length, 0);
-    assert.equal((c3.summary.match(/\*\*Recovering dropped details\.\*\*/g) ?? []).length, 1);
+    assert.equal((c3.summary.match(/\*\*Recovering hidden details\.\*\*/g) ?? []).length, 1);
     assert.equal((c3.summary.match(/<compacted-span /g) ?? []).length, 3);
     for (const n of [1, 2, 3]) assert(c3.summary.includes(`<compacted-span n="${n}"`));
     assert(c3.summary.includes("src/foo.ts") && c3.summary.includes("src/bar.ts"), "file lists are cumulative");

@@ -60,7 +60,7 @@ module.exports = async function ({ ext, SessionManager, root, compact, makeConte
   assert(c.summary.includes("SPEC.md (content removed)\ndocs/a guide.md (content removed)"));
   assert.deepEqual(c.details.readFiles, ["SPEC.md", "docs/a guide.md"], "metadata retains bare paths");
   assert.deepEqual(c.details.modifiedFiles, ["changed.ts"]);
-  const rule = "**Evidence boundary:** Tool signatures and file lists do not contain command output, file contents, or rules from read documents; if a claim depends on that removed evidence, use `context_lookup` or re-read the source before relying on it.";
+  const rule = "**Evidence boundary:** Tool signatures and file lists do not contain command output, file contents, or rules from read documents; use `context_lookup` when you need that historical evidence or its provenance, and inspect the source when you need current state.";
   assert(c.summary.includes(`</modified-files>\n\n${rule}\n\nConversation`), "rule sits after file lists, immediately before the tail boundary");
   const next = manager.appendMessage(user("Next retained tail"));
   const repeated = await compact(ext, ctx, [kept], next);

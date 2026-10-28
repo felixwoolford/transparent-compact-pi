@@ -1,9 +1,11 @@
 "use strict";
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
 
 function checkFilesystemScope(content) {
   assert.match(content,
-    /For recovery of details lost (?:to compaction|from the context in this session due to compaction), do not read or grep raw session JSONL files through filesystem tools/,
+    /For recovery of details hidden by compaction, do not read or grep raw session JSONL files through filesystem tools/,
     "filesystem restriction is conditional on compaction recovery, not session analysis");
   assert(!/^Do not (?:read or grep|read) raw session JSONL files.*filesystem tools\./m.test(content),
     "no standalone global filesystem prohibition");
@@ -15,32 +17,67 @@ function checkCurrentRecoveryLanguage(content) {
     "current instructions and packaged resources must not advertise obsolete recovery interfaces");
 }
 
+function checkRecoveryTriggers(content) {
+  for (const pattern of [/where an earlier finding came from/i, /what a command actually printed/i,
+    /why you reached a conclusion/i, /earlier notes conflict with new evidence/i])
+    assert.match(content, pattern, "provenance and contradiction triggers are advertised without loading the skill");
+}
+
+function checkRecoveryChoices(content) {
+  assert.match(content, /project files for their current contents/, "current file state comes from the filesystem");
+  assert.match(content, /what was observed earlier/, "historical observations are a lookup trigger");
+  assert.match(content, /slow external research or expensive computations/, "lookup can avoid costly repeated work");
+  assert.match(content, /cheap local rereads and recomputations remain reasonable/, "no blanket lookup requirement");
+}
+
 module.exports = function (h) {
   const { ext, factory, load, SessionManager, root, makeContext, user } = h;
-  console.log("== Recovery guidance: specific lost history, not startup or session audits (no live-model compliance claim) ==");
+  console.log("== Recovery guidance: hidden history, provenance, contradictions, and source choice (no live-model compliance claim) ==");
   const lookup = ext.tools.context_lookup;
   for (const tool of Object.values(ext.tools))
     checkCurrentRecoveryLanguage(JSON.stringify({ description: tool.description, promptSnippet: tool.promptSnippet, parameters: tool.parameters }));
   checkFilesystemScope(lookup.description);
-  for (const phrase of ["previously present earlier on this conversation's active branch",
-    "now missing because of compaction", "visible conversation or compaction checkpoint",
-    "do not call this tool to discover whether such history exists",
-    "Not for session startup, new-project orientation, missing requirements, or information never supplied",
-    "inspect project files or ask the user instead", "Does not search abandoned branches or other sessions",
-    "For this recovery workflow, prefer this tool first",
-    "For recovery of details lost from the context in this session due to compaction"])
-    assert(lookup.description.includes(phrase), phrase);
-  assert.equal(lookup.promptSnippet, "Recover specific earlier conversation details lost through compaction");
-  assert(lookup.parameters.properties.question.description.includes("earlier in this conversation"));
+  assert(lookup.description.startsWith("Retrieve earlier outputs, findings, decisions, and reasoning hidden by compaction."),
+    "lead with a positive recovery purpose");
+  checkRecoveryTriggers(lookup.description);
+  checkRecoveryChoices(lookup.description);
+  assert.doesNotMatch(lookup.description, /before repeating the investigation/i,
+    "advertising does not mandate lookup before ordinary investigation");
+  assert.match(lookup.description, /subagent searches this conversation's full raw active branch in its own context/);
+  assert.match(lookup.description, /If findings are incomplete, use context_list_entries, context_grep, or context_show_entry/);
+  const scope = "Use the recovery tools for history established by this conversation or its checkpoint, not project discovery, requirements never supplied, other sessions, or abandoned branches.";
+  assert(lookup.description.includes(scope));
+  assert(lookup.description.indexOf("where an earlier finding came from") < lookup.description.indexOf(scope),
+    "use cases precede restrictions");
+  assert.match(lookup.promptSnippet, /^Retrieve .*hidden by compaction.*provenance/);
+  assert.match(lookup.parameters.properties.question.description, /earlier in this conversation.*source of a finding.*conflict/);
 
   for (const name of ["context_list_entries", "context_grep", "context_show_entry"]) {
     const tool = ext.tools[name];
-    for (const phrase of ["lost to compaction on this conversation's active branch",
-      "not project discovery or information never supplied", "Cannot search other sessions or abandoned branches"])
-      assert(tool.description.includes(phrase), `${name}: ${phrase}`);
+    assert(tool.description.startsWith("Fallback after context_lookup, when its findings are incomplete; same scope as context_lookup."), name);
+    assert(!tool.description.includes(scope), `${name}: refer to lookup scope without repeating it`);
     assert(tool.promptSnippet.includes("this conversation's"), name);
     assert(tool.promptSnippet.includes("compaction"), name);
   }
+  for (const tool of Object.values(ext.tools)) {
+    assert.doesNotMatch(JSON.stringify({ description: tool.description, promptSnippet: tool.promptSnippet,
+      parameters: tool.parameters }), /\blost\b|nothing is lost|retrieve anything/i,
+    "advertising describes hidden history without promising unrestricted or infallible recovery");
+  }
+
+  const skill = fs.readFileSync(path.join(__dirname, "../skills/context-retrieval/SKILL.md"), "utf8");
+  const description = skill.match(/^description: (.+)$/m)?.[1];
+  assert(description, "skill has an advertised description");
+  assert.match(description, /hidden by compaction.*where an earlier finding came from.*contradictions/);
+  checkRecoveryTriggers(skill);
+  assert.doesNotMatch(skill, /before repeating the\s+investigation/i,
+    "skill does not mandate lookup before ordinary investigation");
+  checkFilesystemScope(skill);
+  assert.match(skill, /including recorded tool outputs and your reasoning/);
+  assert.match(skill, /including downloaded sources/);
+  assert.match(skill, /without re-verifying every fact/);
+  assert.match(skill, /not whether an earlier conclusion was correct/);
+  assert.match(skill, /session audits, debugging, and cross-session analysis are separate/);
 
   // These exercise extension hooks, not the model's choice of tools. Missing
   // requirements and session-audit prompts must not inject recovery reminders.
@@ -63,3 +100,5 @@ module.exports = function (h) {
 };
 module.exports.checkFilesystemScope = checkFilesystemScope;
 module.exports.checkCurrentRecoveryLanguage = checkCurrentRecoveryLanguage;
+module.exports.checkRecoveryTriggers = checkRecoveryTriggers;
+module.exports.checkRecoveryChoices = checkRecoveryChoices;

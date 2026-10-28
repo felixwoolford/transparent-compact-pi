@@ -18,7 +18,7 @@ module.exports = async function hybridTests(h) {
   assert.deepEqual(Object.keys(ext.tools.context_grep.parameters.properties), ["pattern", "before", "after", "maxMatches", "offset", "charOffset", "throughEntry"]);
   assert.deepEqual(Object.keys(ext.tools.context_show_entry.parameters.properties), ["id", "maxLines", "offset"]);
   assert.equal(ext.tools.context_lookup.executionMode, "sequential");
-  assert(ext.tools.context_lookup.description.includes("if findings are incomplete"));
+  assert.match(ext.tools.context_lookup.description, /if findings are incomplete/i);
   assert(ext.tools.context_lookup.description.includes("filesystem tools"));
   const directResults = await Promise.all([
     direct("context_list_entries"),

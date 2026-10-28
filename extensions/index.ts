@@ -748,21 +748,25 @@ function capSpans(spans: string[][], budget: number): string[][] {
   return spans.map((_, span) => items.filter((it) => it.span === span).map((it) => it.line));
 }
 
-const REORIENT_BLOCK = `**Post-compaction re-orientation.** Retained startup reads and the uncompacted tail remain available as evidence. Recover only missing information needed for the current task.
-1. Re-acquire information needed for the current task that is no longer in context. This means restoring inputs, not repeating completed work: do not redo writes, edits, or other state-changing actions merely because their results were dropped. If needed, recover those results with \`context_lookup\`, or verify current state.
+const RECOVERY_HISTORY_NOTE = "Compaction hides earlier details from your current view. The original conversation history, including recorded tool outputs and your reasoning, is preserved in the session and can be retrieved.";
+const RECOVERY_TRIGGERS = "Ask `context_lookup` where an earlier finding came from, what a command actually printed, or why you reached a conclusion, especially when earlier notes conflict with new evidence.";
+const RECOVERY_SOURCE_GUIDANCE = "Re-read project files for their current contents. Prefer lookup for what was observed earlier or to avoid repeating slow external research or expensive computations; cheap local rereads and recomputations remain reasonable.";
+const RECOVERY_SCOPE_RULE = "Use the recovery tools for history established by this conversation or its checkpoint, not project discovery, requirements never supplied, other sessions, or abandoned branches.";
+const RECOVERY_FILESYSTEM_RULE = "For recovery of details hidden by compaction, do not read or grep raw session JSONL files through filesystem tools; use the recovery tools instead.";
+
+const REORIENT_BLOCK = `**Post-compaction re-orientation.** ${RECOVERY_HISTORY_NOTE} Retained startup reads and the uncompacted tail remain available as evidence. Recover only hidden information needed for the current task.
+1. **Restore only information needed to continue.** Re-read project files when you need their current contents; cheap local rereads and recomputations are reasonable. If you need an earlier observation, the source of a finding, or the reason for a conclusion that compaction hid, use \`context_lookup\`. This can avoid repeating slow or unreliable research. Restore inputs, not completed actions: do not redo writes, edits, or other state-changing actions merely because their results are hidden.
 2. If this is a Git repository, run \`git status\` and review uncommitted work. Re-verify build/test state if you are about to rely on it.
-3. **Treat knowledge from removed evidence as unverified.** Thinking and tool outputs were removed from the compacted spans, except for the separately retained startup reads. The uncompacted tail is unchanged. Anything you know only from removed material — or from earlier assistant prose describing it — is a note, not evidence. Before you state it as fact or base a decision on it, re-read the source or ask \`context_lookup\`. If you cannot verify it, say explicitly that it is unverified.`;
+3. **Distinguish earlier claims from supporting evidence.** Retained assistant prose records what was said, not independent verification. If a task-relevant claim has uncertain provenance or conflicts with new evidence, check its supporting output (using \`context_lookup\` if hidden) or the current source before treating it as established; label unresolved claims unverified. Retrieved reasoning remains a historical hypothesis, and historical outputs do not establish current file or build/test state.`;
 
-const CHECKPOINT_EXPLANATION = "**Compacted conversation follows.** The earlier part of this conversation has been compacted into the checkpoint below. This is not the full transcript: assistant thinking and tool outputs have been removed from the compacted spans, but are preserved in the session and can be recovered.";
+const CHECKPOINT_EXPLANATION = `**Compacted conversation follows.** The earlier part of this conversation has been compacted into the checkpoint below. This is not the full transcript. ${RECOVERY_HISTORY_NOTE}`;
 
-const RECOVERY_FILESYSTEM_RULE = "For recovery of details lost from the context in this session due to compaction, do not read or grep raw session JSONL files through filesystem tools; use the recovery tools instead.";
+const RECOVERY_INSTRUCTIONS = `**Recovering hidden details.** Prefer \`context_lookup\` with a specific historical question: a subagent searches this conversation's full raw active branch in its own context and returns relevant findings. ${RECOVERY_SCOPE_RULE} If its findings are incomplete, use the bounded fallback tools \`context_list_entries\`, \`context_grep\`, and \`context_show_entry\`; follow their pagination instructions for more detail. ${RECOVERY_FILESYSTEM_RULE}`;
 
-const RECOVERY_INSTRUCTIONS = `**Recovering dropped details.** Information removed from your active context is preserved in this conversation's history, including earlier thinking and tool outputs. Recover only specific details previously present on this conversation's active branch and now missing because of compaction, not information never supplied. Prefer \`context_lookup\` for this recovery with a specific question: a subagent searches the transcript in its own context and returns relevant findings. If its findings are incomplete, use the bounded fallback tools \`context_list_entries\`, \`context_grep\`, and \`context_show_entry\`; follow their pagination instructions for more detail. ${RECOVERY_FILESYSTEM_RULE}`;
-
-const EVIDENCE_BOUNDARY_RULE = "**Evidence boundary:** Tool signatures and file lists do not contain command output, file contents, or rules from read documents; if a claim depends on that removed evidence, use `context_lookup` or re-read the source before relying on it.";
+const EVIDENCE_BOUNDARY_RULE = "**Evidence boundary:** Tool signatures and file lists do not contain command output, file contents, or rules from read documents; use `context_lookup` when you need that historical evidence or its provenance, and inspect the source when you need current state.";
 
 const REORIENT_MESSAGE = "transparent-compact:reorient";
-const RECOVERY_RECAP = `**Recovery recap.** When needed evidence from earlier in this conversation is missing because of compaction, re-read its source or ask \`context_lookup\` a specific question about that removed history. Missing requirements or unfamiliar project details are not evidence of forgotten history: inspect project files or ask the user instead. If its findings are incomplete, use \`context_list_entries\`, \`context_grep\`, or \`context_show_entry\`, following pagination instructions. ${RECOVERY_FILESYSTEM_RULE} Keep these evidence/recovery rules in force as work continues.`;
+const RECOVERY_RECAP = `**Recovery recap.** ${RECOVERY_SCOPE_RULE} For unfamiliar project details or missing requirements, inspect project files or ask the user instead. If lookup findings are incomplete, use \`context_list_entries\`, \`context_grep\`, or \`context_show_entry\`, following pagination instructions. ${RECOVERY_FILESYSTEM_RULE} Keep these evidence/recovery rules in force as work continues.`;
 
 function latestVerbatimCompaction(entries: SessionEntry[]) {
   for (let i = entries.length - 1; i >= 0; i--) {
@@ -1378,7 +1382,7 @@ function consecutiveLookups(ctx: { sessionManager: { getBranch: () => SessionEnt
 }
 
 function registerDirectTools(pi: ExtensionAPI): void {
-  const pre = "Fallback after context_lookup, when its findings are incomplete: recover specific earlier details lost to compaction on this conversation's active branch, not project discovery or information never supplied. Cannot search other sessions or abandoned branches. ";
+  const pre = "Fallback after context_lookup, when its findings are incomplete; same scope as context_lookup. ";
   const run = (ctx: { sessionManager: { getBranch: () => SessionEntry[] } }, f: (t: Transcript[]) => string) => {
     try {
       const transcript = sessionTranscript(ctx);
@@ -1402,7 +1406,7 @@ function registerDirectTools(pi: ExtensionAPI): void {
     name: "context_grep",
     label: "Context: grep",
     description: pre + "Regex-search the full raw session branch, including compacted thinking and tool outputs, with surrounding lines and authoritative entry attribution. pattern is a JS regex (case-insensitive). Up to 12000 payload characters per page, plus cursor notes. Follow all reported continuation parameters (offset, charOffset, throughEntry) for remaining matches or oversized lines. Historical thinking is not verified fact.",
-    promptSnippet: "Fallback: search this conversation's evidence lost through compaction",
+    promptSnippet: "Fallback: search this conversation's evidence hidden by compaction",
     parameters: Type.Object(GREP_FIELDS),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       return run(ctx, (t) => grepTranscript(t, params));
@@ -1643,11 +1647,10 @@ export default function (pi: ExtensionAPI) {
     label: "Context lookup",
     executionMode: "sequential",
     description:
-      "Recover a specific detail previously present earlier on this conversation's active branch but now missing because of compaction, including thinking, tool outputs, error text, file contents, or earlier decisions. Use only when the visible conversation or compaction checkpoint establishes relevant earlier history; do not call this tool to discover whether such history exists. Not for session startup, new-project orientation, missing requirements, or information never supplied: inspect project files or ask the user instead. Spawns a subagent that searches this conversation's full raw active branch (across all compactions) in its OWN context and returns relevant findings. Does not search abandoned branches or other sessions. For this recovery workflow, prefer this tool first; if findings are incomplete, use the bounded context_list_entries, context_grep, and context_show_entry fallback tools. Follow their pagination instructions. " +
-      RECOVERY_FILESYSTEM_RULE,
-    promptSnippet: "Recover specific earlier conversation details lost through compaction",
+      `Retrieve earlier outputs, findings, decisions, and reasoning hidden by compaction. ${RECOVERY_TRIGGERS} A subagent searches this conversation's full raw active branch in its own context and returns relevant findings. ${RECOVERY_SOURCE_GUIDANCE} ${RECOVERY_SCOPE_RULE} If findings are incomplete, use context_list_entries, context_grep, or context_show_entry, following pagination instructions. ${RECOVERY_FILESYSTEM_RULE}`,
+    promptSnippet: "Retrieve earlier outputs, findings, decisions, and reasoning hidden by compaction, including the provenance of earlier conclusions",
     parameters: Type.Object({
-      question: Type.String({ description: "The specific detail from earlier in this conversation that compaction removed (exact error text, previously read file, decision, command output…)." }),
+      question: Type.String({ description: "A specific question about earlier in this conversation: an output, source of a finding, reason for a decision, or evidence behind notes that conflict with new observations." }),
     }),
     async execute(toolCallId, params, signal, _onUpdate, ctx) {
       if (cfg.lookupMaxCalls > 0 && consecutiveLookups(ctx, toolCallId) >= cfg.lookupMaxCalls) {

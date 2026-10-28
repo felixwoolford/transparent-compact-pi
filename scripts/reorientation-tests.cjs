@@ -10,16 +10,34 @@ const count = (s, needle) => s.split(needle).length - 1;
 
 function checkChecklist(content) {
   for (const phrase of [heading, "Retained startup reads and the uncompacted tail remain available as evidence.",
-    "Recover only missing information needed for the current task.",
-    "1. Re-acquire information needed for the current task that is no longer in context.",
-    "run `git status`", "3. **Treat knowledge from removed evidence as unverified.**",
-    "except for the separately retained startup reads. The uncompacted tail is unchanged.",
-    "note, not evidence", "do not redo writes",
-    "If you cannot verify it", "**Recovery recap.**", "context_lookup", "context_list_entries", "context_grep",
-    "context_show_entry", "earlier in this conversation is missing because of compaction",
-    "Missing requirements or unfamiliar project details are not evidence of forgotten history"])
+    "Compaction hides earlier details from your current view.",
+    "including recorded tool outputs and your reasoning, is preserved in the session and can be retrieved.",
+    "Recover only hidden information needed for the current task.",
+    "1. **Restore only information needed to continue.**", "run `git status`",
+    "3. **Distinguish earlier claims from supporting evidence.**",
+    "Retained assistant prose records what was said, not independent verification", "do not redo writes",
+    "label unresolved claims unverified", "Retrieved reasoning remains a historical hypothesis",
+    "historical outputs do not establish current file or build/test state",
+    "cheap local rereads and recomputations are reasonable",
+    "If you need an earlier observation, the source of a finding, or the reason for a conclusion that compaction hid",
+    "This can avoid repeating slow or unreliable research",
+    "If a task-relevant claim has uncertain provenance or conflicts with new evidence",
+    "check its supporting output (using `context_lookup` if hidden) or the current source before treating it as established",
+    "**Recovery recap.** Use the recovery tools for history established",
+    "**Recovery recap.**", "context_lookup", "context_list_entries", "context_grep", "context_show_entry",
+    "history established by this conversation or its checkpoint",
+    "For unfamiliar project details or missing requirements, inspect project files or ask the user instead"])
     assert(content.includes(phrase), phrase);
-  require("./recovery-guidance-tests.cjs").checkFilesystemScope(content);
+  const guidance = require("./recovery-guidance-tests.cjs");
+  guidance.checkFilesystemScope(content);
+  assert(content.includes("Keep these evidence/recovery rules in force as work continues."),
+    "recap's final sentence includes its full stop");
+  assert(content.indexOf("Re-read project files") < content.indexOf("use `context_lookup`"),
+    "ordinary restoration comes before conditional lookup, not shared advertising text");
+  assert(!content.includes("Ask `context_lookup` where an earlier finding came from"),
+    "re-orientation does not lead with the tool advertisement");
+  assert(!content.includes("before repeating the investigation"), "no mandatory lookup before ordinary investigation");
+  assert(!content.includes("Before you state it as fact or base a decision on it"), "no blanket re-verification mandate");
   assert(!content.includes("Re-read any file you are about to modify"), "no blanket edit-target reread");
   assert(!content.includes("Re-read every required document"), "no required-document reread checklist");
   assert(!content.includes("Identify all such documents"), "no rediscovery of reading requirements");
@@ -30,14 +48,15 @@ function checkEnvelope(summary) {
   assert.equal(count(summary, "**Compacted conversation follows.**"), 1);
   assert(summary.includes("The earlier part of this conversation has been compacted into the checkpoint below."));
   assert(summary.includes("This is not the full transcript"));
-  assert(summary.includes("but are preserved in the session and can be recovered"));
-  assert(summary.indexOf("**Compacted conversation follows.**") < summary.indexOf("**Recovering dropped details.**"));
+  assert(summary.includes("Compaction hides earlier details from your current view."));
+  assert(summary.includes("is preserved in the session and can be retrieved"));
+  assert(summary.indexOf("**Compacted conversation follows.**") < summary.indexOf("**Recovering hidden details.**"));
   assert(summary.includes("The retained verbatim conversation begins after the explicit boundary marker at the end of this checkpoint."));
   assert(!summary.includes("everything after the last span is uncompacted"));
-  assert.equal(count(summary, "**Recovering dropped details.**"), 1);
+  assert.equal(count(summary, "**Recovering hidden details.**"), 1);
   require("./recovery-guidance-tests.cjs").checkFilesystemScope(summary);
-  assert(summary.includes("specific details previously present on this conversation's active branch and now missing because of compaction, not information never supplied"));
-  assert(summary.indexOf("**Recovering dropped details.**") < summary.indexOf("### Compacted conversation"));
+  assert(summary.includes("Use the recovery tools for history established by this conversation or its checkpoint, not project discovery, requirements never supplied, other sessions, or abandoned branches."));
+  assert(summary.indexOf("**Recovering hidden details.**") < summary.indexOf("### Compacted conversation"));
   assert.equal(count(summary, "**Evidence boundary:**"), 1);
   assert(summary.indexOf("**Evidence boundary:**") > summary.lastIndexOf("</compacted-span>"));
   assert(summary.indexOf("**Evidence boundary:**") < summary.lastIndexOf("Conversation"));
@@ -136,7 +155,7 @@ module.exports = async function (h) {
   const quoted = manager.appendMessage(user("Quoted text: **Evidence boundary:** is the label we discussed."));
   const nextTail = manager.appendMessage(user("Third retained tail."));
   const c3 = await compact(ext, ctx, [task, firstFooter, answer, secondFooter, ordinary, quoted], nextTail, "overflow");
-  assert.equal(count(c3.summary, "**Recovering dropped details.**"), 1);
+  assert.equal(count(c3.summary, "**Recovering hidden details.**"), 1);
   assert(!c3.summary.includes(heading));
   assert(!c3.summary.includes("**Recovery recap.**"));
   assert(c3.summary.includes('[Custom message]: custom(type="ordinary") [content removed — use context_lookup]'));
@@ -263,7 +282,7 @@ async function runtimeTests(h) {
       await session.prompt("Continue after the second compaction.");
       const secondRequest = requests.at(-1);
       assert.equal(count(JSON.stringify(secondRequest), heading), 1);
-      assert.equal(count(JSON.stringify(secondRequest), "**Recovering dropped details.**"), 1);
+      assert.equal(count(JSON.stringify(secondRequest), "**Recovering hidden details.**"), 1);
       assert.equal(count(JSON.stringify(secondRequest), "**Evidence boundary:**"), 1);
       assert.equal(count(JSON.stringify(secondRequest), "**Recovery recap.**"), 1);
       checkChecklist(JSON.stringify(secondRequest.messages.at(-1)));

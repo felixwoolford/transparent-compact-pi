@@ -129,12 +129,27 @@ by provider.
 
 ### Recover historical details
 
-Recovery is for a specific detail previously present on this conversation's active
-branch and now missing because of compaction. The visible conversation or checkpoint
-must establish relevant earlier history; the agent should not call recovery tools
-to discover whether that history exists. Session startup, project discovery, missing
-requirements, and information never supplied are not recovery triggers: inspect
-project files or ask the user instead.
+Compaction hides earlier details from the model's current view; the recorded history,
+including tool outputs and reasoning, remains in the session. Recovery can retrieve
+specific outputs, trace where an earlier finding came from or why a conclusion was
+reached, and check historical evidence when earlier notes conflict with new evidence.
+These triggers are advertised in the tool description and conditionally explained
+in post-compaction reminders, not just in the skill body. Reminders lead with
+restoring task-relevant inputs, current-file reads, and cheap recomputation;
+compaction alone is not a lookup trigger. Advertising and re-orientation use
+separate wording. The skill description also names provenance and contradictions.
+This is guidance, not a guarantee of model compliance.
+
+Re-read project files for their current contents. Prefer lookup for what was
+observed earlier or to avoid repeating slow external research or expensive
+computations; cheap local rereads (including downloaded sources) and recomputations
+remain reasonable. Current external facts may require fresh research. Retrieval
+establishes what was recorded, not whether an earlier conclusion was correct.
+
+Use recovery for history established by this conversation or its checkpoint, not
+project discovery, requirements never supplied, other sessions, or abandoned branches.
+For unfamiliar project details or missing requirements, inspect project files or
+ask the user instead.
 
 For this recovery workflow, use the recovery tools rather than reading raw session
 files through filesystem tools. This restriction does not apply to user-requested
@@ -191,7 +206,12 @@ The recovery reminders identify retained startup reads and the uncompacted tail
 as available evidence. They ask for recovery only when task-relevant inputs are
 missing, not for rediscovery of reading requirements or blanket document rereads.
 They also distinguish restoring inputs from repeating completed writes, call for
-inspecting Git state, and require verification before relying on removed evidence.
+inspecting Git state, and ask the agent to resolve task-relevant uncertainty or
+contradictions using supporting output or current-state verification before treating
+a claim as established. Retained prose can guide continuation without re-verifying
+every fact; unresolved claims should be labelled unverified, and retrieved reasoning
+remains a historical hypothesis. Historical outputs do not establish current file
+or build/test state.
 There is no blanket edit-target reread. It is a saved
 custom message tagged with the current compaction entry ID, not a temporary nudge:
 subsequent responses and user turns retain it in history before the work that
