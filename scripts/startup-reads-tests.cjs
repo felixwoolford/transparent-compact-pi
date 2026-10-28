@@ -91,7 +91,7 @@ module.exports = async function ({ factory, load, SessionManager, root, makeCont
     assert(!first.summary.includes(value), value);
   assert(!first.details.span.lines.join("\n").includes(page1), "read bodies are not part of trimmable spans");
   assert(first.summary.includes("docs/SPEC.md (startup read output retained in checkpoint or tail; may be partial)"));
-  assert(first.summary.includes("UNRELATED.md (content removed)"));
+  assert.match(first.summary, /^UNRELATED\.md$/m, "no absence claim for unannotated read paths");
   assert(first.summary.indexOf("### Retained startup reads") > first.summary.lastIndexOf("</compacted-span>"));
   assert(first.summary.indexOf("### Retained startup reads") < first.summary.indexOf("**Evidence boundary:**"));
 

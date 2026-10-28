@@ -16,7 +16,7 @@ extension builds a checkpoint without changing that boundary or calling a model:
 | Custom messages | Short type stubs marked `content removed`; bodies remain in the raw session. Managed re-orientation messages are regenerated instead. |
 | Recent conversation | Pi keeps its normal verbatim tail. |
 | Earlier compacted spans | Re-rendered chronologically, without repeated model summarization. |
-| Read/modified file lists | Carried forward, distinguishing retained startup reads from removed content. |
+| Read/modified file lists | Cumulative operation lists with checkpoint-relative retained-evidence annotations. |
 
 Checkpoints label tool outcomes as `ok`, `error`, or `unknown` and remind the
 agent to recover missing evidence when needed. These labels describe tool
@@ -39,6 +39,42 @@ All newly compacted custom messages follow the same stub policy, regardless of
 extension, display setting, or content format. Long type names are abbreviated
 like tool-call arguments. This applies even with the cap disabled. Previously
 saved spans are not rewritten; older custom-message bodies may remain in them.
+
+### File-list evidence annotations
+
+The lists record reads and modifications in compacted history, not an exhaustive
+inventory of current file contents. At every checkpoint, the extension checks
+Pi's model-context projection from `firstKeptEntryId` onward. The turn prefix is
+being compacted and is not treated as retained evidence. Context omissions and
+replacements are respected; replacement read text has unknown completeness.
+No filesystem reads or model calls are made for annotation.
+
+Successful, unambiguously paired `read` results receive `(full read in tail)`,
+`(partial read in tail)`, or `(read output in tail)` when completeness is uncertain.
+For Pi's read contract, offset/limit alone does not imply partialness: an offset of
+1 with a limit beyond EOF can still be complete. Truncation metadata and continuation
+notices are checked. Separate partial pages are not combined into a full-file claim.
+A later partial read does not hide an earlier complete snapshot with no intervening
+tracked modification.
+
+Successful writes with a visible full payload receive `(write content in tail)`.
+Recorded subsequent edits/writes invalidate earlier snapshots and produce labels
+such as `(read in tail, then edited)`. Mutation metadata can invalidate a snapshot
+even when the mutation's message was omitted, but cannot restore omitted source
+contents. Nested calls can invalidate snapshots, not supply visible file contents.
+Same-path sibling operations may run concurrently, so ambiguous read/write versus
+mutation ordering receives `(read in tail; order uncertain)` or the write equivalent
+instead of treating result order as proof of freshness.
+
+Modified paths without retained read/write evidence receive `(no read-tool output
+in tail)`, unless a selected startup read is retained separately. Startup reads
+keep their existing positive annotation. Unmodified paths without established
+retained evidence remain unannotated; the read-list header states the default once:
+"unless annotated, no retained read-tool output identified". A bare path does not
+establish that document contents are still visible. The shared explanation states that labels
+apply as of this checkpoint, not to live filesystem state; shell reads/changes and
+external modifications are not inferred. File contents are never duplicated into
+these lists, and annotations are recomputed rather than persisted as file metadata.
 
 ### Retained startup reads
 
@@ -212,7 +248,11 @@ a claim as established. Retained prose can guide continuation without re-verifyi
 every fact; unresolved claims should be labelled unverified, and retrieved reasoning
 remains a historical hypothesis. Historical outputs do not establish current file
 or build/test state.
-There is no blanket edit-target reread. It is a saved
+There is no blanket edit-target reread. Before replacing an existing file with
+`write`, the guidance requires rereading unless current contents are already in
+view, and forbids reconstructing unchanged sections from memory. Small exact-match
+edits and newly created files do not acquire a blanket reread requirement.
+It is a saved
 custom message tagged with the current compaction entry ID, not a temporary nudge:
 subsequent responses and user turns retain it in history before the work that
 followed it. `before_agent_start` adds it on normal starts/resume when missing;

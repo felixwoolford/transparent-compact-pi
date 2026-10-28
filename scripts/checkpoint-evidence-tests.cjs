@@ -57,7 +57,8 @@ module.exports = async function ({ ext, SessionManager, root, compact, makeConte
   }
   assert(!c.summary.includes("REMOVED_EVIDENCE_SECRET"), "neither successful nor failed output bodies leak");
   assert(c.summary.includes("ok does not prove a command or tests passed."));
-  assert(c.summary.includes("SPEC.md (content removed)\ndocs/a guide.md (content removed)"));
+  assert(c.summary.includes("SPEC.md\ndocs/a guide.md\n</read-files>"));
+  assert(c.summary.includes("changed.ts (no read-tool output in tail)"));
   assert.deepEqual(c.details.readFiles, ["SPEC.md", "docs/a guide.md"], "metadata retains bare paths");
   assert.deepEqual(c.details.modifiedFiles, ["changed.ts"]);
   const rule = "**Evidence boundary:** Tool signatures and file lists do not contain command output, file contents, or rules from read documents; use `context_lookup` when you need that historical evidence or its provenance, and inspect the source when you need current state.";
@@ -65,7 +66,7 @@ module.exports = async function ({ ext, SessionManager, root, compact, makeConte
   const next = manager.appendMessage(user("Next retained tail"));
   const repeated = await compact(ext, ctx, [kept], next);
   assert(repeated.summary.includes('bash(command="check") [ok]'), "statuses persist in saved uncapped spans");
-  assert(repeated.summary.includes("SPEC.md (content removed)"), "cumulative read lists keep content-removal labels");
+  assert(repeated.summary.includes("SPEC.md\ndocs/a guide.md\n</read-files>"), "cumulative read lists make no unsupported absence claim");
   assert.equal(repeated.summary.split(rule).length - 1, 1, "closing rule is not nested on repeated compaction");
 
   const split = SessionManager.inMemory(cwd);
@@ -93,7 +94,7 @@ module.exports = async function ({ ext, SessionManager, root, compact, makeConte
   assert(legacy.summary.includes(oldLine), "old spans are not rewritten with guessed outcomes");
   assert(legacy.summary.includes(oldCustom), "previously saved custom-message bodies are not migrated");
   assert(legacy.summary.includes("Calls without a status in older spans have unknown outcomes."));
-  assert(legacy.summary.includes("OLD.md (content removed)"));
+  assert(legacy.summary.includes("OLD.md\n</read-files>"));
   console.log("== Custom messages: generic bounded stubs, raw recovery, and repeated compaction ==");
   const custom = SessionManager.inMemory(cwd);
   // The cap is off: removing bodies is compaction policy, not size trimming.

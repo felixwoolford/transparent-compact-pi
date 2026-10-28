@@ -2,6 +2,17 @@
 
 ## Unreleased — initial release preparation
 
+- Replace misleading file-list content-absence claims with compact retained-evidence
+  labels, recomputed from Pi's projected tail at each checkpoint. Distinguish full,
+  partial, and uncertain reads; visible write payloads; and subsequent tracked
+  changes. Preserve startup-read labels and give modified paths a narrowly factual
+  negative label when no retained read/write evidence is established. Read-list
+  headers state the negative default once instead of repeating it per path. No
+  extra filesystem reads, model calls, or source-content duplication.
+- Add a narrow safeguard before whole-file `write` replacement: reread unless
+  current contents are already visible, and do not reconstruct unchanged sections
+  from memory. Small exact-match edits do not require a blanket reread.
+
 - Advertise recovery positively as retrieving history hidden by compaction, with
   explicit provenance and contradiction triggers in the lookup description, skill,
   and post-compaction reminders. Distinguish historical observations from current

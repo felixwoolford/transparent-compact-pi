@@ -85,9 +85,9 @@ module.exports = async function ({ ext, SessionManager, root, compact, makeConte
     assert(!c.summary.includes(secret), secret);
   assert(stubs.includes('third_party(content="Not a write payload", query="' + "q".repeat(159) + "…"));
   assert(c.summary.includes(userProse) && c.summary.includes(assistantProse), "never shorten conversation prose");
-  assert(c.summary.includes("docs/spec.md (content removed)"));
+  assert(c.summary.includes("docs/spec.md\n</read-files>"));
   assert(c.summary.includes("<modified-files note="));
-  assert(c.summary.includes("\nsrc/out.ts\n</modified-files>"));
+  assert(c.summary.includes("\nsrc/out.ts (no read-tool output in tail)\n</modified-files>"));
   assert.deepEqual(c.details.readFiles, [path.join(cwd, "docs/spec.md")], "file metadata stays original");
   assert.deepEqual(c.details.modifiedFiles, [path.join(cwd, "src/out.ts")]);
   assert(manager.getBranch().some((e) => e.message?.content?.some?.((b) => b.arguments?.content === content)),

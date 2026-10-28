@@ -34,6 +34,9 @@ checks local dependencies and global npm installations.
   repeated compaction without duplicate instructions, mid-run compaction and overflow
   retry; branch tests cover reload/resume and old checklists in spans or the tail.
   These test delivery, not model compliance.
+- Retained file-evidence annotations: built-in read truncation/limits, path aliases,
+  visible write payloads, later mutations, context edits, startup reads, and repeated
+  compaction. Actual SDK requests cover both retained-source and plan-only tails.
 - Skill validation and agreement with the question-only lookup contract.
 - Header/section spoofing resistance and internal lookup tool dispatch.
 - Absolute session-file override tests, including pruned forks, reload at lookup
@@ -50,6 +53,23 @@ cannot redirect lookups to real session files.
 
 Individual scripts are `test:integration`, `test:cap`, `test:caphang`,
 `test:capspans`, and `test:package`.
+
+### Optional local session-audit replay
+
+To measure file-list footprint on explicitly supplied session history:
+
+```bash
+node scripts/file-evidence-replay.cjs /path/to/session.jsonl
+```
+
+This is a read-only audit, not the agent's compaction-recovery workflow or part of
+`npm test`. It rebuilds both versions at the recorded cut points, with a
+131072-token model window and a default 25% cap; recorded session cap settings
+still apply. All spans are re-rendered, rather than inheriting old tool signatures.
+The default baseline is the 0.8.7 commit; set `TC_BASELINE_REF` to override it.
+Inputs are not modified or copied into fixtures. Results measure deterministic
+formatting and evidence labels, not live-model behaviour. Do not commit private
+sessions or sensitive audit output.
 
 ## Manual check
 

@@ -72,6 +72,14 @@ earlier notes and new evidence. Prefer lookup for historical observations or to
 avoid repeating costly research; inspect project files for current contents.
 Cheap local rereads and recomputations remain reasonable.
 
+File lists now distinguish source output retained in the recent tail, partial
+reads, and reads followed by tracked changes. Modified paths without retained
+read/write evidence are marked `no read-tool output in tail`; these annotations
+are checkpoint-time evidence, not guarantees of current filesystem state.
+Before replacing an existing file with `write`, the agent is told to reread it
+unless current contents are already visible, rather than reconstruct unchanged
+sections from memory. Small exact-match edits have no blanket reread requirement.
+
 ### Automatic startup-read retention
 
 Successful text reads between the first and second user prompts are retained when

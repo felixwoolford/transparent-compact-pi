@@ -25,11 +25,13 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { homedir } from "node:os";
+import { fileURLToPath } from "node:url";
 import { Type } from "typebox";
 import { contentText, normalizeContext, uuidv7 } from "@earendil-works/pi-ai";
 import type { Message as AiMessage, Model, Tool as AiTool } from "@earendil-works/pi-ai";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { buildSessionProjection, SessionManager } from "@earendil-works/pi-coding-agent";
 import type { ExtensionAPI, ExtensionContext, ModelRegistry, SessionEntry } from "@earendil-works/pi-coding-agent";
 
 // ============================================================================
@@ -645,6 +647,108 @@ ${r.text.join("\n")}
   ].join("\n\n");
 }
 
+// File annotations describe evidence, not a guarantee of filesystem freshness.
+// Use Pi's projection for visibility, but recorded mutations can invalidate a
+// snapshot even when the mutation's message was subsequently omitted.
+interface FileEvidence {
+  kind: "read" | "write";
+  completeness?: "full" | "partial" | "unknown";
+  changed?: "edit" | "write";
+  orderUncertain?: boolean;
+}
+
+function fileEvidenceKey(file: string, cwd: string): string {
+  // Lexical normalization only: no stat/realpath, and no symlink-equivalence claim.
+  let normalized = file.replace(/[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g, " ").replace(/^@/, "");
+  if (normalized === "~") normalized = homedir();
+  else if (normalized.startsWith("~/") || (process.platform === "win32" && normalized.startsWith("~\\"))) normalized = path.join(homedir(), normalized.slice(2));
+  if (normalized.startsWith("file://")) {
+    try { normalized = fileURLToPath(normalized); } catch { /* Unknown path syntax: keep it literal. */ }
+  }
+  return path.resolve(cwd, normalized);
+}
+
+function readCompleteness(args: Record<string, any>, message: Record<string, any>, replaced: boolean): "full" | "partial" | "unknown" {
+  const blocks = message.content;
+  if (replaced || !Array.isArray(blocks) || blocks.length !== 1 || blocks[0].type !== "text" || typeof blocks[0].text !== "string") return "unknown";
+  const text = blocks[0].text;
+  if (/^Read image file \[/.test(text)) return "unknown";
+  const truncation = message.details?.truncation;
+  if (truncation?.firstLineExceedsLimit) return "unknown"; // Only a warning, not file contents.
+  // Pi's read tool supplies these notices for both default and explicit limits.
+  if (truncation?.truncated === true || /\[(?:Showing lines [^\n]*Use offset=\d+ to continue\.|\d+ more lines in file\. Use offset=\d+ to continue\.)\]\s*$/.test(text)) return "partial";
+  const offset = args.offset ?? 1;
+  if (!Number.isInteger(offset) || offset < 1 || (args.limit != null && (!Number.isInteger(args.limit) || args.limit < 1))) return "unknown";
+  if (offset > 1) return "partial";
+  // A limit is not proof of partialness: without a continuation notice Pi reached EOF.
+  // Unknown argument schemas are not assumed to have Pi's read semantics.
+  return Object.keys(args).every((key) => ["path", "offset", "limit"].includes(key)) ? "full" : "unknown";
+}
+
+function retainedFileEvidence(entries: SessionEntry[], firstKeptEntryId: string | undefined, cwd: string): Map<string, FileEvidence> {
+  const evidence = new Map<string, FileEvidence>();
+  const cut = entries.findIndex((entry) => entry.id === firstKeptEntryId);
+  if (cut < 0) return evidence;
+  const visible = new Map(buildSessionProjection(entries).entries.map((entry) => [entry.sourceEntry.id, entry.messages]));
+  const pending = new Map<string, { name: string; args: Record<string, any>; visible: boolean; orderUncertain: boolean } | null>();
+  const changed = (name: "edit" | "write", args: Record<string, any>) => {
+    if (typeof args.path !== "string") return;
+    const previous = evidence.get(fileEvidenceKey(args.path, cwd));
+    if (previous) previous.changed = name;
+  };
+  for (const entry of entries.slice(cut)) {
+    if (entry.type !== "message") continue;
+    const raw = entry.message as unknown as Record<string, any>;
+    const projected = visible.get(entry.id)?.find((message) => message.role === raw.role) as Record<string, any> | undefined;
+    if (raw.role === "assistant") {
+      const blocks = Array.isArray(raw.content) ? raw.content : [];
+      for (const block of blocks) {
+        if (block.type !== "toolCall" || typeof block.id !== "string") continue;
+        // Sibling calls may execute concurrently; result order is not read/write order.
+        const orderUncertain = typeof block.arguments?.path === "string" && blocks.some((other: any) =>
+          other !== block && other.type === "toolCall" && ["write", "edit"].includes(other.name) &&
+          typeof other.arguments?.path === "string" &&
+          fileEvidenceKey(other.arguments.path, cwd) === fileEvidenceKey(block.arguments.path, cwd));
+        const shown = projected?.content?.filter?.((b: any) => b.type === "toolCall" && b.id === block.id);
+        const sameCall = shown?.length === 1 && shown[0].name === block.name &&
+          JSON.stringify(shown[0].arguments) === JSON.stringify(block.arguments);
+        pending.set(block.id, pending.has(block.id) ? null : { name: block.name, args: block.arguments ?? {}, visible: sameCall, orderUncertain });
+      }
+    } else if (raw.role === "toolResult") {
+      const call = pending.get(raw.toolCallId);
+      pending.delete(raw.toolCallId);
+      if (call && call.name === raw.toolName && typeof call.args.path === "string" && raw.isError === false) {
+        const key = fileEvidenceKey(call.args.path, cwd);
+        if (call.name === "write" || call.name === "edit") changed(call.name, call.args);
+        if (call.visible && projected && call.name === "read") {
+          const completeness = readCompleteness(call.args, projected, projected.content !== raw.content);
+          const previous = evidence.get(key);
+          // A later partial read does not hide an earlier complete snapshot.
+          if (!previous || previous.changed || previous.orderUncertain || (previous.kind === "read" && previous.completeness !== "full"))
+            evidence.set(key, { kind: "read", completeness, orderUncertain: call.orderUncertain });
+        } else if (call.visible && call.name === "write" && typeof call.args.content === "string") {
+          evidence.set(key, { kind: "write", orderUncertain: call.orderUncertain });
+        }
+      }
+      // Nested calls have metadata but no model-visible read outputs or write payloads.
+      for (const nested of raw.nestedCalls?.calls ?? []) {
+        if (nested.status === "ok" && (nested.name === "edit" || nested.name === "write")) changed(nested.name, nested.arguments ?? {});
+      }
+    }
+  }
+  return evidence;
+}
+
+function fileEvidenceLabel(evidence: FileEvidence | undefined): string | undefined {
+  if (!evidence) return;
+  if (evidence.orderUncertain) return `${evidence.kind} in tail; order uncertain`;
+  if (evidence.changed) return `${evidence.kind} in tail, then ${evidence.changed === "edit" ? "edited" : "written"}`;
+  if (evidence.kind === "write") return "write content in tail";
+  return evidence.completeness === "unknown" ? "read output in tail" : `${evidence.completeness} read in tail`;
+}
+
+const FILE_LIST_EXPLANATION = "File lists record earlier operations. Read/write annotations describe retained evidence as of this checkpoint, not live filesystem state; unannotated paths do not establish content visibility.";
+
 const SECTION_HEADER = "### Compacted conversation (oldest first)";
 const SPAN_CLOSE = "</compacted-span>";
 const SPAN_TRIMMED_NOTE = "(trimmed for size — use context_lookup)";
@@ -755,7 +859,7 @@ const RECOVERY_SCOPE_RULE = "Use the recovery tools for history established by t
 const RECOVERY_FILESYSTEM_RULE = "For recovery of details hidden by compaction, do not read or grep raw session JSONL files through filesystem tools; use the recovery tools instead.";
 
 const REORIENT_BLOCK = `**Post-compaction re-orientation.** ${RECOVERY_HISTORY_NOTE} Retained startup reads and the uncompacted tail remain available as evidence. Recover only hidden information needed for the current task.
-1. **Restore only information needed to continue.** Re-read project files when you need their current contents; cheap local rereads and recomputations are reasonable. If you need an earlier observation, the source of a finding, or the reason for a conclusion that compaction hid, use \`context_lookup\`. This can avoid repeating slow or unreliable research. Restore inputs, not completed actions: do not redo writes, edits, or other state-changing actions merely because their results are hidden.
+1. **Restore only information needed to continue.** Re-read project files when you need their current contents; cheap local rereads and recomputations are reasonable. If you need an earlier observation, the source of a finding, or the reason for a conclusion that compaction hid, use \`context_lookup\`. This can avoid repeating slow or unreliable research. Restore inputs, not completed actions: do not redo writes, edits, or other state-changing actions merely because their results are hidden. **Before using \`write\` to replace an existing file, re-read it unless its current contents are already visible in context. Do not reconstruct unchanged sections from memory.**
 2. If this is a Git repository, run \`git status\` and review uncommitted work. Re-verify build/test state if you are about to rely on it.
 3. **Distinguish earlier claims from supporting evidence.** Retained assistant prose records what was said, not independent verification. If a task-relevant claim has uncertain provenance or conflicts with new evidence, check its supporting output (using \`context_lookup\` if hidden) or the current source before treating it as established; label unresolved claims unverified. Retrieved reasoning remains a historical hypothesis, and historical outputs do not establish current file or build/test state.`;
 
@@ -902,13 +1006,24 @@ async function buildMechanicalSummary(opts: {
   // verbatim boundary line. That closing line is the LAST line of the
   // checkpoint; everything after it is pi's retained verbatim tail.
   if (retainedReads) parts.push("", retainedReads);
-  const retainedPaths = new Set(opts.startupReads.reads.map((r) => path.resolve(opts.cwd, r.path)));
+  const retainedPaths = new Set(opts.startupReads.reads.map((r) => fileEvidenceKey(r.path, opts.cwd)));
   const hasFileLists = opts.readFiles.length > 0 || opts.modifiedFiles.length > 0;
-  if (hasFileLists) parts.push("");
-  if (opts.readFiles.length > 0)
-    parts.push(`<read-files note="read before compaction; unless marked retained, content removed — re-read or use context_lookup">\n${opts.readFiles.map((file) => `${checkpointPath(file, opts.cwd)} (${retainedPaths.has(path.resolve(opts.cwd, file)) ? "startup read output retained in checkpoint or tail; may be partial" : "content removed"})`).join("\n")}\n</read-files>`);
-  if (opts.modifiedFiles.length > 0)
-    parts.push(`<modified-files note="modified before compaction; current contents NOT in context">\n${opts.modifiedFiles.map((file) => checkpointPath(file, opts.cwd)).join("\n")}\n</modified-files>`);
+  if (hasFileLists) {
+    const evidence = retainedFileEvidence(opts.branchEntries, opts.firstKeptEntryId, opts.cwd);
+    const knownTail = opts.branchEntries.some((entry) => entry.id === opts.firstKeptEntryId);
+    const fileLine = (file: string, modified: boolean): string => {
+      const key = fileEvidenceKey(file, opts.cwd);
+      const label = fileEvidenceLabel(evidence.get(key)) ?? (retainedPaths.has(key)
+        ? "startup read output retained in checkpoint or tail; may be partial"
+        : modified && knownTail ? "no read-tool output in tail" : undefined);
+      return `${checkpointPath(file, opts.cwd)}${label ? ` (${label})` : ""}`;
+    };
+    parts.push("", FILE_LIST_EXPLANATION);
+    if (opts.readFiles.length > 0)
+      parts.push(`<read-files note="reads in compacted history; unless annotated, no retained read-tool output identified">\n${opts.readFiles.map((file) => fileLine(file, false)).join("\n")}\n</read-files>`);
+    if (opts.modifiedFiles.length > 0)
+      parts.push(`<modified-files note="modified in compacted history">\n${opts.modifiedFiles.map((file) => fileLine(file, true)).join("\n")}\n</modified-files>`);
+  }
   parts.push("");
   parts.push(EVIDENCE_BOUNDARY_RULE);
   parts.push("");

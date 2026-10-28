@@ -14,6 +14,8 @@ function checkChecklist(content) {
     "including recorded tool outputs and your reasoning, is preserved in the session and can be retrieved.",
     "Recover only hidden information needed for the current task.",
     "1. **Restore only information needed to continue.**", "run `git status`",
+    "Before using `write` to replace an existing file, re-read it unless its current contents are already visible in context.",
+    "Do not reconstruct unchanged sections from memory.",
     "3. **Distinguish earlier claims from supporting evidence.**",
     "Retained assistant prose records what was said, not independent verification", "do not redo writes",
     "label unresolved claims unverified", "Retrieved reasoning remains a historical hypothesis",

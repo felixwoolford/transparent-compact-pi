@@ -453,6 +453,7 @@ async function main() {
     assert.deepEqual(Object.keys(ext.commands), ["compaction-method", "cap-compaction"]);
     await methodTests(factory, SessionManager, root);
     await require("./scripts/checkpoint-evidence-tests.cjs")({ ...hybridHelpers, compact });
+    await require("./scripts/file-evidence-tests.cjs")({ ...hybridHelpers, factory, load, compact, jiti, piRoot });
     await require("./scripts/compaction-format-tests.cjs")({ ...hybridHelpers, compact });
     await capPolicyTests(capHelpers);
     assert.deepEqual(Object.keys(ext.tools.context_lookup.parameters.properties), ["question"]);
