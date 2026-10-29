@@ -154,12 +154,17 @@ copy, or cleanup is needed. They share the fallback tools' paginated search
 functions. Individual results and the final answer have size limits. Follow
 pages only when omitted content is needed, not to exhaust every match or entry.
 
-Valid continuation-only turns do not spend the substantive search budget; new
-queries, changed parameters, or replayed cursors do. A separate ceiling caps all
-search-phase model calls at three times the configured turn budget (30 by default).
-When either budget ends searching, one final tool-free model call writes up
-partial findings; a failed write-up falls back to the latest text, explicitly
-labeled incomplete. Lookup requests use normal provider caching
+The default substantive search budget is 25 turns. Valid continuation-only turns
+do not spend it; new queries, changed parameters, or replayed cursors do. A separate
+ceiling caps all search-phase model calls at three times the configured turn budget
+(75 by default). A turn may batch multiple tool calls; these are not individual
+search counts. When either budget ends searching, one final tool-free model call
+writes up partial findings; a failed write-up falls back to the latest text,
+explicitly labeled incomplete. A plain-text answer after the paging-only budget
+warning also carries an incomplete-findings marker and fallback guidance, without
+an extra write-up call. Both normal-answer and forced-write-up instructions distinguish
+unreached evidence from absence: an incomplete search does not establish that the
+answer was never recorded. Lookup requests use normal provider caching
 defaults rather than forcing caching off; actual cache behavior and savings vary
 by provider.
 
@@ -173,8 +178,10 @@ These triggers are advertised in the tool description and conditionally explaine
 in post-compaction reminders, not just in the skill body. Reminders lead with
 restoring task-relevant inputs, current-file reads, and cheap recomputation;
 compaction alone is not a lookup trigger. Advertising and re-orientation use
-separate wording. The skill description also names provenance and contradictions.
-This is guidance, not a guarantee of model compliance.
+separate wording. The skill description advertises procedural guidance for targeting
+earlier evidence, phrasing lookup questions, and handling incomplete findings,
+without requiring a skill read before every lookup. This is guidance, not a
+guarantee of model compliance.
 
 Re-read project files for their current contents. Prefer lookup for what was
 observed earlier or to avoid repeating slow external research or expensive

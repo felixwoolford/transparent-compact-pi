@@ -42,6 +42,9 @@ checks local dependencies and global npm installations.
 - Absolute session-file override tests, including pruned forks, reload at lookup
   time, invalid paths, missing/empty files, and no silent fallback.
 - Empty/no-model, cancellation, provider-error, and exhausted write-up tests.
+  Fresh-process lookup tests cover the 25-turn default, environment overrides,
+  invalid-value fallbacks, and the 3× total-call ceiling. Soft-limit answers cover
+  incomplete markers, fallback guidance, pagination, and long/empty responses.
 - Default-budget retention, small-budget termination, and cross-span size guards.
 - A package smoke test checking `npm pack --dry-run`, then Pi's real package
   resolver, extension loader, registered tool/schema, and skill loader.

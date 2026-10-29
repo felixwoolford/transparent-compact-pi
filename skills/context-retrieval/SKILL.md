@@ -1,6 +1,6 @@
 ---
 name: context-retrieval
-description: Use context_lookup to recover earlier conversation details hidden by compaction, trace where an earlier finding came from, or investigate contradictions between earlier notes and new evidence.
+description: "Guidance for using context_lookup after compaction: how to target earlier evidence, phrase effective lookup questions, and handle incomplete findings."
 ---
 
 # Session context recovery

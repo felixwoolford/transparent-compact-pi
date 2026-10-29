@@ -1,5 +1,5 @@
 /* Deterministic integration tests for extensions/index.ts.
- * Run: node test.cjs [cap|caphang|capspans|capdefault|capenv <percent> <expected budget> [chars]|lookupenv <limit> <expected limit>]
+ * Run: node test.cjs [cap|caphang|capspans|capdefault|capenv <percent> <expected budget> [chars]|lookupenv <limit> <expected limit>|lookupturns <default|value> <expected turns>]
  * Uses pi's jiti loader, real SessionManager branches, and stubbed model calls.
  * No credentials, network requests, or pilot runs are needed.
  */
@@ -408,14 +408,16 @@ async function main() {
   const savedEnv = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
   keys.forEach((key) => { delete process.env[key]; });
   const mode = process.argv[2] ?? "full";
-  assert(["full", "cap", "caphang", "capspans", "capdefault", "capenv", "lookupenv"].includes(mode), `Unknown test mode: ${mode}`);
+  assert(["full", "cap", "caphang", "capspans", "capdefault", "capenv", "lookupenv", "lookupturns"].includes(mode), `Unknown test mode: ${mode}`);
   const capBudget = mode === "capspans" ? 800 : mode === "caphang" ? 3000 : 80000;
   if (mode === "capenv") {
     process.env.MECH_COMPACT_MAX_SUMMARY_PERCENT = process.argv[3];
     if (process.argv[5] !== undefined) process.env.MECH_COMPACT_MAX_SUMMARY_CHARS = process.argv[5];
   } else if (mode !== "capdefault") process.env.MECH_COMPACT_MAX_SUMMARY_CHARS = String(capBudget);
   if (mode === "lookupenv") process.env.MECH_COMPACT_LOOKUP_MAX_CALLS = process.argv[3];
-  process.env.MECH_COMPACT_LOOKUP_TURNS = "2";
+  if (mode === "lookupturns") {
+    if (process.argv[3] !== "default") process.env.MECH_COMPACT_LOOKUP_TURNS = process.argv[3];
+  } else process.env.MECH_COMPACT_LOOKUP_TURNS = "2";
   process.env.MECH_COMPACT_WARN_GITIGNORE = "0";
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "transparent-compact-test-"));
   try {
@@ -424,6 +426,10 @@ async function main() {
     const ext = load(factory);
     const hybridTests = require("./scripts/hybrid-tests.cjs");
     const hybridHelpers = { ext, SessionManager, root, fixture, makeContext, assistant, text, toolCall, toolText, search, saveSession, output, thinking, argumentsText, user };
+    if (mode === "lookupturns") {
+      await require("./scripts/lookup-budget-tests.cjs")({ ...hybridHelpers, expected: Number(process.argv[4]) });
+      return;
+    }
     if (mode === "lookupenv") {
       await hybridTests.limitTests({ ...hybridHelpers, expected: Number(process.argv[4]) });
       return;
@@ -474,7 +480,7 @@ async function main() {
     require("./scripts/recovery-guidance-tests.cjs").checkFilesystemScope(skillText);
     assert(skillText.includes("does **not** search abandoned branches"));
     assert(!skillText.includes("Before a long, tool-heavy task"), "ordinary task startup is not a recovery trigger");
-    assert.match(loadedSkills.skills[0].description, /hidden by compaction.*where an earlier finding came from.*contradictions/);
+    assert.match(loadedSkills.skills[0].description, /using context_lookup after compaction.*target earlier evidence.*phrase effective lookup questions.*handle incomplete findings/);
     assert.match(skillText, /history established by this conversation or its checkpoint,\s+not project\s+discovery/);
     assert.match(skillText, /Retained startup reads and the uncompacted tail\s+remain available as evidence/);
     assert(!skillText.includes("re-read required project documents"));
@@ -630,7 +636,9 @@ async function main() {
         if (count <= 2) return response([text("Partial old evidence"), toolCall("grep", { pattern: "EARLIEST_TOOL_OUTPUT_START" }, `turn${count}`)], "toolUse");
         const declaredTools = context.messages.filter((m) => m.role === "system").flatMap((m) => m.toolsAdded ?? []);
         assert.equal(declaredTools.length, 0, "write-up call has no tools");
-        assert(JSON.stringify(context.messages.at(-1)).includes("Search is finished"));
+        const writeupPrompt = JSON.stringify(context.messages.at(-1));
+        assert(writeupPrompt.includes("Search is finished"));
+        assert(writeupPrompt.includes("incomplete search does not establish absence"));
         if (writeupMode === "throw") throw new Error("write-up unavailable");
         if (writeupMode === "empty") return response([]);
         if (writeupMode === "aborted" || writeupMode === "error") return response([], writeupMode);

@@ -34,7 +34,9 @@ module.exports = async function lookupPagingTests(h) {
   const writeup = (context) => {
     const tools = context.messages.filter((m) => m.role === "system").flatMap((m) => m.toolsAdded ?? []);
     assert.equal(tools.length, 0, "exhaustion adds exactly one tool-free write-up");
-    assert(JSON.stringify(context.messages.at(-1)).includes("Search is finished"));
+    const prompt = JSON.stringify(context.messages.at(-1));
+    assert(prompt.includes("Search is finished"));
+    assert(prompt.includes("incomplete search does not establish absence"));
     return assistant([text("Final partial findings.")]);
   };
 
@@ -60,6 +62,36 @@ module.exports = async function lookupPagingTests(h) {
   assert.equal(showPages, 4);
   assert.equal(fullEntry.calls, 6); // five searching/paging requests + write-up
   assert(fullEntry.answer.includes("2-turn limit"));
+
+  // A plain answer after the soft warning needs the same incomplete marker as
+  // the hard-limit path, without spending another model call on a write-up.
+  for (const continueFirst of [false, true]) for (const answer of ["Unreached baseline output.", "", "x".repeat(20000)]) {
+    const soft = await run((turn, context) => {
+      const prompt = JSON.stringify(context.messages);
+      assert(prompt.includes("A failed or incomplete search does not establish absence"));
+      if (turn === 1) return response([toolCall("grep", grep, "soft-first")]);
+      if (turn === 2) return response([toolCall("show_entry", { id: smallId }, "soft-second")]);
+      const warnings = context.messages.filter((m) => JSON.stringify(m).includes("The substantive search-turn budget is exhausted"));
+      assert.equal(warnings.length, 1, "soft budget warning is issued once");
+      assert(!JSON.stringify(context.messages.at(-1)).includes("Search is finished"), "no forced write-up");
+      if (continueFirst && turn === 3) {
+        const output = toolText(results(context).find((m) => m.toolCallId === "soft-first"));
+        return response([toolCall("grep", { ...grep, ...cursor(output) }, "soft-page")]);
+      }
+      return assistant(answer ? [text(answer)] : []);
+    });
+    assert.equal(soft.calls, continueFirst ? 4 : 3);
+    assert(soft.answer.includes("[subagent reached the 2-turn limit; findings may be incomplete]"));
+    const note = "If more detail is needed for this query, use context_list_entries, context_grep, or context_show_entry rather than immediately repeating context_lookup.";
+    assert(soft.answer.endsWith(note));
+    assert.equal(soft.answer.split(note).length - 1, 1);
+    const boundedPayload = soft.answer.replace(/\n…\[\+\d+ chars truncated\]/g, "");
+    assert(boundedPayload.length <= 12000, "findings, marker and fallback fit the budget, excluding truncation notices");
+    if (!answer) assert(soft.answer.includes("(subagent returned no answer)"));
+  }
+  const normal = await run(() => assistant([text("Normal complete answer.")]));
+  assert.equal(normal.calls, 1);
+  assert.equal(normal.answer, "Normal complete answer.", "answers before exhaustion remain unchanged");
 
   // Listings and partial grep matches receive the same exemption.
   for (const [name, args, maxPages] of [

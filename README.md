@@ -170,7 +170,7 @@ starting Pi:
 | `MECH_COMPACT_MAX_SUMMARY_CHARS` | Unset (uses percentage budget) | Initial conversation-and-retained-reads character budget override; takes precedence over the percentage setting. |
 | `MECH_COMPACT_MAX_SUMMARY_PERCENT` | `25` | Initial percentage of the model's context window, using estimated tokens. Accepts numbers greater than 0 and at most 100, including decimals; invalid values fall back to 25. |
 | `MECH_COMPACT_LOOKUP_MODEL` | Session model | Optional `provider/modelId` for lookups; must support tool calls and be available in Pi. An unresolved model falls back to the session model. |
-| `MECH_COMPACT_LOOKUP_TURNS` | `10` | Maximum substantive search turns. Valid continuation-only turns are exempt; total search-phase model calls are capped at 3× this budget (30 by default), plus one tool-free write-up on exhaustion. |
+| `MECH_COMPACT_LOOKUP_TURNS` | `25` | Maximum substantive search turns. Valid continuation-only turns are exempt; total search-phase model calls are capped at 3× this budget (75 by default), plus one tool-free write-up on exhaustion. |
 | `MECH_COMPACT_LOOKUP_MAX_CALLS` | `1` | Maximum consecutive lookup attempts. `0` means unlimited; see [recovery reset rules](docs/DESIGN.md#recover-historical-details). Invalid values fall back to 1. |
 | `MECH_COMPACT_LOOKUP_SESSION_FILE` | Unset | Optional absolute path to a full session JSONL, replacing the current branch as the lookup source. Intended for harnesses using pruned forks. |
 

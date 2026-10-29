@@ -68,7 +68,9 @@ module.exports = function (h) {
   const skill = fs.readFileSync(path.join(__dirname, "../skills/context-retrieval/SKILL.md"), "utf8");
   const description = skill.match(/^description: (.+)$/m)?.[1];
   assert(description, "skill has an advertised description");
-  assert.match(description, /hidden by compaction.*where an earlier finding came from.*contradictions/);
+  assert.match(description, /using context_lookup after compaction.*target earlier evidence.*phrase effective lookup questions.*handle incomplete findings/,
+    "skill advertisement explains what reading it teaches");
+  assert.doesNotMatch(description, /read before|must read|always read/i, "no mandatory preflight skill read");
   checkRecoveryTriggers(skill);
   assert.doesNotMatch(skill, /before repeating the\s+investigation/i,
     "skill does not mandate lookup before ordinary investigation");

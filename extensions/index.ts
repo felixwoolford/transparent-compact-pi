@@ -11,7 +11,7 @@
  *   MECH_COMPACT_MAX_SUMMARY_CHARS    initial character budget override (takes precedence over percent)
  *   MECH_COMPACT_MAX_SUMMARY_PERCENT  initial percentage of model context (default 25; >0, <=100)
  *   MECH_COMPACT_LOOKUP_MODEL         "provider/modelId" for the lookup subagent
- *   MECH_COMPACT_LOOKUP_TURNS         max substantive search turns (default 10).
+ *   MECH_COMPACT_LOOKUP_TURNS         max substantive search turns (default 25).
  *                                    Valid continuation-only turns are exempt;
  *                                    total search-phase calls capped at 3x this,
  *                                    plus one final write-up on exhaustion
@@ -79,7 +79,7 @@ const cfg = {
   defaultCapBudget: (process.env.MECH_COMPACT_MAX_SUMMARY_CHARS
     ? { unit: "chars", value: intFromEnv("MECH_COMPACT_MAX_SUMMARY_CHARS", 80_000) }
     : { unit: "percent", value: percentFromEnv("MECH_COMPACT_MAX_SUMMARY_PERCENT", 25) }) as CapBudget,
-  lookupTurns: intFromEnv("MECH_COMPACT_LOOKUP_TURNS", 10),
+  lookupTurns: intFromEnv("MECH_COMPACT_LOOKUP_TURNS", 25),
   lookupMaxCalls: lookupMaxCallsFromEnv(),
   lookupModel: process.env.MECH_COMPACT_LOOKUP_MODEL?.trim() || undefined,
   argSnippetChars: 160,
@@ -1240,7 +1240,8 @@ function lookupPartialFindings(text: string, marker: string): string {
 
 const LOOKUP_WRITEUP_PROMPT =
   "Search is finished; no further tool calls are allowed. Report what you found so far: the facts you confirmed (with ENTRY ids), " +
-  "what you couldn't find, and where you'd look next.";
+  "what you could not locate in the material searched, and where you'd look next. " +
+  "Budget exhaustion or an incomplete search does not establish absence from the transcript.";
 
 const LOOKUP_SYSTEM_PROMPT = `You are a context-lookup subagent for a coding agent whose main context was compacted by verbatim compaction. The full pre-compaction transcript — including assistant thinking blocks and complete tool outputs that were REMOVED from the main context — is in the transcript files named in the request.
 
@@ -1257,7 +1258,7 @@ Final answer rules (your final message is the ONLY text the main agent sees):
 - Return only the important findings. Do not narrate your search process.
 - Quote exact error messages, paths, values, and code verbatim where they matter.
 - Cite the ENTRY id (and file) for each finding so the main agent can verify.
-- If the transcript does not contain the answer, say exactly what is missing.
+- A failed or incomplete search does not establish absence from the transcript. Distinguish "not found in the material searched" from "absent from the transcript". If the search was incomplete or budget-limited, state what you did not reach or confirm; do not claim the answer was never recorded or that the session ended before it occurred.
 
 Provenance rules — label each finding with its source type:
 - "user instruction" — what the user asked, pasted, or confirmed
@@ -1389,7 +1390,10 @@ async function runLookupSubagent(opts: {
     if (text) lastText = text;
 
     if (toolCalls.length === 0) {
-      return truncateHead(text || "(subagent returned no answer)", cfg.lookupAnswerMaxChars);
+      const answer = text || "(subagent returned no answer)";
+      return pagingOnlyNotified
+        ? lookupPartialFindings(answer, `[subagent reached the ${searchLimit}; findings may be incomplete]`)
+        : truncateHead(answer, cfg.lookupAnswerMaxChars);
     }
 
     // Check the whole batch against cursors issued BEFORE this response.

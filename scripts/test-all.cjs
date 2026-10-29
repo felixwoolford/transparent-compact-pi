@@ -24,6 +24,9 @@ for (const args of [
     ["0", "0"], ["2", "2"], ["-1", "1"], ["1.5", "1"],
     ["not-a-number", "1"], ["2oops", "1"], ["Infinity", "1"], ["", "1"],
   ].map((args) => ["test.cjs", "lookupenv", ...args]),
+  ...[
+    ["default", "25"], ["7", "7"], ["0", "25"], ["not-a-number", "25"],
+  ].map((args) => ["test.cjs", "lookupturns", ...args]),
   ["scripts/test-package.cjs"],
 ]) {
   const result = spawnSync(process.execPath, args, { cwd: root, env, stdio: "inherit" });

@@ -2,6 +2,14 @@
 
 ## Unreleased — initial release preparation
 
+- Raise the default lookup budget from 10 to 25 substantive search turns (75 total
+  search-phase model calls, plus a final tool-free write-up). Keep the consecutive
+  lookup limit at 1. Mark plain-text answers after the paging-only budget warning
+  as potentially incomplete and include fallback guidance. Instruct the subagent
+  not to turn incomplete searches into claims that evidence was never recorded.
+- Advertise the retrieval skill as guidance on targeting evidence, phrasing lookup
+  questions, and handling incomplete findings, without a mandatory preflight read.
+
 - Replace misleading file-list content-absence claims with compact retained-evidence
   labels, recomputed from Pi's projected tail at each checkpoint. Distinguish full,
   partial, and uncertain reads; visible write payloads; and subsequent tracked
@@ -93,7 +101,7 @@
   budget when they use previously issued, single-use cursors with unchanged
   effective parameters. New searches, mixed batches, invented/replayed cursors,
   and duplicate continuations still count. A separate ceiling allows at most
-  3× the configured budget in search-phase model calls (30 by default), plus
+  3× the configured budget in search-phase model calls (75 by default), plus
   one final tool-free write-up. This is a safety guard, not a measured optimum;
   no telemetry or subagent trace is persisted.
 - Paging guidance now asks for continuation only when omitted evidence matters,
