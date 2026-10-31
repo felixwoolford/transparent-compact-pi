@@ -633,7 +633,7 @@ function summarizeMessages(messages: AgentMessage[], cwd: string, entries: Sessi
   }
   const rawResults = pairedToolResults(rawMessages);
   const lines: string[] = [];
-  const tools: ToolLines = { version: 1, lines: [] };
+  const tools: ToolLines = { version: 2, lines: [] };
   for (const msg of messages) {
     const m = msg as unknown as Record<string, any>;
     switch (msg.role) {
@@ -994,15 +994,15 @@ const RECOVERY_SCOPE_RULE = "Use the recovery tools for history established by t
 const RECOVERY_FILESYSTEM_RULE = "For recovery of details hidden by compaction, do not read or grep raw session JSONL files through filesystem tools; use the recovery tools instead.";
 
 const REORIENT_BLOCK = `**Post-compaction re-orientation.** ${RECOVERY_HISTORY_NOTE} Retained startup reads and the uncompacted tail remain available as evidence. Recover only hidden information needed for the current task.
-1. **Restore only information needed to continue.** Re-read project files when you need their current contents; cheap local rereads and recomputations are reasonable. For hidden historical evidence with a checkpoint \`ref\`, use \`context_show_entry\` with that id and \`includeRelated=true\`; otherwise use \`context_lookup\` for an earlier observation, provenance, or reasoning. This can avoid repeating slow or unreliable research. Restore inputs, not completed actions: do not redo writes, edits, or other state-changing actions merely because their results are hidden. **Before using \`write\` to replace an existing file, re-read it unless its current contents are already visible in context. Do not reconstruct unchanged sections from memory.**
+1. **Restore only information needed to continue.** Re-read project files when you need their current contents; cheap local rereads and recomputations are reasonable. If you need an earlier observation, the source of a finding, or the reason for a conclusion that compaction hid, use \`context_lookup\`. This can avoid repeating slow or unreliable research. Restore inputs, not completed actions: do not redo writes, edits, or other state-changing actions merely because their results are hidden. **Before using \`write\` to replace an existing file, re-read it unless its current contents are already visible in context. Do not reconstruct unchanged sections from memory.**
 2. If this is a Git repository, run \`git status\` and review uncommitted work. Re-verify build/test state if you are about to rely on it.
 3. **Distinguish earlier claims from supporting evidence.** Retained assistant prose records what was said, not independent verification. If a task-relevant claim has uncertain provenance or conflicts with new evidence, check its supporting output (using \`context_lookup\` if hidden) or the current source before treating it as established; label unresolved claims unverified. Retrieved reasoning remains a historical hypothesis, and historical outputs do not establish current file or build/test state.`;
 
 const CHECKPOINT_EXPLANATION = `**Compacted conversation follows.** The earlier part of this conversation has been compacted into the checkpoint below. This is not the full transcript. ${RECOVERY_HISTORY_NOTE}`;
 
-const RECOVERY_INSTRUCTIONS = `**Recovering hidden details.** A checkpoint \`ref=ID\` can be opened directly with \`context_show_entry({id: "ID", includeRelated: true})\` to recover the full call and result. Without a known ref, prefer \`context_lookup\` with a specific historical question: a subagent searches this conversation's full raw active branch in its own context and returns relevant findings. ${RECOVERY_SCOPE_RULE} If its findings are incomplete, use the bounded fallback tools \`context_list_entries\`, \`context_grep\`, and \`context_show_entry\`; follow their pagination instructions for more detail. ${RECOVERY_FILESYSTEM_RULE}`;
+const RECOVERY_INSTRUCTIONS = `**Recovering hidden details.** Prefer \`context_lookup\` with a specific historical question: a subagent searches this conversation's full raw active branch in its own context and returns relevant findings. ${RECOVERY_SCOPE_RULE} If its findings are incomplete, use the bounded fallback tools \`context_list_entries\`, \`context_grep\`, and \`context_show_entry\`; follow their pagination instructions for more detail. ${RECOVERY_FILESYSTEM_RULE}`;
 
-const EVIDENCE_BOUNDARY_RULE = "**Evidence boundary:** Previews and file lists are incomplete; output labels are historical observations, prose is not verification. Open refs with `context_show_entry` (`includeRelated=true`), or use `context_lookup`. Inspect sources for current state.";
+const EVIDENCE_BOUNDARY_RULE = "**Evidence boundary:** Tool stubs and file lists omit supporting details. Most output and detailed payloads are omitted. Inline observations are historical, not verification of unshown details or current state. Use `context_lookup` for omitted observations or provenance; inspect sources for current state.";
 
 const REORIENT_MESSAGE = "transparent-compact:reorient";
 const RECOVERY_RECAP = `**Recovery recap.** ${RECOVERY_SCOPE_RULE} For unfamiliar project details or missing requirements, inspect project files or ask the user instead. If lookup findings are incomplete, use \`context_list_entries\`, \`context_grep\`, or \`context_show_entry\`, following pagination instructions. ${RECOVERY_FILESYSTEM_RULE} Keep these evidence/recovery rules in force as work continues.`;
@@ -1127,9 +1127,9 @@ async function buildMechanicalSummary(opts: {
     opts.notify(MIXED_CONTEXT_WARNING);
   }
   parts.push(`- Latest: ${opts.now} (trigger: ${opts.reason}, ~${opts.tokensBefore.toLocaleString()} tokens before compaction)`);
-  parts.push("- In the compacted spans, user and assistant prose is kept verbatim, subject to budget trimming. Retained prose is a record of what was said, not verification of its claims. Tool signatures are display notation, not replayable shell commands: paths under the working directory become relative (`.` in commands); read ranges are requested lines; write/edit payloads become sizes/counts. Bash previews keep up to 160 encoded characters, head + … + tail, with escaped newlines. Thinking and most output are removed; selected output observations remain after →.");
+  parts.push("- In the compacted spans, user and assistant prose is kept verbatim, subject to budget trimming. Retained prose is a record of what was said, not verification of its claims. Tool signatures are display notation, not replayable shell commands: paths under the working directory become relative (`.` in commands); read ranges are requested lines; write/edit payloads become sizes/counts. New bash previews keep the first 160 encoded characters, followed by … when truncated, with escaped newlines. Thinking and most output are removed; selected output observations remain after →.");
   parts.push("- [tool error] means the result was flagged as an error; [unknown] means no safely matched result/status. Unlabelled does NOT establish exit 0 or passing tests. → exit N is a reported shell status; output: quotes/extracts selected output, not an inferred verdict. Everything shown is historical. Legacy [ok] only means not flagged as a tool error; legacy calls without status are unknown.");
-  parts.push("- ref=ID marks useful historical evidence (including full truncated commands and write/edit payloads), not a lookup requirement. No ref makes no claim about reproducibility or whether old evidence still exists on disk. For current state, inspect files; for past observations, recover history.");
+  parts.push("- ref=ID is only a locator for a raw session entry, not a citation or verification of a claim. It does not supply omitted arguments/output or confirm an outcome. You may include it in a `context_lookup` question to narrow the search. No ref makes no claim about reproducibility.");
   parts.push("- Under size pressure, `tools-tightened` marks 120/80-character previews, fewer low-priority refs, or grouped tool-only lines. Conversation prose and tool calls are retained unless `trimmed` is also marked. Tightening stops as soon as the budget fits; outcome observations and identifying file paths are not shortened by these stages.");
   parts.push("- Newly compacted custom messages are kept only as type stubs (long types abbreviated); their content is removed and remains recoverable in the session through context_lookup. Stored canonical spans are unchanged; their presentation may tighten under the cap.");
   parts.push(
@@ -1368,8 +1368,8 @@ const GREP_FIELDS = {
   throughEntry: THROUGH_ENTRY_FIELD,
 };
 const SHOW_FIELDS = {
-  id: Type.String({ description: "ENTRY id, including a checkpoint ref" }),
-  includeRelated: Type.Optional(Type.Boolean({ description: "Include unambiguously matched tool call/result entries (default false). Use true with checkpoint refs to recover the full command/payload and its result. Keep unchanged when paging." })),
+  id: Type.String({ description: "ENTRY id" }),
+  includeRelated: Type.Optional(Type.Boolean({ description: "Include unambiguously matched tool call/result entries (default false). Keep unchanged when paging." })),
   maxLines: Type.Optional(Type.Integer({ minimum: 1, description: "Max lines per page (default 400); character limit also applies" })),
   offset: OFFSET_FIELD,
 };
@@ -1682,8 +1682,8 @@ function registerDirectTools(pi: ExtensionAPI): void {
   pi.registerTool({
     name: "context_show_entry",
     label: "Context: show entry",
-    description: "Retrieve historical evidence directly from a checkpoint ref, or after context_lookup if findings are incomplete; same scope as context_lookup. Retrieve an indexed session entry by ENTRY id in pages of up to 24000 payload characters and maxLines lines, plus attribution/cursor notes. Set includeRelated=true with checkpoint refs to retrieve the full matched tool call and result. Follow the reported offset for the rest, keeping includeRelated unchanged; a page may not contain the entire entry.",
-    promptSnippet: "Retrieve this conversation's entries by checkpoint ref or for post-compaction recovery",
+    description: pre + "Retrieve an indexed session entry by ENTRY id in pages of up to 24000 payload characters and maxLines lines, plus attribution/cursor notes. Optional includeRelated=true includes matched tool call/result entries. Follow the reported offset for the rest, keeping includeRelated unchanged; a page may not contain the entire entry.",
+    promptSnippet: "Fallback: retrieve this conversation's entries for post-compaction recovery",
     parameters: Type.Object(SHOW_FIELDS),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       return run(ctx, (t) => showEntry(t, params));

@@ -61,7 +61,7 @@ module.exports = async function ({ ext, SessionManager, root, compact, makeConte
   assert(c.summary.includes("changed.ts (no read-tool output in tail)"));
   assert.deepEqual(c.details.readFiles, ["SPEC.md", "docs/a guide.md"], "metadata retains bare paths");
   assert.deepEqual(c.details.modifiedFiles, ["changed.ts"]);
-  const rule = "**Evidence boundary:** Previews and file lists are incomplete; output labels are historical observations, prose is not verification. Open refs with `context_show_entry` (`includeRelated=true`), or use `context_lookup`. Inspect sources for current state.";
+  const rule = "**Evidence boundary:** Tool stubs and file lists omit supporting details. Most output and detailed payloads are omitted. Inline observations are historical, not verification of unshown details or current state. Use `context_lookup` for omitted observations or provenance; inspect sources for current state.";
   assert(c.summary.includes(`</modified-files>\n\n${rule}\n\nConversation`), "rule sits after file lists, immediately before the tail boundary");
   const next = manager.appendMessage(user("Next retained tail"));
   const repeated = await compact(ext, ctx, [kept], next);

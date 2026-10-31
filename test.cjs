@@ -88,7 +88,7 @@ async function compact(ext, ctx, ids, kept, reason = "manual", fileOps) {
   assert(c.summary.includes("user and assistant prose is kept verbatim, subject to budget trimming"));
   assert(c.summary.includes("Retained prose is a record of what was said, not verification of its claims."));
   assert(c.summary.includes("Thinking and most output are removed; selected output observations remain after →."));
-  assert(c.summary.includes("**Evidence boundary:** Previews and file lists are incomplete;"));
+  assert(c.summary.includes("**Evidence boundary:** Tool stubs and file lists omit supporting details."));
   assert(c.summary.lastIndexOf("**Evidence boundary:**") < c.summary.lastIndexOf("Conversation"), "closing evidence rule stays above the uncompacted tail");
   assert(!c.summary.includes("EARLIEST_TOOL_OUTPUT"));
   assert(!c.summary.includes("EARLIEST_THINKING"));

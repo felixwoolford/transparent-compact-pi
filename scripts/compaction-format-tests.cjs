@@ -4,7 +4,7 @@ const assert = require("node:assert/strict");
 const path = require("node:path");
 
 module.exports = async function ({ ext, SessionManager, root, compact, makeContext, assistant, toolCall, text, user }) {
-  console.log("== Compact signatures: relative paths, payload sizes, and 160-character head/tail previews ==");
+  console.log("== Compact signatures: relative paths, payload sizes, and 160-character head-only previews ==");
   const cwd = path.join(root, "format project+[a](b)");
   const build = async (messages, { budget, fileOps } = {}) => {
     const manager = SessionManager.inMemory(cwd);
@@ -74,7 +74,7 @@ module.exports = async function ({ ext, SessionManager, root, compact, makeConte
   ]) assert(stubs.includes(signature), signature);
   for (const [command, expected] of commands) {
     const encoded = JSON.stringify(expected);
-    const snippet = encoded.length > 160 ? encoded.slice(0, 98) + "…" + encoded.slice(-61) : encoded;
+    const snippet = encoded.length > 160 ? encoded.slice(0, 160) + "…" : encoded;
     assert(stubs.includes(`bash ${snippet} [unknown]`), command);
     assert(snippet.length <= encoded.length, "abbreviating never increases argument size");
   }

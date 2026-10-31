@@ -66,7 +66,8 @@ module.exports = async function (h) {
   assert(line(error).includes('output: "NameError:'));
   assert(line(commit).endsWith("→ commit abc1234"));
   assert(line(truncated).includes("import os\\n"), "imports remain part of the literal preview");
-  assert(line(truncated).includes("IDENTIFYING_END") && line(truncated).includes("…"));
+  assert(line(truncated).includes(`bash ${JSON.stringify(longCommand).slice(0, 160)}…`));
+  assert(!line(truncated).includes("IDENTIFYING_END"), "a head-only preview must not retain an omitted tail");
   assert(!line(truncated).includes("middle".repeat(20)));
   assert(line(background).includes("background=true") && !line(background).includes("timeout="));
   assert(line(quoted).includes('output: "a\\nb \\"quote\\"; bash evil"'));
@@ -74,13 +75,17 @@ module.exports = async function (h) {
   assert(line(structuredExit).endsWith("→ exit 2"), "use explicit structured shell status when available");
   for (const n of [structuredOnly, benchRead, printedStatus, explicitSuccess, escapedTiny])
     assert(!line(n).includes("→"), "do not mistake fixtures or escaped/truncated previews for complete output/status");
-  assert(line(unicode).isWellFormed(), "head/tail boundaries do not split surrogate pairs");
+  assert(line(unicode).isWellFormed(), "prefix boundaries do not split surrogate pairs");
   const errorQuote = /output: (".*") ref=/.exec(line(longError))?.[1];
   assert(errorQuote && errorQuote.length <= 160 && JSON.parse(errorQuote).endsWith("…"), "abbreviated output quotes remain closed, escaped, and bounded");
   assert(lines.every((line) => !line.includes("\n")), "output quotes cannot inject checkpoint lines");
   assert(c.summary.includes("No ref makes no claim about reproducibility"));
   assert(c.summary.includes("Unlabelled does NOT establish exit 0"));
-  assert(c.summary.includes("includeRelated: true"));
+  assert(c.summary.includes("only a locator for a raw session entry, not a citation or verification"));
+  assert(c.summary.includes("may include it in a `context_lookup` question"));
+  assert(c.summary.includes("**Recovering hidden details.** Prefer `context_lookup`"));
+  assert(!c.summary.includes("marks useful historical evidence"));
+  assert(!c.summary.includes("Open refs with") && !c.summary.includes("Without a known ref"));
 
   const callDirect = async (id, includeRelated, extra = {}, context = ctx) => toolText(await ext.tools.context_show_entry.execute(
     "stub-ref", { id, includeRelated, ...extra }, undefined, undefined, context));

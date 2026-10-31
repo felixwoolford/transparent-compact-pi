@@ -21,8 +21,7 @@ function checkChecklist(content) {
     "label unresolved claims unverified", "Retrieved reasoning remains a historical hypothesis",
     "historical outputs do not establish current file or build/test state",
     "cheap local rereads and recomputations are reasonable",
-    "For hidden historical evidence with a checkpoint `ref`, use `context_show_entry` with that id and `includeRelated=true`",
-    "otherwise use `context_lookup` for an earlier observation, provenance, or reasoning",
+    "If you need an earlier observation, the source of a finding, or the reason for a conclusion that compaction hid, use `context_lookup`.",
     "This can avoid repeating slow or unreliable research",
     "If a task-relevant claim has uncertain provenance or conflicts with new evidence",
     "check its supporting output (using `context_lookup` if hidden) or the current source before treating it as established",
@@ -45,6 +44,7 @@ function checkChecklist(content) {
   assert(!content.includes("Re-read every required document"), "no required-document reread checklist");
   assert(!content.includes("Identify all such documents"), "no rediscovery of reading requirements");
   assert(!content.includes("4."), "three recovery steps only");
+  assert(!content.includes("checkpoint `ref`") && !content.includes("includeRelated=true"), "checklist does not override lookup-first recovery");
 }
 
 function checkEnvelope(summary) {
@@ -65,6 +65,9 @@ function checkEnvelope(summary) {
   assert(summary.indexOf("**Evidence boundary:**") < summary.lastIndexOf("Conversation"));
   assert(!summary.includes(heading), "checklist is not inside the compacted conversation");
   assert(!summary.includes("**Recovery recap.**"));
+  assert(summary.includes("**Recovering hidden details.** Prefer `context_lookup`"));
+  assert(summary.includes("Most output and detailed payloads are omitted"));
+  assert(!summary.includes("marks useful historical evidence") && !summary.includes("Without a known ref"));
 }
 
 module.exports = async function (h) {

@@ -29,8 +29,8 @@ those tasks; use ordinary file tools as needed for the requested analysis.
 This skill pairs with the `@foliox/transparent-compact-pi` extension, which provides:
 
 - **Verbatim compaction** — a deterministic checkpoint retains user messages, assistant prose, and compact tool-call signatures. Thinking and most tool outputs are removed from the active model context, not from the raw session history. Selected startup read outputs remain verbatim in the checkpoint or uncompacted tail. Earlier spans are re-rendered flat, with recovery guidance before them and an evidence-boundary warning after them. Persistent task-relevant recovery reminders and a recap follow the retained tail; later compactions replace the old generated reminders rather than duplicating them. An inherited opaque base is kept when needed.
-- **`context_lookup`** — the preferred search when no checkpoint ref already identifies the evidence: a subagent searches the full raw session branch in its **own** context and returns relevant findings. At lookup time, the extension mechanically renders the branch into entry-anchored text with an authoritative entry/section index, in memory.
-- **Direct retrieval and bounded fallback tools** — open a known checkpoint `ref=ID` directly with `context_show_entry({id: "ID", includeRelated: true})`. This includes the matched call and result, so a result ref recovers the full command or write/edit payload too. Without a known ref, prefer `context_lookup`; if its findings are incomplete, use `context_list_entries`, `context_grep`, and `context_show_entry`. Their results enter this conversation. For recovery of details hidden by compaction, these are the permitted fallback, not filesystem access to session files.
+- **`context_lookup`** — the preferred first step for this recovery workflow: a subagent searches the full raw session branch in its **own** context and returns relevant findings. At lookup time, the extension mechanically renders the branch into entry-anchored text with an authoritative entry/section index, in memory.
+- **Bounded fallback tools** — if those findings are incomplete, use `context_list_entries`, `context_grep`, and `context_show_entry` for direct evidence recovery. Their results enter this conversation. For recovery of details hidden by compaction, these are the permitted fallback, not filesystem access to session files.
 
 Pi normally saves sessions under `~/.pi/agent/sessions/`; custom session locations also work. In-memory sessions retain history only while the process lives and cannot be resumed after exit.
 
@@ -42,13 +42,11 @@ If `context_lookup` is not in your tool list, say that subagent recovery is unav
 - You are unsure where an earlier finding came from, what a command actually printed, or why you reached a conclusion.
 - Earlier notes conflict with new evidence and you need to check the historical evidence behind them.
 
-If a checkpoint `ref=ID` identifies the evidence, open it directly with
-`context_show_entry({id: "ID", includeRelated: true})`. Refs mark useful historical
-evidence, not a lookup requirement; no ref makes no claim that the evidence is
-reproducible. Output labels are selected historical observations, not current-state
-verification. Unlabelled calls do not establish exit 0 or passing tests.
+Tool stubs and file lists do not preserve the full supporting material. Most output
+and detailed payloads are omitted. Inline observations are historical, not verification
+of unshown details or current state. Unlabelled calls do not establish exit 0 or passing tests.
 
-Otherwise ask `context_lookup` a **specific historical question** to recover hidden supporting
+Ask `context_lookup` a **specific historical question** to recover hidden supporting
 evidence. This can avoid repeating slow or unreliable research. For example:
 "Where did our earlier Holi 2026 date come from: a
 published source or our own computation? Include the observed output and ENTRY id."
@@ -65,6 +63,11 @@ published source or our own computation? Include the observed output and ENTRY i
 ```text
 context_lookup({ question: "What exact error did the earlier test run return for the N=7 case? Include the ENTRY id and observed tool output." })
 ```
+
+You may include a checkpoint `ref=ID` in the question to narrow the search. A ref
+is only a locator for a raw session entry, not a citation or verification of a claim.
+It does not supply omitted arguments/output or confirm an outcome. Its absence
+makes no claim about reproducibility.
 
 For `context_lookup`, only supply `question`. Lookup covers all earlier compactions on the current branch automatically. It does **not** search abandoned branches or unrelated sessions. If the detail is absent, report that limitation instead of claiming it was recovered or widening this recovery search through filesystem tools.
 
@@ -106,7 +109,7 @@ intended context parameters.
 
 ## Rules
 
-1. **For recovery of details hidden by compaction, do not read or grep raw session JSONL files through filesystem tools.** Open a known checkpoint ref directly; otherwise prefer `context_lookup`, using bounded fallback tools when its findings are incomplete. Raw filesystem recovery would refill the compacted context. This restriction does not apply to user-requested session audits, debugging, or cross-session analysis.
+1. **For recovery of details hidden by compaction, do not read or grep raw session JSONL files through filesystem tools.** Prefer `context_lookup`; when its findings are incomplete, use the bounded fallback tools above. Raw filesystem recovery would refill the compacted context. This restriction does not apply to user-requested session audits, debugging, or cross-session analysis.
 2. Ask narrowly scoped questions using exact error strings, file paths, function names, or the command whose output you need. Recover tightly related details together; use separate queries for independent facts. Ask the subagent for evidence, not for a solution to the broader task.
 3. Findings cite ENTRY ids and the logical transcript name. Retain these citations when relying on recovered facts. The renderer preserves full thinking, text, tool-call arguments, and tool results, although individual search results have output limits.
 4. Distinguish **user instructions**, **observed tool output**, and **reasoning at the time**. A recovered `[thinking]` block is a historical hypothesis, not verified fact. Earlier assistant prose is not independently observed evidence either.

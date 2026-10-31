@@ -72,13 +72,14 @@ earlier notes and new evidence. Prefer lookup for historical observations or to
 avoid repeating costly research; inspect project files for current contents.
 Cheap local rereads and recomputations remain reasonable.
 
-Tool lines use compact signatures and 160-character head-and-tail bash previews.
-Selected historical output observations (such as failing-test counts) replace
-misleading `[ok]` labels; an unlabelled call is not proof of success. A `ref=ID`
-can be opened directly with `context_show_entry({id: "ID", includeRelated: true})`
-to recover the full call and result without a subagent search. Refs mark useful
-historical evidence, not a lookup requirement or a claim that unreferenced evidence
-is reproducible. See [the rendering contract](docs/DESIGN.md#deterministic-checkpoint).
+Tool lines use compact signatures and head-only bash previews: the first 160
+encoded characters, followed by an ellipsis when truncated. Selected historical
+output observations (such as failing-test counts) replace misleading `[ok]` labels;
+an unlabelled call is not proof of success. Most output and detailed payloads are
+omitted. A `ref=ID` is only a locator for a raw session entry, not a citation or
+verification of a claim. When you need omitted details, use `context_lookup`;
+the ref can be included in the question to narrow the search. Its absence makes
+no reproducibility claim. See [the rendering contract](docs/DESIGN.md#deterministic-checkpoint).
 
 File lists now distinguish source output retained in the recent tail, partial
 reads, and reads followed by tracked changes. Modified paths without retained

@@ -1,6 +1,7 @@
 # Context dumps can contain credentials, private code, and conversation history.
 .pi/context-dumps/
 **/.pi/context-dumps/
+AGENTS.md
 
 stub-overhaul/
 # Dependencies and generated artifacts

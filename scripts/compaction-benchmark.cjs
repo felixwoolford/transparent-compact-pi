@@ -199,6 +199,8 @@ async function benchmark(handler, source, cwd, project, runs, capSpans, headroom
     checkpoints: state.headroomCheckpoints } : undefined;
   return { setup: state.setup, headroom: headroomResult, canonicalSpans: spans.length, canonicalLineChars: spanChars(spans),
     canonicalLinesHash: hash(JSON.stringify(spans.map((s) => s.lines))),
+    canonicalProseHash: hash(JSON.stringify(spans.map((s) => s.lines.filter((line) => /^\[(?:User|Assistant)\]:/.test(line))))),
+    canonicalLineCount: spans.reduce((n, s) => n + s.lines.length, 0),
     canonicalToolCalls: spans.reduce((n, s) => n + (s.tools?.lines.reduce((m, l) => m + l.calls.length, 0) ?? 0), 0),
     latestSpanMessages: state.messages.length, fullHook: cases, pureCap };
 }
@@ -230,6 +232,7 @@ async function main() {
       runs, warmups: 2, headroomEnabled: headroom, methodology: [
         "Read-only active-branch replay; original files never opened through SessionManager.",
         "Rebuild recorded cuts cap-off, independently for each renderer, to give all earlier current spans structured metadata.",
+        "Assert identical uncapped conversation prose and line counts; tool preview formats may differ between compared versions.",
         "2x links two active-branch copies, remapping entry IDs, context-edit/cut targets, and tool call/result IDs. No duplicate session header.",
         "Full hook timings exclude JSON parsing, history replay, input projection, runtime import, and disk I/O; replay/preparation timings are reported separately.",
         "With --headroom, also evaluate the fixed 131072-character cap at every recorded cut; total setup includes this separately timed audit.",
@@ -257,7 +260,8 @@ async function main() {
           result[label] = await benchmark(handler, entries, cwd, buildSessionProjection, runs, cap, headroom);
           console.log(`    setup: ${result[label].setup.recordedCheckpoints} historical checkpoints rebuilt in ${result[label].setup.totalReplayMs.toFixed(1)} ms`);
         }
-        assert.equal(result.progressive.canonicalLinesHash, result.baseline.canonicalLinesHash, "both renderers receive and preserve identical uncapped history");
+        assert.equal(result.progressive.canonicalProseHash, result.baseline.canonicalProseHash, "both renderers preserve identical uncapped conversation prose");
+        assert.equal(result.progressive.canonicalLineCount, result.baseline.canonicalLineCount, "preview format changes must not add or remove canonical conversation/tool lines");
         if (copies === 2) assert.equal(result.progressive.canonicalToolCalls, 2 * session.sizes[0].progressive.canonicalToolCalls,
           "doubled history must actually compact twice the tool calls");
         if (headroom) {

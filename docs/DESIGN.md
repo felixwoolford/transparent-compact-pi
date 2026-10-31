@@ -32,8 +32,8 @@ possible. Read ranges record requested lines, not actual returned coverage or sy
 locations. Write bodies become sizes; edit arrays become counts (individual
 `oldText`/`newText` fields become sizes). Bash omits its tool-level `timeout` argument
 but retains other arguments such as `background`. Commands abbreviate the working
-directory to `.` at path boundaries. Their JSON-encoded previews keep up to 160
-characters, about 62% head plus an ellipsis and the tail. Newlines remain escaped;
+directory to `.` at path boundaries. New JSON-encoded previews keep the first 160
+characters, followed by an ellipsis when truncated. Newlines remain escaped;
 imports, redirections, and shell syntax are not rewritten. Other argument previews
 remain bounded prefixes. These signatures are display notation, not replayable shell
 commands. Calls normally remain separate across assistant messages. The size guard
@@ -61,7 +61,9 @@ not independent verification.
 
 `ref=ID` supplies an existing raw ENTRY id for write/edit payloads and for bash
 commands that are truncated or have a positive historical-observation hint. It is
-not a requirement to look up, and its absence makes no reproducibility claim.
+only a locator for that raw entry, not a citation or verification of a claim. It
+does not supply omitted arguments/output or confirm an outcome. Its absence makes
+no reproducibility claim.
 Write/edit refs do not depend on inferring later deletion or filesystem state.
 A ref normally points at the matched result, identifying one call in a batch; an
 unmatched call can point at its assistant entry. IDs are assigned only by object
@@ -71,10 +73,11 @@ messages supply output labels; raw history and the retained tail do not supply
 missing outcomes. Stored canonical span lines remain unchanged; their presentation
 in a later checkpoint may tighten under budget pressure.
 
-Open a known ref directly with `context_show_entry({id: "0123abcd", includeRelated: true})`.
-This recovers the original call/payload and result together, including code no longer
-on disk. For current state, inspect files; for a historical question without a known
-ref, prefer `context_lookup`. There is no required-document reread checklist.
+When omitted observations, payloads, or provenance are needed, prefer
+`context_lookup` with a specific historical question. A known ref may be included
+in the question to narrow the search; its presence does not replace retrieval.
+The direct tools remain fallbacks when lookup findings are incomplete. For current
+state, inspect files. There is no required-document reread checklist.
 
 All newly compacted custom messages follow the same stub policy, regardless of
 extension, display setting, or content format. Long type names are abbreviated
@@ -180,9 +183,10 @@ unless they became empty through omission.
 
 New spans store versioned, bounded display records in `details.span.tools`, alongside
 their normal uncapped `lines`. Records contain signature fragments, the original
-encoded command preview ends, annotations, and ref priorities—not unbounded
-commands, write/edit payloads, or full tool outputs. Smaller previews are always derived
-from these same canonical ends, never from a previous 120/80-character rendering.
+encoded command prefixes, annotations, and ref priorities—not unbounded commands,
+write/edit payloads, or full tool outputs. Smaller previews are always derived from
+the same canonical prefix, never from a previous 120/80-character rendering.
+Version-2 records distinguish a truncated prefix from a complete short command.
 Stored compaction entries are not edited: a later checkpoint re-renders its earlier
 spans for the current budget. Increasing the budget or disabling the cap restores
 normal previews and refs; reload/resume/fork follow the active branch's records.
@@ -280,7 +284,7 @@ The extension registers a subagent lookup and three direct-search fallback tools
 | `context_lookup` | Recover specific historical details from the full raw session branch. Accepts only `question`. |
 | `context_list_entries` | Fallback: list entry ids, roles, timestamps, and previews. |
 | `context_grep` | Fallback: regex-search the raw branch with surrounding lines and entry attribution. |
-| `context_show_entry` | Open a known checkpoint ref directly, or retrieve an entry after lookup. Optional `includeRelated` recovers matched call/result entries. |
+| `context_show_entry` | Fallback: retrieve an entry after lookup. Optional `includeRelated` recovers matched call/result entries. |
 
 For example, ask the agent to recover the build error observed before compaction.
 It can call `context_lookup` with:
@@ -291,9 +295,11 @@ It can call `context_lookup` with:
 }
 ```
 
-With a checkpoint `ref=ID`, skip the search and use
-`context_show_entry({id: "ID", includeRelated: true})`. Ordinary entry retrieval
-(default `includeRelated=false`) is unchanged. Related expansion is one-hop and
+A checkpoint `ref=ID` can be supplied as a hint in a `context_lookup` question;
+it is not a reason to treat the compacted stub as a verified source. Ordinary
+fallback entry retrieval (default `includeRelated=false`) is unchanged.
+`includeRelated=true` remains available to both the subagent and fallback entry
+tool, without changing the lookup-first policy. Related expansion is one-hop and
 chronological: a result includes its originating assistant entry (including any
 sibling calls), not sibling outputs; an assistant includes its matched results.
 Relations come from raw call IDs and matching tool names, never transcript text.

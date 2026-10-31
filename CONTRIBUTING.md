@@ -38,7 +38,8 @@ checks local dependencies and global npm installations.
   visible write payloads, later mutations, context edits, startup reads, and repeated
   compaction. Actual SDK requests cover both retained-source and plan-only tails.
 - Skill validation and agreement with the question-only lookup contract.
-- Compact stub rendering, head/tail command previews, conservative historical
+- Compact stub rendering, head-only command previews, lookup-first framing,
+  conservative historical
   output labels, and direct call/result refs. Synthetic regressions cover tiny
   outputs versus truncated/media results, read/search false positives, deleted
   scratch payload recovery, repeated compaction, related-entry pagination, reverse
@@ -53,7 +54,7 @@ checks local dependencies and global npm installations.
   incomplete markers, fallback guidance, pagination, and long/empty responses.
 - Default-budget retention, small-budget termination, and cross-span size guards.
   Pure progressive-cap tests cover every presentation rung before omission, early
-  stopping, immutable canonical records, Unicode preview ends, protected refs and
+  stopping, immutable canonical records, Unicode prefix boundaries, protected refs and
   outcomes, opaque legacy/future records, and independently removable grouped calls.
   Session integration covers retroactive span rendering, cap-off restoration, and
   metadata round-trips through resume/fork. The module lives under `extensions/lib/`
@@ -117,10 +118,10 @@ reported separately. Each case has two warmups and the requested measured runs.
 
 The 2× case links two in-memory copies with unique entry and tool-call IDs and
 remapped cut/context-edit targets, rather than naively appending duplicate-ID
-JSONL. Assertions check identical uncapped history across renderers, twice the
-emitted tool calls, immutable canonical metadata, and unchanged source files.
-Set `TC_BASELINE_REF` to compare a specific commit; use the pre-progressive-cap
-renderer with the same stub format, not a pre-stub-overhaul baseline. The report
+JSONL. Assertions check identical uncapped conversation prose and line counts
+across renderers (tool previews may differ), twice the emitted tool calls,
+immutable canonical metadata, and unchanged source files. Set `TC_BASELINE_REF`
+to compare a specific commit; the default is `HEAD`. The report
 includes source hashes, environment, raw timing samples, sizes, and flags, but no
 checkpoint contents. It is written to a private temporary directory (or `--out DIR`).
 No sessions are opened through SessionManager and no recorded tools/models run.

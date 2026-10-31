@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- Restore the 0.8.9 lookup-first re-orientation and recovery policy. Keep refs as
+  raw-entry locators that may narrow a lookup question, not citations or validation.
+  Restore explicit missing-detail cautions in the checkpoint boundary, tool
+  advertisements, and skill. Keep compact signatures, output observations, ref
+  selection, progressive capping, and paired-entry retrieval behavior unchanged.
+- Return new bash previews to the first 160 encoded characters plus an omission
+  marker, with head-only 120/80-character cap stages. Store bounded prefixes in
+  version-2 tool-display records. No legacy rendering or upgrade logic is added.
+
 ## 0.9.0
 
 - Add progressive capping in the pure `extensions/lib/checkpoint-cap.ts` module.

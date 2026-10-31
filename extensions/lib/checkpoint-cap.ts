@@ -5,9 +5,9 @@ export const TOOL_PREFIX = "[Tools]: ";
 export const NORMAL_PREVIEW_CHARS = 160;
 export const TIGHTENED_ATTR = ' tools-tightened="true"';
 
-// Encoded display fragments, NOT full commands or executable arguments. Retaining
-// the original two ends lets every smaller preview derive from the same source.
-export interface CommandPreview { head: string; tail?: string }
+// Encoded display fragments, NOT full commands or executable arguments.
+// Retain the original prefix for every smaller head-only preview.
+export interface CommandPreview { head: string; truncated?: boolean }
 export interface ToolStub {
   prefix: string;
   command?: CommandPreview;
@@ -22,24 +22,21 @@ export interface ToolLine {
   /** Both adjacent messages must be tool-only before prefixes may be folded. */
   mergeable: boolean;
 }
-export interface ToolLines { version: 1; lines: ToolLine[] }
+export interface ToolLines { version: 2; lines: ToolLine[] }
 export interface SpanContent { lines: string[]; tools?: ToolLines }
 export interface CappedSpans { lines: string[][]; tightened: boolean[]; trimmed: boolean[] }
 
-function ends(head: string, tail: string, max: number): CommandPreview {
-  let h = Math.floor((max - 1) * 0.62), t = tail.length - (max - h - 1);
-  if (/[\uD800-\uDBFF]/.test(head[h - 1])) h--;
-  if (/[\uDC00-\uDFFF]/.test(tail[t])) t++;
-  return { head: head.slice(0, h), tail: tail.slice(t) };
+function headPrefix(text: string, max: number): string {
+  let end = Math.min(text.length, max);
+  if (/[\uD800-\uDBFF]/.test(text[end - 1])) end--;
+  return text.slice(0, end);
 }
 export function commandPreview(encoded: string): CommandPreview {
-  return encoded.length <= NORMAL_PREVIEW_CHARS ? { head: encoded } : ends(encoded, encoded, NORMAL_PREVIEW_CHARS);
+  return encoded.length <= NORMAL_PREVIEW_CHARS ? { head: encoded }
+    : { head: headPrefix(encoded, NORMAL_PREVIEW_CHARS), truncated: true };
 }
 export function renderCommand(preview: CommandPreview, max = NORMAL_PREVIEW_CHARS): string {
-  const full = preview.head + (preview.tail === undefined ? "" : `…${preview.tail}`);
-  if (full.length <= max) return full;
-  const shorter = ends(preview.head, preview.tail ?? preview.head, max);
-  return `${shorter.head}…${shorter.tail}`;
+  return headPrefix(preview.head, max) + (preview.truncated || preview.head.length > max ? "…" : "");
 }
 export function renderToolStub(stub: ToolStub, max = NORMAL_PREVIEW_CHARS, thinRefs = false): string {
   return stub.prefix + (stub.command ? renderCommand(stub.command, max) : "") + stub.suffix +
@@ -50,13 +47,14 @@ export function renderToolLine(calls: ToolStub[], max = NORMAL_PREVIEW_CHARS, th
 }
 
 // Stored records are optional/versioned. Require exact canonical round-tripping
-// before using one; legacy or malformed strings are opaque, never regex-rewritten.
+// before using one; missing or invalid records leave text opaque.
 function toolRecords(span: SpanContent): Map<number, ToolLine> {
   const records = new Map<number, ToolLine>();
   try {
-    if (span.tools?.version !== 1 || !Array.isArray(span.tools.lines)) return records;
+    const tools = span.tools;
+    if (!tools || tools.version !== 2 || !Array.isArray(tools.lines)) return records;
     const seen = new Set<number>();
-    for (const record of span.tools.lines) {
+    for (const record of tools.lines) {
       if (!record || !Number.isSafeInteger(record.index) || record.index < 0 || record.index >= span.lines.length) continue;
       if (seen.has(record.index)) { records.delete(record.index); continue; }
       seen.add(record.index);
@@ -67,10 +65,9 @@ function toolRecords(span: SpanContent): Map<number, ToolLine> {
         const p = call.command;
         if (p === undefined) return true;
         if (!p || typeof p.head !== "string") return false;
-        if (p.tail === undefined) return p.head.length <= NORMAL_PREVIEW_CHARS;
-        // Smaller rungs must have enough of both original ends available.
-        return typeof p.tail === "string" && p.head.length >= 97 && p.tail.length >= 60 &&
-          p.head.length + p.tail.length + 1 <= NORMAL_PREVIEW_CHARS;
+        return p.head.length <= NORMAL_PREVIEW_CHARS &&
+          (p.truncated === undefined || typeof p.truncated === "boolean") &&
+          (p.truncated !== true || p.head.length >= NORMAL_PREVIEW_CHARS - 1);
       });
       if (valid && renderToolLine(record.calls) === span.lines[record.index]) records.set(record.index, record);
     }

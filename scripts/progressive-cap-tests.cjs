@@ -19,7 +19,7 @@ module.exports = async function (h) {
         lines.push(renderToolLine(entry.calls));
       }
     }
-    return { lines, tools: { version: 1, lines: records } };
+    return { lines, tools: { version: 2, lines: records } };
   };
   const chars = (spans) => spans.reduce((n, s) => n + s.lines.reduce((m, l) => m + l.length + 1, 0), 0);
   const freeze = (v) => { if (v && typeof v === "object") { Object.values(v).forEach(freeze); Object.freeze(v); } return v; };
@@ -81,24 +81,30 @@ module.exports = async function (h) {
   assert.deepEqual(legacyResult.trimmed, [true]);
   for (const invalid of [
     { version: 99, lines: adjacent[0].tools.lines },
-    { version: 1, lines: [{ index: 0, calls: [command("NOT_THE_SOURCE")], mergeable: true }] },
-    { version: 1, lines: [adjacent[0].tools.lines[0], adjacent[0].tools.lines[0]] },
+    { version: 2, lines: [{ index: 0, calls: [command("NOT_THE_SOURCE")], mergeable: true }] },
+    { version: 2, lines: [adjacent[0].tools.lines[0], adjacent[0].tools.lines[0]] },
   ]) {
     const data = freeze([{ lines: [adjacent[0].lines[0], "[User]: KEEP"], tools: invalid }]);
     assert.deepEqual(capSpans(data, chars(data) - 1).tightened, [false], "malformed/future metadata fails closed");
   }
-  const fakeUser = freeze([{ lines: ["[User]: NEVER_PARSE_ME"], tools: { version: 1, lines: [{ index: 0, calls: [command(longA)], mergeable: true }] } }]);
+  const fakeUser = freeze([{ lines: ["[User]: NEVER_PARSE_ME"], tools: { version: 2, lines: [{ index: 0, calls: [command(longA)], mergeable: true }] } }]);
   assert.deepEqual(capSpans(fakeUser, 500).lines, fakeUser.map((s) => s.lines));
 
-  for (const value of ["x".repeat(72) + "😀".repeat(100), "a\nb \"quote\" \\slash ".repeat(50), "short"])
+  for (const value of ["x".repeat(72) + "😀".repeat(100), "x".repeat(158) + "😀".repeat(100),
+    "a\nb \"quote\" \\slash ".repeat(50), "short"])
     for (const max of [160, 120, 80]) {
-      const preview = renderCommand(commandPreview(JSON.stringify(value)), max);
-      assert(preview.length <= max && preview.isWellFormed());
+      const encoded = JSON.stringify(value);
+      const preview = renderCommand(commandPreview(encoded), max);
+      let end = Math.min(encoded.length, max);
+      if (/[\uD800-\uDBFF]/.test(encoded[end - 1])) end--;
+      assert.equal(preview, encoded.slice(0, end) + (encoded.length > max ? "…" : ""), "derive only the original prefix at every rung");
+      assert(preview.length <= max + 1 && preview.isWellFormed());
       assert(!preview.includes("\n"));
       assert.equal(preview, renderCommand(JSON.parse(JSON.stringify(commandPreview(JSON.stringify(value)))), max));
     }
   const hiddenMiddle = commandPreview(JSON.stringify("A".repeat(2000) + "MIDDLE_NOT_STORED" + "Z".repeat(2000)));
   assert(!JSON.stringify(hiddenMiddle).includes("MIDDLE_NOT_STORED"), "canonical cap records do not duplicate full script source");
+  assert(!JSON.stringify(hiddenMiddle).includes("ZZZZ"), "new records do not preserve a command tail");
   assert.deepEqual(capSpans(original, 0).lines, [[], []], "the final fallback still terminates below tiny budgets");
 
   console.log("== Progressive ref priorities: only recognizable local views are thinned ==");
@@ -140,6 +146,7 @@ module.exports = async function (h) {
   const first = await compact(ext, ctx, ids, kept);
   const canonical = JSON.stringify(first.details);
   assert(first.details.span.tools.lines.length === 25);
+  assert.equal(first.details.span.tools.version, 2);
   const lineSize = first.details.span.lines.reduce((n, l) => n + l.length + 1, 0);
   manager.appendCustomEntry("transparent-compact:cap-compaction", { mode: "warn", budget: { unit: "chars", value: lineSize } });
   let dialogs = 0;

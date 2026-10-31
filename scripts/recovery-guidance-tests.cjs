@@ -54,15 +54,14 @@ module.exports = function (h) {
 
   for (const name of ["context_list_entries", "context_grep", "context_show_entry"]) {
     const tool = ext.tools[name];
-    assert(tool.description.startsWith(name === "context_show_entry"
-      ? "Retrieve historical evidence directly from a checkpoint ref, or after context_lookup if findings are incomplete; same scope as context_lookup."
-      : "Fallback after context_lookup, when its findings are incomplete; same scope as context_lookup."), name);
+    assert(tool.description.startsWith("Fallback after context_lookup, when its findings are incomplete; same scope as context_lookup."), name);
+    assert.doesNotMatch(tool.description, /directly from a checkpoint ref|with checkpoint refs|skip the search/i);
     assert(!tool.description.includes(scope), `${name}: refer to lookup scope without repeating it`);
     assert(tool.promptSnippet.includes("this conversation's"), name);
     assert(tool.promptSnippet.includes("compaction"), name);
   }
   assert(ext.tools.context_show_entry.parameters.properties.includeRelated);
-  assert.match(ext.tools.context_show_entry.description, /full matched tool call and result/);
+  assert.match(ext.tools.context_show_entry.description, /matched tool call\/result entries/);
   for (const tool of Object.values(ext.tools)) {
     assert.doesNotMatch(JSON.stringify({ description: tool.description, promptSnippet: tool.promptSnippet,
       parameters: tool.parameters }), /\blost\b|nothing is lost|retrieve anything/i,
@@ -79,6 +78,9 @@ module.exports = function (h) {
   assert.doesNotMatch(skill, /before repeating the\s+investigation/i,
     "skill does not mandate lookup before ordinary investigation");
   checkFilesystemScope(skill);
+  assert(skill.includes("**`context_lookup`** — the preferred first step"));
+  assert(skill.includes("You may include a checkpoint `ref=ID` in the question"));
+  assert.doesNotMatch(skill, /marks? useful historical evidence|open a known checkpoint ref directly|otherwise prefer `context_lookup`|without a known ref/i);
   assert.match(skill, /including recorded tool outputs and your reasoning/);
   assert.match(skill, /including downloaded sources/);
   assert.match(skill, /without re-verifying every fact/);
