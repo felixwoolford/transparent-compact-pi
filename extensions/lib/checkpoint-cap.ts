@@ -12,9 +12,6 @@ export interface ToolStub {
   prefix: string;
   command?: CommandPreview;
   suffix: string;
-  ref?: string;
-  /** Unknown evidence and history-bearing calls default to protected refs. */
-  retainRef: boolean;
 }
 export interface ToolLine {
   index: number;
@@ -38,12 +35,11 @@ export function commandPreview(encoded: string): CommandPreview {
 export function renderCommand(preview: CommandPreview, max = NORMAL_PREVIEW_CHARS): string {
   return headPrefix(preview.head, max) + (preview.truncated || preview.head.length > max ? "…" : "");
 }
-export function renderToolStub(stub: ToolStub, max = NORMAL_PREVIEW_CHARS, thinRefs = false): string {
-  return stub.prefix + (stub.command ? renderCommand(stub.command, max) : "") + stub.suffix +
-    (stub.ref && (!thinRefs || stub.retainRef) ? ` ref=${stub.ref}` : "");
+export function renderToolStub(stub: ToolStub, max = NORMAL_PREVIEW_CHARS): string {
+  return stub.prefix + (stub.command ? renderCommand(stub.command, max) : "") + stub.suffix;
 }
-export function renderToolLine(calls: ToolStub[], max = NORMAL_PREVIEW_CHARS, thinRefs = false): string {
-  return TOOL_PREFIX + calls.map((call) => renderToolStub(call, max, thinRefs)).join("; ");
+export function renderToolLine(calls: ToolStub[], max = NORMAL_PREVIEW_CHARS): string {
+  return TOOL_PREFIX + calls.map((call) => renderToolStub(call, max)).join("; ");
 }
 
 // Stored records are optional/versioned. Require exact canonical round-tripping
@@ -60,8 +56,7 @@ function toolRecords(span: SpanContent): Map<number, ToolLine> {
       seen.add(record.index);
       if (typeof record.mergeable !== "boolean" || !Array.isArray(record.calls) || !record.calls.length) continue;
       const valid = record.calls.every((call) => {
-        if (!call || typeof call.prefix !== "string" || typeof call.suffix !== "string" || typeof call.retainRef !== "boolean" ||
-          (call.ref !== undefined && (typeof call.ref !== "string" || !call.ref))) return false;
+        if (!call || typeof call.prefix !== "string" || typeof call.suffix !== "string") return false;
         const p = call.command;
         if (p === undefined) return true;
         if (!p || typeof p.head !== "string") return false;
@@ -81,13 +76,12 @@ interface Row {
   calls?: ToolStub[];
   mergeable: boolean;
   preview: number;
-  thinRefs: boolean;
   foldPrefix: boolean;
   tightened: boolean;
 }
 
-/** Stop as soon as the budget fits: 120-char previews, then 80, low-priority
- * refs, adjacent tool-only prefixes, and finally the historical destructive cap.
+/** Stop as soon as the budget fits: 120-char previews, then 80, adjacent
+ * tool-only prefixes, and finally the historical destructive cap.
  * Every rung walks oldest first, across all spans (not just the new one).
  */
 export function capSpans(spans: SpanContent[], budget = Infinity): CappedSpans {
@@ -99,7 +93,7 @@ export function capSpans(spans: SpanContent[], budget = Infinity): CappedSpans {
     return span.lines.map((text, index): Row => {
       const record = records.get(index);
       return { index, text, calls: record?.calls.slice(), mergeable: record?.mergeable ?? false,
-        preview: NORMAL_PREVIEW_CHARS, thinRefs: false, foldPrefix: false, tightened: false };
+        preview: NORMAL_PREVIEW_CHARS, foldPrefix: false, tightened: false };
     });
   });
   const joined = (rows: Row[], i: number) => i > 0 && rows[i].foldPrefix && rows[i].calls && rows[i - 1].calls &&
@@ -118,7 +112,7 @@ export function capSpans(spans: SpanContent[], budget = Infinity): CappedSpans {
       return lines;
     }), tightened, trimmed,
   });
-  const render = (row: Row) => renderToolLine(row.calls!, row.preview, row.thinRefs);
+  const render = (row: Row) => renderToolLine(row.calls!, row.preview);
   const update = (row: Row) => {
     const text = render(row);
     if (text.length < row.text.length) {
@@ -134,12 +128,6 @@ export function capSpans(spans: SpanContent[], budget = Infinity): CappedSpans {
       update(row);
       if (size <= budget) return finish();
     }
-  }
-  for (const rows of states) for (const row of rows) {
-    if (!row.calls?.some((call) => call.ref && !call.retainRef)) continue;
-    row.thinRefs = true;
-    update(row);
-    if (size <= budget) return finish();
   }
   for (const rows of states) for (let i = 1; i < rows.length; i++) {
     const row = rows[i];

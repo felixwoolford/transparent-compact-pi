@@ -3,7 +3,7 @@ const assert = require("node:assert/strict");
 
 module.exports = async function (h) {
   const { ext, SessionManager, root, compact, makeContext, assistant, toolCall, text, user, toolText, search, jiti } = h;
-  console.log("== Tool stubs: historical observations, conservative labels, and direct call/result refs ==");
+  console.log("== Tool stubs: historical observations, conservative labels, and ref-free recovery ==");
   const manager = SessionManager.inMemory(root);
   manager.appendCustomEntry("transparent-compact:cap-compaction", { mode: "off", budget: { unit: "chars", value: 80000 } });
   const ids = [], cases = [];
@@ -76,36 +76,36 @@ module.exports = async function (h) {
   for (const n of [structuredOnly, benchRead, printedStatus, explicitSuccess, escapedTiny])
     assert(!line(n).includes("→"), "do not mistake fixtures or escaped/truncated previews for complete output/status");
   assert(line(unicode).isWellFormed(), "prefix boundaries do not split surrogate pairs");
-  const errorQuote = /output: (".*") ref=/.exec(line(longError))?.[1];
+  const errorQuote = /output: (".*")$/.exec(line(longError))?.[1];
   assert(errorQuote && errorQuote.length <= 160 && JSON.parse(errorQuote).endsWith("…"), "abbreviated output quotes remain closed, escaped, and bounded");
   assert(lines.every((line) => !line.includes("\n")), "output quotes cannot inject checkpoint lines");
-  assert(c.summary.includes("No ref makes no claim about reproducibility"));
+  assert.doesNotMatch(c.summary, /\brefs?\b|ref=/i, "no checkpoint markers or guidance advertise refs");
   assert(c.summary.includes("Unlabelled does NOT establish exit 0"));
-  assert(c.summary.includes("only a locator for a raw session entry, not a citation or verification"));
-  assert(c.summary.includes("may include it in a `context_lookup` question"));
   assert(c.summary.includes("**Recovering hidden details.** Prefer `context_lookup`"));
-  assert(!c.summary.includes("marks useful historical evidence"));
-  assert(!c.summary.includes("Open refs with") && !c.summary.includes("Without a known ref"));
 
   const callDirect = async (id, includeRelated, extra = {}, context = ctx) => toolText(await ext.tools.context_show_entry.execute(
-    "stub-ref", { id, includeRelated, ...extra }, undefined, undefined, context));
-  const ref = /ref=(\S+)$/.exec(line(truncated))?.[1];
-  assert.equal(ref, cases[truncated].t, "a result ref identifies one call in a batch");
-  const resultOnly = await callDirect(ref, false);
+    "stub-entry", { id, includeRelated, ...extra }, undefined, undefined, context));
+  let entryId;
+  await search(ext, ctx, [toolCall("grep", { pattern: "import os", before: 0, after: 0, maxMatches: 1 })], ([result]) => {
+    entryId = /<< ENTRY (\S+)/.exec(result)?.[1];
+    assert.equal(entryId, cases[truncated].a, "lookup can locate the original command without checkpoint refs");
+  });
+  const resultOnly = await callDirect(cases[truncated].t, false);
   assert(!resultOnly.includes("IDENTIFYING_END"), "ordinary entry retrieval stays byte-compatible");
-  const pair = await callDirect(ref, true);
-  assert(pair.includes(JSON.stringify(longCommand)) && pair.includes("value=42"), "a ref recovers command source AND output");
-  await search(ext, ctx, [toolCall("show_entry", { id: ref, includeRelated: true })], ([result]) => assert.equal(result, pair));
+  const pair = await callDirect(entryId, true);
+  assert(pair.includes(JSON.stringify(longCommand)) && pair.includes("value=42"), "a recovered ENTRY id retrieves full command source AND output");
+  await search(ext, ctx, [toolCall("show_entry", { id: entryId, includeRelated: true })], ([result]) => assert.equal(result, pair));
 
   const next = manager.appendMessage(user("Next tail"));
   const repeated = await compact(ext, ctx, [kept], next);
-  assert(repeated.summary.includes(line(truncated)), "refs and observations survive repeated compaction unchanged");
-  assert.equal(await callDirect(ref, true), pair, "appended recovery calls/compactions do not move historical result pairs");
+  assert(repeated.summary.includes(line(truncated)), "previews and observations survive repeated compaction unchanged");
+  assert.doesNotMatch(repeated.summary, /\bref=/);
+  assert.equal(await callDirect(entryId, true), pair, "appended recovery calls/compactions do not move historical result pairs");
 
   // Pi's actual model-context projection may replace result content. Labels
-  // use the projected observation; references must never invent raw ENTRY ids.
+  // use the projected observation, not the raw branch's replaced content.
   const projectedManager = SessionManager.inMemory(root);
-  const projectedA = projectedManager.appendMessage(assistant([toolCall("bash", { command: "tmux show-buffer" }, "projected")], "toolUse"));
+  projectedManager.appendMessage(assistant([toolCall("bash", { command: "tmux show-buffer" }, "projected")], "toolUse"));
   const projectedT = projectedManager.appendMessage({ role: "toolResult", toolCallId: "projected", toolName: "bash", isError: false, content: [text("RAW_OBSERVATION")], timestamp: 0 });
   projectedManager.appendContextEdit(projectedT, { content: "PROJECTED_OBSERVATION" });
   const projectedTail = projectedManager.appendMessage(user("Projected tail"));
@@ -116,7 +116,7 @@ module.exports = async function (h) {
     preparation: { messagesToSummarize: selected, turnPrefixMessages: [], firstKeptEntryId: projectedTail, tokensBefore: 1000 } }, makeContext(projectedManager, root));
   const projectedLine = projectedResult.compaction.details.span.lines.find((l) => l.startsWith("[Tools]:"));
   assert(projectedLine.includes('output: "PROJECTED_OBSERVATION"') && !projectedLine.includes("RAW_OBSERVATION"));
-  assert(projectedLine.endsWith(`ref=${projectedA}`), "transformed result does not masquerade as a raw result entry");
+  assert.doesNotMatch(projectedLine, /\bref=/);
 
   console.log("== Related entry indexing: reverse results, id reuse, ambiguity, forks, and pagination ==");
   const m = SessionManager.inMemory(root);
@@ -130,7 +130,8 @@ module.exports = async function (h) {
   const rm = m.appendMessage(assistant([toolCall("bash", { command: "rm scratch.py" }, "rm")], "toolUse"));
   const tail = m.appendMessage(user("Use the old scratch code"));
   const old = await compact(ext, cx, [a, t2, t1, rm], tail);
-  assert(old.summary.includes(`write "scratch.py" (22 chars) ref=${t1}`), "write refs do not depend on a deletion heuristic");
+  assert(old.summary.includes('write "scratch.py" (22 chars)'));
+  assert.doesNotMatch(old.summary, /\bref=/);
   const writePair = await callDirect(t1, true, {}, cx);
   assert(writePair.includes("DELETED_SCRATCH_SOURCE") && writePair.includes("WROTE_SCRATCH"));
   assert(!writePair.includes("SIBLING_OUTPUT"), "a result does not pull unrelated sibling outputs");

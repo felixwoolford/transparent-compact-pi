@@ -76,13 +76,12 @@ Tool lines use compact signatures and head-only bash previews: the first 160
 encoded characters, followed by an ellipsis when truncated. Selected historical
 output observations (such as failing-test counts) replace misleading `[ok]` labels;
 an unlabelled call is not proof of success. Most output and detailed payloads are
-omitted. A `ref=ID` is only a locator for a raw session entry, not a citation or
-verification of a claim. When you need omitted details, use `context_lookup`;
-the ref can be included in the question to narrow the search. For a specific missing
-passage at a known ENTRY id/ref, `context_show_entry` can read the entry directly.
-For recovery of details hidden by compaction, start small and continue only if the
-detail is missing, incomplete, or needs more context to resolve ambiguity; stop once
-the question is answered. Do not expand surrounding history by default. A ref's absence makes no reproducibility claim. See [the rendering contract](docs/DESIGN.md#deterministic-checkpoint).
+omitted. When you need details hidden by compaction, ask `context_lookup` a specific
+historical question. Recovery results supply ENTRY ids for targeted follow-up;
+`context_show_entry` can read a specific passage at a known ENTRY id. Start small
+and continue only if the detail is missing, incomplete, or needs more context to
+resolve ambiguity; stop once the question is answered. Do not expand surrounding
+history by default. See [the rendering contract](docs/DESIGN.md#deterministic-checkpoint).
 
 File lists now distinguish source output retained in the recent tail, partial
 reads, and reads followed by tracked changes. Modified paths without retained
@@ -127,9 +126,8 @@ New sessions default to verbatim.
 ### Control the compaction cap
 
 When the checkpoint exceeds its budget, capping first tightens tool presentation:
-160→120→80-character previews, fewer low-priority refs, then grouped tool-only
-prefixes. Only if those stages cannot make it fit does it remove conversation
-content. `tools-tightened` marks presentation changes; `trimmed` marks actual
+160→120→80-character previews, then grouped tool-only prefixes. Only if those stages
+cannot make it fit does it remove conversation content. `tools-tightened` marks presentation changes; `trimmed` marks actual
 omissions. Earlier structured spans can be tightened in the new checkpoint without
 editing their stored originals; disabling the cap restores their normal rendering.
 Text-only legacy spans use a conservative fallback.

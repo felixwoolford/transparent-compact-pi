@@ -12,7 +12,7 @@ history, including recorded tool outputs and your reasoning, is preserved in the
 session and can be retrieved. Retained startup reads and the uncompacted tail
 remain available as evidence; recover only hidden information needed for the task.
 
-Under size pressure, `tools-tightened` on its own marks reduced tool previews/refs
+Under size pressure, `tools-tightened` on its own marks reduced tool previews
 or grouped tool-only lines, without omitted conversation prose or calls. If
 `trimmed` is also present, content was omitted or user text was shortened. Neither means that the original evidence
 was never recorded; recover task-relevant missing detail through the tools below.
@@ -30,7 +30,7 @@ This skill pairs with the `@foliox/transparent-compact-pi` extension, which prov
 
 - **Verbatim compaction** — a deterministic checkpoint retains user messages, assistant prose, and compact tool-call signatures. Thinking and most tool outputs are removed from the active model context, not from the raw session history. Selected startup read outputs remain verbatim in the checkpoint or uncompacted tail. Earlier spans are re-rendered flat, with recovery guidance before them and an evidence-boundary warning after them. Persistent task-relevant recovery reminders and a recap follow the retained tail; later compactions replace the old generated reminders rather than duplicating them. An inherited opaque base is kept when needed.
 - **`context_lookup`** — the preferred first step for this recovery workflow: a subagent searches the full raw session branch in its **own** context and returns relevant findings. At lookup time, the extension mechanically renders the branch into entry-anchored text with an authoritative entry/section index, in memory.
-- **Bounded direct tools** — use `context_show_entry` for a specific detail hidden by compaction at a known ENTRY id or checkpoint ref. If lookup findings are incomplete, use `context_list_entries` to locate an entry, `context_grep` to find a narrow passage, or `context_show_entry` to inspect a known entry. Their raw results enter this conversation; retrieve only what the question needs. For recovery of details hidden by compaction, these are the permitted direct tools, not filesystem access to session files.
+- **Bounded direct tools** — use `context_show_entry` for a specific detail hidden by compaction at a known ENTRY id returned by a recovery tool. If lookup findings are incomplete, use `context_list_entries` to locate an entry, `context_grep` to find a narrow passage, or `context_show_entry` to inspect a known entry. Their raw results enter this conversation; retrieve only what the question needs. For recovery of details hidden by compaction, these are the permitted direct tools, not filesystem access to session files.
 
 Pi normally saves sessions under `~/.pi/agent/sessions/`; custom session locations also work. In-memory sessions retain history only while the process lives and cannot be resumed after exit.
 
@@ -64,11 +64,9 @@ published source or our own computation? Include the observed output and ENTRY i
 context_lookup({ question: "What exact error did the earlier test run return for the N=7 case? Include the ENTRY id and observed tool output." })
 ```
 
-You may include a checkpoint `ref=ID` in the question to narrow the search. A ref
-is only a locator for a raw session entry, not a citation or verification of a claim.
-It does not supply omitted arguments/output or confirm an outcome. Its absence
-makes no claim about reproducibility. If you already know the ENTRY id and only
-need a specific passage, `context_show_entry` can read that entry directly. Prefer
+You may include an ENTRY id from an earlier recovery result in the question to
+narrow the search. If you already know the ENTRY id and only need a specific
+passage, `context_show_entry` can read that entry directly. Prefer
 `context_lookup` when search or interpretation is needed. For post-compaction
 recovery, continue paging only if the requested detail is missing, incomplete, or
 needs more context to resolve ambiguity; stop once the question is answered.

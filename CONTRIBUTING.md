@@ -38,10 +38,9 @@ checks local dependencies and global npm installations.
   visible write payloads, later mutations, context edits, startup reads, and repeated
   compaction. Actual SDK requests cover both retained-source and plan-only tails.
 - Skill validation and agreement with the question-only lookup contract.
-- Compact stub rendering, head-only command previews, lookup-first framing,
-  conservative historical
-  output labels, and direct call/result refs. Synthetic regressions cover tiny
-  outputs versus truncated/media results, read/search false positives, deleted
+- Compact stub rendering without inline entry locators, head-only command previews,
+  lookup-first framing, and conservative historical output labels. Synthetic
+  regressions cover tiny outputs versus truncated/media results, read/search false positives, deleted
   scratch payload recovery, repeated compaction, related-entry pagination, reverse
   results, reused/ambiguous IDs, and branch scoping. These test mechanics, not
   live-model recovery quality.
@@ -54,7 +53,7 @@ checks local dependencies and global npm installations.
   incomplete markers, fallback guidance, pagination, and long/empty responses.
 - Default-budget retention, small-budget termination, and cross-span size guards.
   Pure progressive-cap tests cover every presentation rung before omission, early
-  stopping, immutable canonical records, Unicode prefix boundaries, protected refs and
+  stopping, immutable canonical records, Unicode prefix boundaries, protected
   outcomes, opaque legacy/future records, and independently removable grouped calls.
   Session integration covers retroactive span rendering, cap-off restoration, and
   metadata round-trips through resume/fork. The module lives under `extensions/lib/`
@@ -95,8 +94,8 @@ TC_BASELINE_REF=81aa585e node scripts/tool-stub-replay.cjs /path/to/session.json
 
 Choose the pre-change baseline commit (`HEAD` by default). This rebuilds both
 renderers at recorded active-branch cut points with capping disabled, checks prose
-and reference preservation, and smoke-tests paginated call/result recovery. It
-writes before/after checkpoints and a JSON report into a private temporary directory
+and line preservation plus tool-call coverage, and writes before/after checkpoints
+and a JSON report into a private temporary directory
 (or `--out DIR`). Artifacts contain session content: do not commit or share them
 without approval. Measurements are characters, not tokens or live-model outcomes;
 recorded tool commands are never executed and input files remain byte-identical.

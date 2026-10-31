@@ -6,8 +6,7 @@ module.exports = async function (h) {
   const { jiti, root, ext, SessionManager, compact, makeContext, assistant, toolCall, text, user, saveSession } = h;
   const { capSpans, commandPreview, renderCommand, renderToolLine } = await jiti.import(path.resolve(__dirname, "../extensions/lib/checkpoint-cap.ts"));
   console.log("== Progressive cap: presentation rungs precede omissions; canonical records stay immutable ==");
-  const command = (value, { ref, retainRef = true, suffix = "" } = {}) => ({ prefix: "bash ", command: commandPreview(JSON.stringify(value)),
-    suffix, retainRef, ...(ref ? { ref } : {}) });
+  const command = (value, { suffix = "" } = {}) => ({ prefix: "bash ", command: commandPreview(JSON.stringify(value)), suffix });
   const longA = "cat " + "a".repeat(500) + "/OLDER_TARGET";
   const longB = "cat " + "b".repeat(500) + "/NEWER_TARGET";
   const span = (entries) => {
@@ -23,8 +22,8 @@ module.exports = async function (h) {
   };
   const chars = (spans) => spans.reduce((n, s) => n + s.lines.reduce((m, l) => m + l.length + 1, 0), 0);
   const freeze = (v) => { if (v && typeof v === "object") { Object.values(v).forEach(freeze); Object.freeze(v); } return v; };
-  const original = freeze([span(["[User]: KEEP_USER", "[Assistant]: KEEP_PROSE", { calls: [command(longA, { ref: "older" })] }]),
-    span([{ calls: [command(longB, { ref: "newer" })] }, "[User]: KEEP_RECENT"])]);
+  const original = freeze([span(["[User]: KEEP_USER", "[Assistant]: KEEP_PROSE", { calls: [command(longA)] }]),
+    span([{ calls: [command(longB)] }, "[User]: KEEP_RECENT"])]);
   const pristine = JSON.stringify(original);
   const normal = capSpans(original, chars(original));
   assert.deepEqual(normal.lines, original.map((s) => s.lines));
@@ -45,14 +44,12 @@ module.exports = async function (h) {
   assert.equal(JSON.stringify(original), pristine);
   assert.deepEqual(capSpans(original, chars(original) - 20), mild, "a later larger budget does not inherit an 80-char presentation");
 
-  const refs = freeze([span([{ calls: [command("cat file", { ref: "ordinary", retainRef: false,
-    suffix: ' [unknown] → output: "no buffers"' }), command("python probe.py", { ref: "protected" })] }])]);
-  const thin = capSpans(refs, chars(refs) - 1);
-  assert(!thin.lines[0][0].includes("ref=ordinary") && thin.lines[0][0].includes("ref=protected"));
-  assert(thin.lines[0][0].includes('[unknown] → output: "no buffers"'), "never shorten statuses or output observations");
-  assert.deepEqual(thin.trimmed, [false]);
+  const observed = freeze([span([{ calls: [command(longA, { suffix: ' [unknown] → output: "no buffers"' })] }])]);
+  const shortened = capSpans(observed, chars(observed) - 1);
+  assert(shortened.lines[0][0].includes('[unknown] → output: "no buffers"'), "never shorten statuses or output observations");
+  assert.deepEqual(shortened.trimmed, [false]);
 
-  const adjacent = freeze([span([{ calls: [command("one", { ref: "one" })] }, { calls: [command("two", { ref: "two" })] }])]);
+  const adjacent = freeze([span([{ calls: [command("one")] }, { calls: [command("two")] }])]);
   const grouped = capSpans(adjacent, chars(adjacent) - 1);
   assert.equal(grouped.lines[0].length, 1);
   assert.equal(grouped.lines[0][0], adjacent[0].lines[0] + "; " + adjacent[0].lines[1].slice("[Tools]: ".length));
@@ -66,7 +63,7 @@ module.exports = async function (h) {
   const separated = freeze([span([{ calls: [command("one")] }, "[Assistant]: separator", { calls: [command("two")] }])]);
   assert(!capSpans(separated, chars(separated) - 1).lines[0].some((l) => l.includes('"one"; bash "two"')));
 
-  const calls = [command("first", { ref: "first" }), command("second", { ref: "second" }), command("last", { ref: "last" })];
+  const calls = [command("first"), command("second"), command("last")];
   const batch = freeze([span(["[User]: KEEP", { calls }])]);
   const lastOnly = chars([span(["[User]: KEEP", { calls: [calls[2]] }])]);
   const dropped = capSpans(batch, lastOnly);
@@ -75,7 +72,7 @@ module.exports = async function (h) {
   assert(dropped.lines[0].includes("[User]: KEEP"));
   assert(chars(dropped.lines.map((lines) => ({ lines }))) <= lastOnly);
 
-  const legacy = freeze([{ lines: ['[Tools]: bash "legacy long command ' + "x".repeat(300) + '" ref=legacy', "[User]: KEEP"] }]);
+  const legacy = freeze([{ lines: ['[Tools]: bash "legacy long command ' + "x".repeat(300) + '"', "[User]: KEEP"] }]);
   const legacyResult = capSpans(legacy, chars(legacy) - 1);
   assert.deepEqual(legacyResult.tightened, [false], "text-only spans are opaque, not parsed as new tool metadata");
   assert.deepEqual(legacyResult.trimmed, [true]);
@@ -107,31 +104,24 @@ module.exports = async function (h) {
   assert(!JSON.stringify(hiddenMiddle).includes("ZZZZ"), "new records do not preserve a command tail");
   assert.deepEqual(capSpans(original, 0).lines, [[], []], "the final fallback still terminates below tiny budgets");
 
-  console.log("== Progressive ref priorities: only recognizable local views are thinned ==");
-  const priorities = SessionManager.inMemory(root);
-  priorities.appendCustomEntry("transparent-compact:cap-compaction", { mode: "off", budget: { unit: "chars", value: 80000 } });
-  const file = "directory/".repeat(30) + "file.txt";
-  const candidates = [
-    [`cat ${file}`, false], [`cd . && sed -n '1,20p' ${file} | head -20`, false], [`git show HEAD:${file}`, false],
-    [`cat ${file}; curl https://example.invalid`, true], [`cat ${file} | python -c 'print(1)'`, true],
-    [`sed -n -i 'p' ${file}`, true], [`git diff --output=${file}`, true], [`cat $(curl https://example.invalid)/${file}`, true],
-    [`cat ${file} && rm x`, true], [`echo probe && curl https://example.invalid/${file}`, true],
-  ];
-  const priorityIds = [];
-  for (const [i, [cmd]] of candidates.entries()) {
-    priorityIds.push(priorities.appendMessage(assistant([toolCall("bash", { command: cmd }, `priority-${i}`)], "toolUse")));
-    priorityIds.push(priorities.appendMessage({ role: "toolResult", toolName: "bash", toolCallId: `priority-${i}`, isError: false, content: [text("output")], timestamp: 0 }));
+  console.log("== Tool display records contain only bounded presentation ==");
+  const displays = SessionManager.inMemory(root);
+  displays.appendCustomEntry("transparent-compact:cap-compaction", { mode: "off", budget: { unit: "chars", value: 80000 } });
+  const displayIds = [displays.appendMessage(assistant([
+    toolCall("read", { path: "source.ts" }, "read"),
+    toolCall("write", { path: "scratch.py", content: "PRIVATE_PAYLOAD_NOT_IN_CAP_RECORDS" }, "write"),
+    toolCall("edit", { path: "source.ts", oldText: "PRIVATE_OLD_TEXT", newText: "PRIVATE_NEW_TEXT" }, "edit"),
+    toolCall("bash", { command: longA }, "bash"),
+  ], "toolUse"))];
+  const displayTail = displays.appendMessage(user("Tail"));
+  const checkpoint = await compact(ext, makeContext(displays, root), displayIds, displayTail);
+  const displayCalls = checkpoint.details.span.tools.lines.flatMap((line) => line.calls);
+  assert.equal(displayCalls.length, 4);
+  for (const call of displayCalls) {
+    assert.deepEqual(Object.keys(call).sort(), call.command ? ["command", "prefix", "suffix"] : ["prefix", "suffix"]);
   }
-  priorityIds.push(priorities.appendMessage(assistant([toolCall("write", { path: "scratch.py", content: "PRIVATE_PAYLOAD_NOT_IN_CAP_RECORDS" }, "payload")], "toolUse")));
-  const priorityTail = priorities.appendMessage(user("Tail"));
-  const priorityCheckpoint = await compact(ext, makeContext(priorities, root), priorityIds, priorityTail);
-  const priorityCalls = priorityCheckpoint.details.span.tools.lines.flatMap((line) => line.calls);
-  for (let i = 0; i < candidates.length; i++) {
-    assert(priorityCalls[i].ref, "a full truncated-command ref is stored before capping");
-    assert.equal(priorityCalls[i].retainRef, candidates[i][1], candidates[i][0]);
-  }
-  assert(priorityCalls.at(-1).retainRef, "scratch payload refs stay protected");
-  assert(!JSON.stringify(priorityCheckpoint.details.span).includes("PRIVATE_PAYLOAD_NOT_IN_CAP_RECORDS"));
+  assert.doesNotMatch(checkpoint.summary, /\bref=/);
+  assert.doesNotMatch(JSON.stringify(checkpoint.details.span), /PRIVATE_PAYLOAD_NOT_IN_CAP_RECORDS|PRIVATE_OLD_TEXT|PRIVATE_NEW_TEXT/);
 
   console.log("== Progressive cap integration: retroactive rendering, immutable history, resume/fork, and cap-off restoration ==");
   const manager = SessionManager.inMemory(root);
@@ -168,7 +158,7 @@ module.exports = async function (h) {
   manager.appendCustomEntry("transparent-compact:cap-compaction", { mode: "off", budget: { unit: "chars", value: lineSize } });
   const final = manager.appendMessage(user("Uncapped tail"));
   const restored = await compact(ext, ctx, [next], final);
-  for (const line of first.details.span.lines) assert(restored.summary.includes(line), "restore full 160-char lines and refs from canonical metadata");
+  for (const line of first.details.span.lines) assert(restored.summary.includes(line), "restore full 160-char lines from canonical metadata");
   assert(!restored.summary.includes('tools-tightened="true"') && !restored.summary.includes('trimmed="true"'));
   assert.equal(JSON.stringify(manager.getEntry(first.id).details), canonical);
 };

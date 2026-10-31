@@ -17,6 +17,11 @@ function checkCurrentRecoveryLanguage(content) {
     "current instructions and packaged resources must not advertise obsolete recovery interfaces");
 }
 
+function checkRefFreeRecoveryLanguage(content) {
+  assert.doesNotMatch(content, /\brefs?\b|ref=/i,
+    "current recovery guidance must not advertise checkpoint refs");
+}
+
 function checkRecoveryTriggers(content) {
   for (const pattern of [/where an earlier finding came from/i, /what a command actually printed/i,
     /why you reached a conclusion/i, /earlier notes conflict with new evidence/i])
@@ -34,8 +39,11 @@ module.exports = function (h) {
   const { ext, factory, load, SessionManager, root, makeContext, user } = h;
   console.log("== Recovery guidance: hidden history, provenance, contradictions, and source choice (no live-model compliance claim) ==");
   const lookup = ext.tools.context_lookup;
-  for (const tool of Object.values(ext.tools))
-    checkCurrentRecoveryLanguage(JSON.stringify({ description: tool.description, promptSnippet: tool.promptSnippet, parameters: tool.parameters }));
+  for (const tool of Object.values(ext.tools)) {
+    const advertisement = JSON.stringify({ description: tool.description, promptSnippet: tool.promptSnippet, parameters: tool.parameters });
+    checkCurrentRecoveryLanguage(advertisement);
+    checkRefFreeRecoveryLanguage(advertisement);
+  }
   checkFilesystemScope(lookup.description);
   assert(lookup.description.startsWith("Retrieve earlier outputs, findings, decisions, and reasoning hidden by compaction"),
     "lead with compaction-aware recovery, not generic recall");
@@ -63,7 +71,7 @@ module.exports = function (h) {
     assert.match(tool.description, /compaction|compacted/, `${tool.name}: description explains compaction recovery`);
     assert.match(tool.promptSnippet, /compaction/, `${tool.name}: snippet explains compaction recovery`);
   }
-  assert.match(lookup.parameters.properties.question.description, /checkpoint ref or ENTRY id.*locator, not verification/);
+  assert.match(lookup.parameters.properties.question.description, /ENTRY id from an earlier recovery result/);
 
   for (const name of ["context_list_entries", "context_grep", "context_show_entry"]) {
     const tool = ext.tools[name];
@@ -78,7 +86,7 @@ module.exports = function (h) {
   }
   assert(ext.tools.context_show_entry.parameters.properties.includeRelated);
   assert.match(ext.tools.context_show_entry.description, /matched tool call\/result entries/);
-  assert.match(ext.tools.context_show_entry.description, /checkpoint ref or search result; a ref is a location, not verification/);
+  assert.match(ext.tools.context_show_entry.description, /ENTRY id returned by context_lookup, context_grep, or context_list_entries/);
   assert.match(ext.tools.context_show_entry.description, /Start with a small maxLines/);
   assert.match(ext.tools.context_show_entry.description, /use it only if the counterpart is needed/);
   assert.match(ext.tools.context_show_entry.description, /do not expand surrounding history by default/);
@@ -103,13 +111,13 @@ module.exports = function (h) {
     "skill advertisement explains what reading it teaches");
   assert.doesNotMatch(description, /read before|must read|always read/i, "no mandatory preflight skill read");
   checkRecoveryTriggers(skill);
+  checkRefFreeRecoveryLanguage(skill);
   assert.doesNotMatch(skill, /before repeating the\s+investigation/i,
     "skill does not mandate lookup before ordinary investigation");
   checkFilesystemScope(skill);
   assert(skill.includes("**`context_lookup`** — the preferred first step"));
-  assert(skill.includes("You may include a checkpoint `ref=ID` in the question"));
-  assert.doesNotMatch(skill, /marks? useful historical evidence|otherwise prefer `context_lookup`|without a known ref/i);
-  assert.match(skill, /already know the ENTRY id and only\s+need a specific passage/);
+  assert.match(skill, /You may include an ENTRY id from an earlier recovery result/);
+  assert.match(skill, /already know the ENTRY id and only need a specific\s+passage/);
   assert.match(skill, /stop once the question is answered/);
   assert.match(skill, /For recovery of details hidden by compaction, these are the permitted direct tools/);
   assert.match(skill, /missing, incomplete, or\s+needs more context to resolve ambiguity/);

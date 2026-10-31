@@ -22,8 +22,8 @@ New tool lines use `[Tools]:` with compact display signatures:
 
 ```text
 read "src/example.ts":12-41
-write "scratch.py" (2144 chars) ref=0123abcd
-edit "src/example.ts" ×2 ref=4567abcd
+write "scratch.py" (2144 chars)
+edit "src/example.ts" ×2
 bash "uv run pytest -q 2>&1 | tail -25" → output: "3 failed, 16 passed in 0.21s"
 ```
 
@@ -59,25 +59,15 @@ complete observations. Every quote is escaped and bounded. All observations are
 historical, not proof of current state; assistant prose remains a record of claims,
 not independent verification.
 
-`ref=ID` supplies an existing raw ENTRY id for write/edit payloads and for bash
-commands that are truncated or have a positive historical-observation hint. It is
-only a locator for that raw entry, not a citation or verification of a claim. It
-does not supply omitted arguments/output or confirm an outcome. Its absence makes
-no reproducibility claim.
-Write/edit refs do not depend on inferring later deletion or filesystem state.
-A ref normally points at the matched result, identifying one call in a batch; an
-unmatched call can point at its assistant entry. IDs are assigned only by object
-identity with raw branch entries, never by guessing from command text or timestamps.
-Projected replacement content can therefore lack a ref. Only selected preparation
-messages supply output labels; raw history and the retained tail do not supply
-missing outcomes. Stored canonical span lines remain unchanged; their presentation
-in a later checkpoint may tighten under budget pressure.
+Only selected preparation messages supply output labels; raw history and the
+retained tail do not supply missing outcomes. Stored canonical span lines remain
+unchanged; their presentation in a later checkpoint may tighten under budget pressure.
 
 When omitted observations, payloads, or provenance are needed, prefer
-`context_lookup` with a specific historical question. A known ref may be included
-in the question to narrow the search; its presence does not replace retrieval.
-For a specific missing passage at a known ENTRY id/ref, `context_show_entry` can
-read that entry directly; search or interpretation remains a `context_lookup` task.
+`context_lookup` with a specific historical question. Recovery results supply
+ENTRY ids for targeted follow-up. For a specific missing passage at a known ENTRY
+id, `context_show_entry` can read that entry directly; search or interpretation
+remains a `context_lookup` task.
 The list/grep tools remain fallbacks when lookup findings are incomplete. For
 current state, inspect files. There is no required-document reread checklist.
 
@@ -165,16 +155,12 @@ across all eligible spans, stopping as soon as the budget fits:
 
 1. Shorten bash previews from 160 to 120 encoded characters.
 2. If still over budget, shorten them to 80 characters.
-3. Remove lower-priority refs from positively recognizable local read/view
-   commands or pipelines. Preserve refs on writes/edits, external probes,
-   terminal interactions, scripts, timings, and unknown shell shapes. This is
-   a priority heuristic, not a claim that unreferenced evidence is reproducible.
-4. Fold repeated `[Tools]:` prefixes across adjacent tool-only messages in the
+3. Fold repeated `[Tools]:` prefixes across adjacent tool-only messages in the
    same span. Do not cross prose, custom messages, user messages, or span boundaries.
-5. Only then remove non-user content, oldest first. Structured tool batches remain
+4. Only then remove non-user content, oldest first. Structured tool batches remain
    independently trimmable by call even after prefixes have been folded.
-6. Shorten long user messages to marked prefix stubs, oldest first.
-7. As a last resort, remove the oldest remaining content, including user messages.
+5. Shorten long user messages to marked prefix stubs, oldest first.
+6. As a last resort, remove the oldest remaining content, including user messages.
 
 File paths, read ranges, tool status, and output observations are not shortened by
 presentation stages. User and assistant prose remains verbatim until the destructive
@@ -184,14 +170,14 @@ text shortening. Both attributes can occur on one span. Empty spans are not mark
 unless they became empty through omission.
 
 New spans store versioned, bounded display records in `details.span.tools`, alongside
-their normal uncapped `lines`. Records contain signature fragments, the original
-encoded command prefixes, annotations, and ref priorities—not unbounded commands,
-write/edit payloads, or full tool outputs. Smaller previews are always derived from
+their normal uncapped `lines`. Records contain signature fragments, original encoded
+command prefixes, and annotations—not unbounded commands, write/edit payloads, or
+full tool outputs. Smaller previews are always derived from
 the same canonical prefix, never from a previous 120/80-character rendering.
 Version-2 records distinguish a truncated prefix from a complete short command.
 Stored compaction entries are not edited: a later checkpoint re-renders its earlier
 spans for the current budget. Increasing the budget or disabling the cap restores
-normal previews and refs; reload/resume/fork follow the active branch's records.
+normal previews; reload/resume/fork follow the active branch's records.
 
 Only records that exactly reproduce the stored canonical tool line can be tightened.
 Legacy text-only spans, unsupported versions, and malformed/mismatched records stay
@@ -286,7 +272,7 @@ The extension registers a subagent lookup and three bounded direct-recovery tool
 | `context_lookup` | Recover details hidden by compaction: earlier outputs, decisions, reasoning, and provenance, including conflicts with new evidence or uncertainty about what happened. A subagent searches the raw branch and returns focused findings. Accepts only `question`. |
 | `context_list_entries` | Post-compaction fallback: locate an entry when its location is unknown, not reread the conversation. |
 | `context_grep` | Post-compaction fallback: find a narrow passage in raw history, including thinking and tool outputs. |
-| `context_show_entry` | Recover a specific detail hidden by compaction at a known ENTRY id/ref, or after lookup. Optional `includeRelated` recovers matched call/result entries only when that counterpart is needed. |
+| `context_show_entry` | Recover a specific detail hidden by compaction at a known ENTRY id, or after lookup. Optional `includeRelated` recovers matched call/result entries only when that counterpart is needed. |
 
 For example, ask the agent to recover the build error observed before compaction.
 It can call `context_lookup` with:
@@ -297,10 +283,9 @@ It can call `context_lookup` with:
 }
 ```
 
-A checkpoint `ref=ID` can be supplied as a hint in a `context_lookup` question;
-it is not a reason to treat the compacted stub as a verified source. If the ENTRY
-id is already known and only a specific passage is needed, `context_show_entry`
-can inspect it directly. Prefer lookup when search or interpretation is needed.
+ENTRY ids returned by recovery tools can narrow subsequent `context_lookup`
+questions or identify a specific passage for `context_show_entry`. Prefer lookup
+when search or interpretation is needed.
 The advertisements ask for a small first page, little grep context, and continuation
 only while the requested detail is missing, incomplete, or needs more context to
 resolve ambiguity; stop once the question is answered. A partial search does not

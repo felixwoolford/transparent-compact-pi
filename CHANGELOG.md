@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.9.2
+
+- Remove inline checkpoint refs, their selection heuristics, stored locator/priority
+  fields, the ref-thinning cap stage, and associated prompting and replay metrics.
+  Keep compaction-aware, focused recovery tools and ENTRY ids returned by recovery
+  results for targeted follow-up. Keep output observations, head-only previews,
+  preview tightening, tool-only prefix folding, and destructive cap behavior.
+  No migration or compatibility handling for saved checkpoints is added.
+
 ## 0.9.1
 
 - Keep recovery tool advertisements explicitly compaction-aware while adding

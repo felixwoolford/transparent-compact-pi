@@ -492,7 +492,7 @@ function argumentSnippet(value: unknown): string {
 function toolSignature(name: string, args: Record<string, unknown> | undefined, cwd: string): ToolStub {
   const a = args ?? {};
   if (!["read", "write", "edit", "bash"].includes(name))
-    return { prefix: `${name}(${Object.entries(a).map(([k, v]) => `${k}=${argumentSnippet(v)}`).join(", ")})`, suffix: "", retainRef: true };
+    return { prefix: `${name}(${Object.entries(a).map(([k, v]) => `${k}=${argumentSnippet(v)}`).join(", ")})`, suffix: "" };
   const parts: string[] = [];
   let command: ToolStub["command"];
   const fileTool = ["read", "write", "edit"].includes(name) && typeof a.path === "string";
@@ -519,16 +519,16 @@ function toolSignature(name: string, args: Record<string, unknown> | undefined, 
       parts.push(`${k}=<${v.length} chars>`);
     else parts.push(`${k}=${argumentSnippet(v)}`);
   }
-  return command ? { prefix: `${base} `, command, suffix: parts.length ? ` ${parts.join(" ")}` : "", retainRef: true }
-    : { prefix: [base, ...parts].join(" "), suffix: "", retainRef: true };
+  return command ? { prefix: `${base} `, command, suffix: parts.length ? ` ${parts.join(" ")}` : "" }
+    : { prefix: [base, ...parts].join(" "), suffix: "" };
 }
 
 function toolCallSignature(name: string, args: Record<string, unknown> | undefined, cwd: string): string {
   return renderToolStub(toolSignature(name, args, cwd));
 }
 
-// These are positive salience hints, not a reproducibility classifier. Do not
-// parse shell syntax or claim unreferenced evidence still exists elsewhere.
+// Conservative lexical categories for selected output observations. These do
+// not parse shell syntax or establish whether a command succeeded.
 function commandHints(command: string): { tests: boolean; network: boolean; historical: boolean } {
   const core = command.replace(/^\s*cd\s+(?:"[^"\n]*"|'[^'\n]*'|[^\s;&|]+)\s*&&\s*/, "").trimStart();
   const tests = /^(?:(?:uv run |(?:\S*\/)?python[\d.]* -m )?pytest\b|(?:\S*\/)?pytest\b|(?:npm|pnpm|yarn) (?:run )?(?:test|build)\b|node --test\b|(?:\.\/)?gradlew\b|cargo (?:test|build)\b|go (?:test|build)\b|dotnet (?:test|build)\b|mvn (?:test|verify|package)\b)/.test(core);
@@ -539,15 +539,6 @@ function commandHints(command: string): { tests: boolean; network: boolean; hist
     /^(?:uv run )?(?:\S*\/)?(?:python[\d.]*|node)\b/.test(core) ||
     /^(?:time|hyperfine)\b|\b(?:bench(?:mark)?|timeit)\b/.test(core));
   return { tests, network, historical };
-}
-
-// Only positively recognizable local read/view pipelines get lower-priority
-// refs. Unknown shell syntax, external probes, scripts, and all mutations keep
-// theirs. This is a rendering priority, never a claim of reproducibility.
-function lowPriorityRef(command: string): boolean {
-  const core = command.replace(/^\s*cd\s+(?:"[^"\n]*"|'[^'\n]*'|[^\s;&|]+)\s*&&\s*/, "").trim();
-  if (/[;&\n<>`]|\$\(|\|\||--pre\b|--ext-diff\b|--output\b|--in-place\b|(?:^|\s)-\w*i\w*\b/.test(core)) return false;
-  return core.split("|").every((part) => /^\s*(?:(?:cat|head|tail|grep|rg|wc|ls|pwd)\b|sed\s+-n\b|git\s+(?:status|diff|log|show)\b)/.test(part));
 }
 
 function observationQuote(text: string): string {
@@ -616,22 +607,8 @@ function bashOutputLabel(command: string, result: Record<string, any>): string {
   return labels.join("; ");
 }
 
-function summarizeMessages(messages: AgentMessage[], cwd: string, entries: SessionEntry[]): SpanContent {
+function summarizeMessages(messages: AgentMessage[], cwd: string): SpanContent {
   const results = pairedToolResults(messages);
-  // Identity matching fails closed for projected replacements and synthetic
-  // messages. Never guess an ENTRY id from a repeated command or timestamp.
-  const entryIds = new Map<object, string>();
-  const callEntries = new Map<object, string>();
-  const rawMessages: AgentMessage[] = [];
-  for (const entry of entries) {
-    if (entry.type !== "message") continue;
-    entryIds.set(entry.message, entry.id);
-    rawMessages.push(entry.message);
-    if (entry.message.role === "assistant")
-      for (const block of entry.message.content ?? [])
-        if (block.type === "toolCall") callEntries.set(block, entry.id);
-  }
-  const rawResults = pairedToolResults(rawMessages);
   const lines: string[] = [];
   const tools: ToolLines = { version: 2, lines: [] };
   for (const msg of messages) {
@@ -653,17 +630,8 @@ function summarizeMessages(messages: AgentMessage[], cwd: string, entries: Sessi
             const status = typeof result?.isError !== "boolean" ? " [unknown]" : result.isError ? " [tool error]" : "";
             const command = name === "bash" && typeof args.command === "string" ? args.command : undefined;
             const label = result && command !== undefined ? bashOutputLabel(command, result) : "";
-            const needsRef = name === "write" || name === "edit" || (command !== undefined &&
-              (JSON.stringify(checkpointCommand(command, cwd)).length > cfg.argSnippetChars || commandHints(command).historical));
-            // Results identify one call even when the assistant made a batch.
-            // Otherwise the assistant ENTRY still preserves the full arguments.
-            const ref = needsRef && callEntries.has(block)
-              ? (result && rawResults.get(block) === result ? entryIds.get(result) : undefined) ?? callEntries.get(block)
-              : undefined;
             const stub = toolSignature(name, args, cwd);
             stub.suffix += status + (label ? ` → ${label}` : "");
-            if (ref) stub.ref = ref;
-            stub.retainRef = command === undefined || !lowPriorityRef(command);
             calls.push(stub);
           }
           // thinking blocks: removed by design (kept in the session)
@@ -1128,8 +1096,7 @@ async function buildMechanicalSummary(opts: {
   parts.push(`- Latest: ${opts.now} (trigger: ${opts.reason}, ~${opts.tokensBefore.toLocaleString()} tokens before compaction)`);
   parts.push("- In the compacted spans, user and assistant prose is kept verbatim, subject to budget trimming. Retained prose is a record of what was said, not verification of its claims. Tool signatures are display notation, not replayable shell commands: paths under the working directory become relative (`.` in commands); read ranges are requested lines; write/edit payloads become sizes/counts. New bash previews keep the first 160 encoded characters, followed by … when truncated, with escaped newlines. Thinking and most output are removed; selected output observations remain after →.");
   parts.push("- [tool error] means the result was flagged as an error; [unknown] means no safely matched result/status. Unlabelled does NOT establish exit 0 or passing tests. → exit N is a reported shell status; output: quotes/extracts selected output, not an inferred verdict. Everything shown is historical. Legacy [ok] only means not flagged as a tool error; legacy calls without status are unknown.");
-  parts.push("- ref=ID is only a locator for a raw session entry, not a citation or verification of a claim. It does not supply omitted arguments/output or confirm an outcome. You may include it in a `context_lookup` question to narrow the search. No ref makes no claim about reproducibility.");
-  parts.push("- Under size pressure, `tools-tightened` marks 120/80-character previews, fewer low-priority refs, or grouped tool-only lines. Conversation prose and tool calls are retained unless `trimmed` is also marked. Tightening stops as soon as the budget fits; outcome observations and identifying file paths are not shortened by these stages.");
+  parts.push("- Under size pressure, `tools-tightened` marks 120/80-character previews or grouped tool-only lines. Conversation prose and tool calls are retained unless `trimmed` is also marked. Tightening stops as soon as the budget fits; outcome observations and identifying file paths are not shortened by these stages.");
   parts.push("- Newly compacted custom messages are kept only as type stubs (long types abbreviated); their content is removed and remains recoverable in the session through context_lookup. Stored canonical spans are unchanged; their presentation may tighten under the cap.");
   parts.push(
     "- pi keeps the most recent part of the conversation verbatim (its `keepRecentTokens` setting). The spans below cover only what came *before* that. The retained verbatim conversation begins after the explicit boundary marker at the end of this checkpoint.",
@@ -1681,8 +1648,8 @@ function registerDirectTools(pi: ExtensionAPI): void {
   pi.registerTool({
     name: "context_show_entry",
     label: "Context: show entry",
-    description: "Read a known raw session entry to recover a specific detail hidden by compaction. Use an ENTRY id from a checkpoint ref or search result; a ref is a location, not verification. Prefer context_lookup when search or interpretation is needed; same scope as context_lookup. Start with a small maxLines. Optional includeRelated=true includes matched tool call/result entries; use it only if the counterpart is needed. Returns up to 24000 payload characters and maxLines lines per page, plus attribution/cursor notes; a page may not contain the entire entry. Continue with the reported offset only if the requested detail is missing, incomplete, or needs more context to resolve ambiguity, keeping includeRelated unchanged. Stop once the question is answered; do not expand surrounding history by default.",
-    promptSnippet: "Recover a specific detail hidden by compaction at a known ENTRY id or checkpoint ref in this conversation.",
+    description: "Read a known raw session entry to recover a specific detail hidden by compaction. Use an ENTRY id returned by context_lookup, context_grep, or context_list_entries. Prefer context_lookup when search or interpretation is needed; same scope as context_lookup. Start with a small maxLines. Optional includeRelated=true includes matched tool call/result entries; use it only if the counterpart is needed. Returns up to 24000 payload characters and maxLines lines per page, plus attribution/cursor notes; a page may not contain the entire entry. Continue with the reported offset only if the requested detail is missing, incomplete, or needs more context to resolve ambiguity, keeping includeRelated unchanged. Stop once the question is answered; do not expand surrounding history by default.",
+    promptSnippet: "Recover a specific detail hidden by compaction at a known ENTRY id in this conversation.",
     parameters: Type.Object(SHOW_FIELDS),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       return run(ctx, (t) => showEntry(t, params));
@@ -1854,7 +1821,7 @@ export default function (pi: ExtensionAPI) {
       const msgTs = (m: AgentMessage): unknown => (m as unknown as { timestamp?: unknown }).timestamp;
       const spanFrom = toIso(msgTs(allMessages[0]));
       const spanTo = toIso(msgTs(allMessages[allMessages.length - 1]));
-      const span = summarizeMessages(allMessages, ctx.cwd, branchEntries);
+      const span = summarizeMessages(allMessages, ctx.cwd);
       const spanLines = span.lines;
 
       // 3) Freeze startup references after the second user prompt, then carry
@@ -1919,7 +1886,7 @@ export default function (pi: ExtensionAPI) {
       `Retrieve earlier outputs, findings, decisions, and reasoning hidden by compaction when you need an exact detail or are unsure what you previously did, observed, or decided. Ask where an earlier finding came from, what a command actually printed, or why you reached a conclusion, especially when earlier notes conflict with new evidence. Ask a specific historical question—for example, "What exact command did I use?", "Did that check actually pass?", or "Why did I reject that approach?" A subagent searches this conversation's full raw active branch in its own context and returns focused findings rather than the transcript. ${RECOVERY_SOURCE_GUIDANCE} ${RECOVERY_SCOPE_RULE} If findings are incomplete, use context_list_entries, context_grep, or context_show_entry for the specific detail still missing, following their pagination instructions only as needed to answer the question. ${RECOVERY_FILESYSTEM_RULE}`,
     promptSnippet: "Recover outputs, decisions, reasoning, and provenance hidden by compaction; check earlier details when unsure.",
     parameters: Type.Object({
-      question: Type.String({ description: "A specific question about earlier details hidden by compaction in this conversation, phrased in ordinary language: an output, source of a finding, reason for a decision, or evidence behind notes that conflict with new observations. You may include a checkpoint ref or ENTRY id to narrow the search; it is a locator, not verification." }),
+      question: Type.String({ description: "A specific question about earlier details hidden by compaction in this conversation, phrased in ordinary language: an output, source of a finding, reason for a decision, or evidence behind notes that conflict with new observations. You may include an ENTRY id from an earlier recovery result to narrow the search." }),
     }),
     async execute(toolCallId, params, signal, _onUpdate, ctx) {
       if (cfg.lookupMaxCalls > 0 && consecutiveLookups(ctx, toolCallId) >= cfg.lookupMaxCalls) {

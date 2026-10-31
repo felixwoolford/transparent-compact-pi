@@ -31,10 +31,10 @@ function activeBranch(byId, tip) {
 }
 
 function loadExtension(factory) {
-  const handlers = {}, tools = {};
+  const handlers = {};
   factory({ on: (name, handler) => { handlers[name] = handler; },
-    registerTool: (tool) => { tools[tool.name] = tool; }, registerCommand: () => {} });
-  return { handlers, tools };
+    registerTool: () => {}, registerCommand: () => {} });
+  return { handlers };
 }
 
 async function replay(ext, rows, buildSessionProjection) {
@@ -70,7 +70,7 @@ async function replay(ext, rows, buildSessionProjection) {
     callCounts.set(original.id, ownCalls);
     byId.set(original.id, { ...original, summary: c.summary, details: c.details });
     const spans = [...branch.filter((e) => e.type === "compaction" && e.details?.span).map((e) => e.details.span), c.details.span];
-    checkpoints.push({ line: i + 1, original, ...c, coveredCalls, spanLines: spans.flatMap((s) => s.lines), rawBranch: branch });
+    checkpoints.push({ line: i + 1, original, ...c, coveredCalls, spanLines: spans.flatMap((s) => s.lines) });
   }
   return checkpoints;
 }
@@ -107,16 +107,13 @@ async function main() {
         assert.deepEqual(prose(b.spanLines), prose(a.spanLines), "all retained conversation prose must stay verbatim");
         assert.equal(b.spanLines.length, a.spanLines.length, "no merging, folding, or dropped tool lines");
         const stubChars = (lines) => lines.filter((l) => /^\[(?:Tools|Assistant tool calls)\]:/.test(l)).reduce((n, l) => n + l.length + 1, 0);
-        const refs = [...b.spanLines.join("\n").matchAll(/ ref=([^\s;]+)/g)].map((m) => m[1]);
-        const rawIds = new Set(b.rawBranch.map((e) => e.id));
-        assert(refs.every((id) => rawIds.has(id)), "every emitted ref must exist on the original active branch");
+        assert.equal(b.coveredCalls, a.coveredCalls, "both renderers cover the same tool calls");
         const m = { checkpoint: i + 1, line: b.line, capturedChars: b.original.summary.length,
           capturedTrimmedSpans: (b.original.summary.match(/trimmed="true"/g) ?? []).length,
           beforeChars: a.summary.length, afterChars: b.summary.length, deltaPercent: (b.summary.length / a.summary.length - 1) * 100,
-          beforeStubChars: stubChars(a.spanLines), afterStubChars: stubChars(b.spanLines), refs: refs.length, coveredCalls: b.coveredCalls,
-          referenceChars: [...b.spanLines.join("\n").matchAll(/ ref=[^\s;]+/g)].reduce((n, match) => n + match[0].length, 0) };
+          beforeStubChars: stubChars(a.spanLines), afterStubChars: stubChars(b.spanLines), coveredCalls: b.coveredCalls };
         metrics.push(m);
-        console.log(`  #${i + 1} L${m.line}: captured ${m.capturedChars}; rebuilt ${m.beforeChars} -> ${m.afterChars} (${m.deltaPercent.toFixed(1)}%); stubs ${m.beforeStubChars} -> ${m.afterStubChars}; refs ${m.refs}/${m.coveredCalls}`);
+        console.log(`  #${i + 1} L${m.line}: captured ${m.capturedChars}; rebuilt ${m.beforeChars} -> ${m.afterChars} (${m.deltaPercent.toFixed(1)}%); stubs ${m.beforeStubChars} -> ${m.afterStubChars}; calls ${m.coveredCalls}`);
         for (const [version, checkpoint] of [["before", a], ["after", b]])
           fs.writeFileSync(path.join(output, `${name}.${i + 1}.${version}.md`), checkpoint.summary, { mode: 0o600 });
       }
@@ -130,39 +127,11 @@ async function main() {
           count++;
         }
       }
-      // Smoke-test exact expansion, prioritizing the two historical gaps that
-      // motivated this audit: the hidden launch command and the failed API probe.
-      const prioritized = [...examples.filter((e) => e.label === "launch command" || e.label === "network probe"), ...examples];
-      const refIds = [...new Set(prioritized.flatMap((e) => [...e.after.matchAll(/ ref=([^\s;]+)/g)].map((m) => m[1])))].slice(0, 6);
-      const recoveryChecks = [];
-      for (const id of refIds) {
-        let text = "", offset = 0, pages = 0;
-        for (;;) {
-          assert(pages++ < 100, `ref ${id} must finish within 100 pages`);
-          const result = await after.tools.context_show_entry.execute("audit", { id, includeRelated: true, maxLines: 1000, offset }, undefined, undefined,
-            { sessionManager: { getBranch: () => final.rawBranch } });
-          const page = result.content.map((b) => b.text ?? "").join("");
-          text += page.replace(/^\[Continuation: [^\n]*\]\n/, "").split("\n[Page limited:")[0];
-          const next = /Continue with the same parameters and offset=(\d+)\.\]$/.exec(page);
-          if (!next) break;
-          assert(Number(next[1]) > offset, "direct expansion cursor must advance");
-          offset = Number(next[1]);
-        }
-        assert(text.includes("[toolCall] bash") && text.includes("toolResult"), `ref ${id} recovers both call and result`);
-        const resultAt = final.rawBranch.findIndex((e) => e.id === id);
-        const source = final.rawBranch[resultAt];
-        const origin = final.rawBranch.slice(0, resultAt).findLast((e) => e.type === "message" && e.message.role === "assistant" &&
-          e.message.content?.some((b) => b.type === "toolCall" && b.id === source.message?.toolCallId && b.name === source.message?.toolName));
-        const call = origin?.message.content.find((b) => b.type === "toolCall" && b.id === source.message.toolCallId);
-        assert(call && text.includes(JSON.stringify(call.arguments, null, 2)), "recovery includes exact full arguments, not the truncated preview");
-        recoveryChecks.push({ ref: id, pages, expandedChars: text.length, fullArgumentsRecovered: true, recoveredLaunchModelArgument: text.includes("PI_CODING_AGENT_DIR") && text.includes("--model"),
-          recovered404: /http=404/.test(text) });
-      }
-      report.sessions.push({ name, checkpoints: metrics, examples, directRefChecks: recoveryChecks });
+      report.sessions.push({ name, checkpoints: metrics, examples });
       assert.equal(hash(fs.readFileSync(file)), originalHash, "input session must remain byte-identical");
     }
     fs.writeFileSync(path.join(output, "report.json"), JSON.stringify(report, null, 2), { mode: 0o600 });
-    console.log(`\nProse preservation, line preservation, ref validity, direct expansion, and input hashes checked.\nArtifacts: ${output}`);
+    console.log(`\nProse preservation, line preservation, tool-call coverage, and input hashes checked.\nArtifacts: ${output}`);
   } finally { fs.rmSync(temp, { recursive: true, force: true }); }
 }
 main().catch((error) => { console.error(error); process.exitCode = 1; });
