@@ -1,19 +1,20 @@
 # Changelog
 
-## Unreleased
+## 0.9.1
 
 - Keep recovery tool advertisements explicitly compaction-aware while adding
   question-led examples: exact earlier commands/results, provenance, conflicting
-  observations, and uncertainty about what was done, observed, or decided. Keep re-orientation
-  unchanged. Distinguish locating an entry, finding a narrow passage, and reading
+  observations, and uncertainty about what was done, observed, or decided.
+  Distinguish locating an entry, finding a narrow passage, and reading
   a specific detail at a known ENTRY id/ref. Make paging conditional on the missing
   detail, including incomplete or ambiguous passages, and stop once the question
   is answered; do not promote bulk expansion. Partial searches do not prove absence.
   Ref locators are not verification. Retrieval code, payload limits, and defaults
   are unchanged; this is a prompting experiment, not a bounded-return redesign.
 
-- Restore the 0.8.9 lookup-first re-orientation and recovery policy. Keep refs as
-  raw-entry locators that may narrow a lookup question, not citations or validation.
+- Restore the 0.8.9 lookup-first re-orientation and compaction-aware recovery
+  framing. Keep refs as raw-entry locators that may narrow a lookup question,
+  not citations or validation.
   Restore explicit missing-detail cautions in the checkpoint boundary, tool
   advertisements, and skill. Keep compact signatures, output observations, ref
   selection, progressive capping, and paired-entry retrieval behavior unchanged.
