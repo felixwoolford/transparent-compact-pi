@@ -76,8 +76,10 @@ in a later checkpoint may tighten under budget pressure.
 When omitted observations, payloads, or provenance are needed, prefer
 `context_lookup` with a specific historical question. A known ref may be included
 in the question to narrow the search; its presence does not replace retrieval.
-The direct tools remain fallbacks when lookup findings are incomplete. For current
-state, inspect files. There is no required-document reread checklist.
+For a specific missing passage at a known ENTRY id/ref, `context_show_entry` can
+read that entry directly; search or interpretation remains a `context_lookup` task.
+The list/grep tools remain fallbacks when lookup findings are incomplete. For
+current state, inspect files. There is no required-document reread checklist.
 
 All newly compacted custom messages follow the same stub policy, regardless of
 extension, display setting, or content format. Long type names are abbreviated
@@ -277,14 +279,14 @@ files through filesystem tools. This restriction does not apply to user-requeste
 session audits, debugging, or cross-session analysis, which can use ordinary file
 tools. Lookup itself still cannot search other sessions or abandoned branches.
 
-The extension registers a subagent lookup and three direct-search fallback tools:
+The extension registers a subagent lookup and three bounded direct-recovery tools:
 
 | Tool | Purpose |
 |---|---|
-| `context_lookup` | Recover specific historical details from the full raw session branch. Accepts only `question`. |
-| `context_list_entries` | Fallback: list entry ids, roles, timestamps, and previews. |
-| `context_grep` | Fallback: regex-search the raw branch with surrounding lines and entry attribution. |
-| `context_show_entry` | Fallback: retrieve an entry after lookup. Optional `includeRelated` recovers matched call/result entries. |
+| `context_lookup` | Recover details hidden by compaction: earlier outputs, decisions, reasoning, and provenance, including conflicts with new evidence or uncertainty about what happened. A subagent searches the raw branch and returns focused findings. Accepts only `question`. |
+| `context_list_entries` | Post-compaction fallback: locate an entry when its location is unknown, not reread the conversation. |
+| `context_grep` | Post-compaction fallback: find a narrow passage in raw history, including thinking and tool outputs. |
+| `context_show_entry` | Recover a specific detail hidden by compaction at a known ENTRY id/ref, or after lookup. Optional `includeRelated` recovers matched call/result entries only when that counterpart is needed. |
 
 For example, ask the agent to recover the build error observed before compaction.
 It can call `context_lookup` with:
@@ -296,10 +298,19 @@ It can call `context_lookup` with:
 ```
 
 A checkpoint `ref=ID` can be supplied as a hint in a `context_lookup` question;
-it is not a reason to treat the compacted stub as a verified source. Ordinary
-fallback entry retrieval (default `includeRelated=false`) is unchanged.
-`includeRelated=true` remains available to both the subagent and fallback entry
-tool, without changing the lookup-first policy. Related expansion is one-hop and
+it is not a reason to treat the compacted stub as a verified source. If the ENTRY
+id is already known and only a specific passage is needed, `context_show_entry`
+can inspect it directly. Prefer lookup when search or interpretation is needed.
+The advertisements ask for a small first page, little grep context, and continuation
+only while the requested detail is missing, incomplete, or needs more context to
+resolve ambiguity; stop once the question is answered. A partial search does not
+establish that something never happened.
+These are prompting changes: payload limits, defaults, and retrieval behavior are
+unchanged, not a guarantee of small total responses. No automatic decision sweep
+or new re-orientation instruction is added.
+
+Ordinary entry retrieval defaults to `includeRelated=false`. Related expansion
+remains available to the subagent and direct entry tool; it is one-hop and
 chronological: a result includes its originating assistant entry (including any
 sibling calls), not sibling outputs; an assistant includes its matched results.
 Relations come from raw call IDs and matching tool names, never transcript text.

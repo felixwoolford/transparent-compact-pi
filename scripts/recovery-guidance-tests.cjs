@@ -20,7 +20,7 @@ function checkCurrentRecoveryLanguage(content) {
 function checkRecoveryTriggers(content) {
   for (const pattern of [/where an earlier finding came from/i, /what a command actually printed/i,
     /why you reached a conclusion/i, /earlier notes conflict with new evidence/i])
-    assert.match(content, pattern, "provenance and contradiction triggers are advertised without loading the skill");
+    assert.match(content, pattern, "provenance and contradiction triggers remain documented");
 }
 
 function checkRecoveryChoices(content) {
@@ -37,31 +37,59 @@ module.exports = function (h) {
   for (const tool of Object.values(ext.tools))
     checkCurrentRecoveryLanguage(JSON.stringify({ description: tool.description, promptSnippet: tool.promptSnippet, parameters: tool.parameters }));
   checkFilesystemScope(lookup.description);
-  assert(lookup.description.startsWith("Retrieve earlier outputs, findings, decisions, and reasoning hidden by compaction."),
-    "lead with a positive recovery purpose");
+  assert(lookup.description.startsWith("Retrieve earlier outputs, findings, decisions, and reasoning hidden by compaction"),
+    "lead with compaction-aware recovery, not generic recall");
+  assert.match(lookup.description, /unsure what you previously did, observed, or decided/);
   checkRecoveryTriggers(lookup.description);
+  for (const example of ["What exact command did I use?", "Did that check actually pass?", "Why did I reject that approach?"])
+    assert(lookup.description.includes(example), example);
+  assert(lookup.description.includes("Ask a specific historical question"));
+  assert.doesNotMatch(lookup.description, /otherwise answer from memory/);
   checkRecoveryChoices(lookup.description);
   assert.doesNotMatch(lookup.description, /before repeating the investigation/i,
     "advertising does not mandate lookup before ordinary investigation");
   assert.match(lookup.description, /subagent searches this conversation's full raw active branch in its own context/);
-  assert.match(lookup.description, /If findings are incomplete, use context_list_entries, context_grep, or context_show_entry/);
+  assert.match(lookup.description, /If findings are incomplete, use context_list_entries, context_grep, or context_show_entry for the specific detail still missing/);
+  assert.match(lookup.description, /returns focused findings rather than the transcript/);
   const scope = "Use the recovery tools for history established by this conversation or its checkpoint, not project discovery, requirements never supplied, other sessions, or abandoned branches.";
   assert(lookup.description.includes(scope));
-  assert(lookup.description.indexOf("where an earlier finding came from") < lookup.description.indexOf(scope),
-    "use cases precede restrictions");
-  assert.match(lookup.promptSnippet, /^Retrieve .*hidden by compaction.*provenance/);
-  assert.match(lookup.parameters.properties.question.description, /earlier in this conversation.*source of a finding.*conflict/);
+  assert(lookup.description.indexOf("Did that check actually pass?") < lookup.description.indexOf(scope),
+    "recognizable use cases precede restrictions");
+  assert.equal(lookup.promptSnippet, "Recover outputs, decisions, reasoning, and provenance hidden by compaction; check earlier details when unsure.");
+  assert.match(lookup.parameters.properties.question.description, /earlier details hidden by compaction in this conversation.*ordinary language/);
+  assert.match(lookup.parameters.properties.question.description, /output, source of a finding, reason for a decision, or evidence behind notes that conflict with new observations/);
+  assert.match(lookup.description, /following their pagination instructions only as needed to answer the question/);
+  for (const tool of Object.values(ext.tools)) {
+    assert.match(tool.description, /compaction|compacted/, `${tool.name}: description explains compaction recovery`);
+    assert.match(tool.promptSnippet, /compaction/, `${tool.name}: snippet explains compaction recovery`);
+  }
+  assert.match(lookup.parameters.properties.question.description, /checkpoint ref or ENTRY id.*locator, not verification/);
 
   for (const name of ["context_list_entries", "context_grep", "context_show_entry"]) {
     const tool = ext.tools[name];
-    assert(tool.description.startsWith("Fallback after context_lookup, when its findings are incomplete; same scope as context_lookup."), name);
-    assert.doesNotMatch(tool.description, /directly from a checkpoint ref|with checkpoint refs|skip the search/i);
+    assert(tool.description.startsWith(name === "context_show_entry"
+      ? "Read a known raw session entry to recover a specific detail hidden by compaction."
+      : "Fallback after context_lookup, when its findings are incomplete; same scope as context_lookup."), name);
     assert(!tool.description.includes(scope), `${name}: refer to lookup scope without repeating it`);
-    assert(tool.promptSnippet.includes("this conversation's"), name);
-    assert(tool.promptSnippet.includes("compaction"), name);
+    assert(tool.promptSnippet.includes("this conversation"), name);
+    assert(tool.description.includes("Continue") && tool.description.includes("only if"), `${name}: paging is conditional`);
+    assert(tool.description.includes("Stop once"), `${name}: do not exhaust history by default`);
+    assert.doesNotMatch(tool.description, /Follow the reported offset for the rest/);
   }
   assert(ext.tools.context_show_entry.parameters.properties.includeRelated);
   assert.match(ext.tools.context_show_entry.description, /matched tool call\/result entries/);
+  assert.match(ext.tools.context_show_entry.description, /checkpoint ref or search result; a ref is a location, not verification/);
+  assert.match(ext.tools.context_show_entry.description, /Start with a small maxLines/);
+  assert.match(ext.tools.context_show_entry.description, /use it only if the counterpart is needed/);
+  assert.match(ext.tools.context_show_entry.description, /do not expand surrounding history by default/);
+  assert.match(ext.tools.context_grep.description, /few matches and little surrounding context/);
+  assert.match(ext.tools.context_grep.description, /compacted thinking and tool outputs/);
+  for (const name of ["context_grep", "context_show_entry"]) {
+    assert.match(ext.tools[name].description, /missing, incomplete, or needs more context to resolve ambiguity/);
+  }
+  assert.match(ext.tools.context_show_entry.description, /a page may not contain the entire entry/);
+  assert.match(ext.tools.context_grep.description, /A partial search does not establish that something never happened/);
+  assert.match(ext.tools.context_list_entries.description, /not to reread the conversation/);
   for (const tool of Object.values(ext.tools)) {
     assert.doesNotMatch(JSON.stringify({ description: tool.description, promptSnippet: tool.promptSnippet,
       parameters: tool.parameters }), /\blost\b|nothing is lost|retrieve anything/i,
@@ -80,7 +108,12 @@ module.exports = function (h) {
   checkFilesystemScope(skill);
   assert(skill.includes("**`context_lookup`** — the preferred first step"));
   assert(skill.includes("You may include a checkpoint `ref=ID` in the question"));
-  assert.doesNotMatch(skill, /marks? useful historical evidence|open a known checkpoint ref directly|otherwise prefer `context_lookup`|without a known ref/i);
+  assert.doesNotMatch(skill, /marks? useful historical evidence|otherwise prefer `context_lookup`|without a known ref/i);
+  assert.match(skill, /already know the ENTRY id and only\s+need a specific passage/);
+  assert.match(skill, /stop once the question is answered/);
+  assert.match(skill, /For recovery of details hidden by compaction, these are the permitted direct tools/);
+  assert.match(skill, /missing, incomplete, or\s+needs more context to resolve ambiguity/);
+  assert.match(skill, /A partial search does not establish that something never happened/);
   assert.match(skill, /including recorded tool outputs and your reasoning/);
   assert.match(skill, /including downloaded sources/);
   assert.match(skill, /without re-verifying every fact/);

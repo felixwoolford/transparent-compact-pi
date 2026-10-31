@@ -78,8 +78,11 @@ output observations (such as failing-test counts) replace misleading `[ok]` labe
 an unlabelled call is not proof of success. Most output and detailed payloads are
 omitted. A `ref=ID` is only a locator for a raw session entry, not a citation or
 verification of a claim. When you need omitted details, use `context_lookup`;
-the ref can be included in the question to narrow the search. Its absence makes
-no reproducibility claim. See [the rendering contract](docs/DESIGN.md#deterministic-checkpoint).
+the ref can be included in the question to narrow the search. For a specific missing
+passage at a known ENTRY id/ref, `context_show_entry` can read the entry directly.
+For recovery of details hidden by compaction, start small and continue only if the
+detail is missing, incomplete, or needs more context to resolve ambiguity; stop once
+the question is answered. Do not expand surrounding history by default. A ref's absence makes no reproducibility claim. See [the rendering contract](docs/DESIGN.md#deterministic-checkpoint).
 
 File lists now distinguish source output retained in the recent tail, partial
 reads, and reads followed by tracked changes. Modified paths without retained

@@ -30,7 +30,7 @@ This skill pairs with the `@foliox/transparent-compact-pi` extension, which prov
 
 - **Verbatim compaction** — a deterministic checkpoint retains user messages, assistant prose, and compact tool-call signatures. Thinking and most tool outputs are removed from the active model context, not from the raw session history. Selected startup read outputs remain verbatim in the checkpoint or uncompacted tail. Earlier spans are re-rendered flat, with recovery guidance before them and an evidence-boundary warning after them. Persistent task-relevant recovery reminders and a recap follow the retained tail; later compactions replace the old generated reminders rather than duplicating them. An inherited opaque base is kept when needed.
 - **`context_lookup`** — the preferred first step for this recovery workflow: a subagent searches the full raw session branch in its **own** context and returns relevant findings. At lookup time, the extension mechanically renders the branch into entry-anchored text with an authoritative entry/section index, in memory.
-- **Bounded fallback tools** — if those findings are incomplete, use `context_list_entries`, `context_grep`, and `context_show_entry` for direct evidence recovery. Their results enter this conversation. For recovery of details hidden by compaction, these are the permitted fallback, not filesystem access to session files.
+- **Bounded direct tools** — use `context_show_entry` for a specific detail hidden by compaction at a known ENTRY id or checkpoint ref. If lookup findings are incomplete, use `context_list_entries` to locate an entry, `context_grep` to find a narrow passage, or `context_show_entry` to inspect a known entry. Their raw results enter this conversation; retrieve only what the question needs. For recovery of details hidden by compaction, these are the permitted direct tools, not filesystem access to session files.
 
 Pi normally saves sessions under `~/.pi/agent/sessions/`; custom session locations also work. In-memory sessions retain history only while the process lives and cannot be resumed after exit.
 
@@ -67,7 +67,11 @@ context_lookup({ question: "What exact error did the earlier test run return for
 You may include a checkpoint `ref=ID` in the question to narrow the search. A ref
 is only a locator for a raw session entry, not a citation or verification of a claim.
 It does not supply omitted arguments/output or confirm an outcome. Its absence
-makes no claim about reproducibility.
+makes no claim about reproducibility. If you already know the ENTRY id and only
+need a specific passage, `context_show_entry` can read that entry directly. Prefer
+`context_lookup` when search or interpretation is needed. For post-compaction
+recovery, continue paging only if the requested detail is missing, incomplete, or
+needs more context to resolve ambiguity; stop once the question is answered.
 
 For `context_lookup`, only supply `question`. Lookup covers all earlier compactions on the current branch automatically. It does **not** search abandoned branches or unrelated sessions. If the detail is absent, report that limitation instead of claiming it was recovered or widening this recovery search through filesystem tools.
 
@@ -83,10 +87,12 @@ the same recovery episode. Narration and thinking do not reset it either. Only
 a tool result outside the four recovery tools, a user message, or a bash
 execution resets the limit.
 
-Search responses are pages, not necessarily complete evidence. Follow pages
-only when omitted content is needed; do not exhaust every match or entry merely
-because a continuation is available. Keep other parameters unchanged and use
-all continuation parameters printed at the end of a limited page:
+Search responses are pages, not necessarily complete evidence. Continue only
+when the needed detail is missing, incomplete, or needs more context to resolve
+ambiguity; do not exhaust every match or entry merely because a continuation is
+available. A partial search does not establish that something never happened.
+Keep other parameters unchanged and use all continuation parameters printed at
+the end of a limited page:
 
 - Listings and entry retrieval: `offset` counts characters (UTF-16 code units)
   in the rendered listing or entry, starting at 0.
