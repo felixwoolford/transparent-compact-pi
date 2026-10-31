@@ -32,7 +32,7 @@ async function main() {
     if (/\.(?:md|ts)$/i.test(file))
       checkCurrentRecoveryLanguage(fs.readFileSync(path.join(root, file), "utf8"));
   }
-  for (const resource of ["extensions/index.ts", "skills/context-retrieval/SKILL.md", "CHANGELOG.md"]) {
+  for (const resource of ["extensions/index.ts", "extensions/lib/checkpoint-cap.ts", "skills/context-retrieval/SKILL.md", "CHANGELOG.md"]) {
     assert(packedPaths.has(resource), `npm package includes ${resource}`);
   }
 
@@ -69,7 +69,8 @@ async function main() {
     assert.equal(skills.skills.length, 1);
     assert.equal(skills.skills[0].name, "context-retrieval");
     assert.deepEqual(skills.diagnostics, []);
-    assert.equal([...packedPaths].filter((p) => p.startsWith("extensions/")).length, 1, "package ships one extension, with no wrapper");
+    assert.deepEqual([...packedPaths].filter((p) => p.startsWith("extensions/")).sort(),
+      ["extensions/index.ts", "extensions/lib/checkpoint-cap.ts"], "package ships one extension entry and its pure cap module, with no wrapper");
     assert(![...packedPaths].some((p) => p.startsWith("source/")), "package has no obsolete source tree");
     console.log("PACKAGE TEST OK — manifest, packed resources, package-only label, real Pi loader, session lookup, and bundled skill");
   } finally {

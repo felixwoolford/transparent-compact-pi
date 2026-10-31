@@ -1,6 +1,19 @@
 # Changelog
 
-## Unreleased — initial release preparation
+## 0.9.0
+
+- Add progressive capping in the pure `extensions/lib/checkpoint-cap.ts` module.
+  Before omitting history, try 120/80-character previews, fewer lower-priority
+  refs, and folded adjacent tool-only prefixes, oldest first and only as needed.
+  Protect file paths, observed outcomes, and history-bearing refs. Preserve
+  independently trimmable calls after grouping. Distinguish `tools-tightened`
+  presentation changes from `trimmed` omissions.
+- Persist versioned bounded tool-display records alongside uncapped span lines.
+  Later checkpoints can tighten earlier structured spans without editing stored
+  compactions or reinterpreting raw history. Budget increases/cap-off restore
+  normal rendering. Text-only legacy spans and invalid/future records remain
+  opaque. Retained startup reads, inherited bases, and cap-policy dialogs retain
+  their existing protection/behavior.
 
 - Render compact `[Tools]:` signatures with complete file paths, requested read
   ranges, payload sizes/counts, and 160-character head-and-tail bash previews.
@@ -8,8 +21,9 @@
   Replace new `[ok]` labels with conservative historical output observations;
   retain explicit tool-error/unknown status. Recognized test/build summaries,
   HTTP observations, tiny complete historical outputs, and commit hashes can
-  remain visible. Unlabelled calls do not imply success. No command diffs,
-  arbitrary output tails, cross-message merging, or read folding.
+  remain visible. Unlabelled calls do not imply success. Normal rendering keeps
+  messages separate; progressive capping may fold tool-only prefixes. No command
+  diffs, arbitrary output tails, or read folding.
 - Add checkpoint `ref=ID` hints for write/edit payloads, truncated commands, and
   likely historical observations. `context_show_entry` can open refs directly
   with `includeRelated=true`, recovering matched calls and results together in
@@ -17,6 +31,18 @@
   indexing respects tool names, duplicate ambiguity, sequential reuse, and the
   active branch. Refs do not depend on deletion inference; no ref makes no
   reproducibility claim. Existing saved span lines are preserved.
+
+- Add read-only compaction timing and headroom replays, including valid doubled
+  histories with remapped IDs. Record the first destructive cap at identical cut
+  points; keep reconstruction costs separate from timed compaction hooks. Baseline
+  snapshots preserve relative imports after modular source refactors. These are
+  local performance/evidence-retention checks, not live-model quality results.
+- Known performance limitation: the final destructive fallback recounts remaining
+  rows after each deletion, so heavily capped histories can scale superlinearly.
+  Incremental size accounting is deferred; the presentation-only stages are not
+  subject to that repeated-recount path.
+
+## Earlier development notes
 
 - Raise the default lookup budget from 10 to 25 substantive search turns (75 total
   search-phase model calls, plus a final tool-free write-up). Keep the consecutive
@@ -174,4 +200,5 @@
 - Preliminary synthetic pilot figures are preserved as historical results from
   the earlier file-backed implementation, not measurements of the current implementation.
 
-No version has been published from this staging directory. Full evaluation is pending.
+Full live-model evaluation remains pending; integration tests and local replay
+benchmarks are not live-model quality measurements.

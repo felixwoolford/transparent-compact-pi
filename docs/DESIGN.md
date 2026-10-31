@@ -36,8 +36,9 @@ directory to `.` at path boundaries. Their JSON-encoded previews keep up to 160
 characters, about 62% head plus an ellipsis and the tail. Newlines remain escaped;
 imports, redirections, and shell syntax are not rewritten. Other argument previews
 remain bounded prefixes. These signatures are display notation, not replayable shell
-commands. Calls from different assistant messages remain separate, preserving order
-and cap granularity; no command diffs or read folding are performed.
+commands. Calls normally remain separate across assistant messages. The size guard
+may fold adjacent tool-only prefixes while preserving ordering and independently
+removable calls. No command diffs or read folding are performed.
 
 `[tool error]` means a safely matched result was flagged as an error; `[unknown]`
 means no safely matched result/status. Plain successes have no status label; this
@@ -67,7 +68,8 @@ unmatched call can point at its assistant entry. IDs are assigned only by object
 identity with raw branch entries, never by guessing from command text or timestamps.
 Projected replacement content can therefore lack a ref. Only selected preparation
 messages supply output labels; raw history and the retained tail do not supply
-missing outcomes. Previously stored span lines remain unchanged.
+missing outcomes. Stored canonical span lines remain unchanged; their presentation
+in a later checkpoint may tighten under budget pressure.
 
 Open a known ref directly with `context_show_entry({id: "0123abcd", includeRelated: true})`.
 This recovers the original call/payload and result together, including code no longer
@@ -77,7 +79,7 @@ ref, prefer `context_lookup`. There is no required-document reread checklist.
 All newly compacted custom messages follow the same stub policy, regardless of
 extension, display setting, or content format. Long type names are abbreviated
 like tool-call arguments. This applies even with the cap disabled. Previously
-saved spans are not rewritten; older custom-message bodies may remain in them.
+saved canonical spans are not rewritten; older custom-message bodies may remain in them.
 
 ### File-list evidence annotations
 
@@ -150,20 +152,53 @@ original branch, not from its summary prose.
 
 #### How cap trimming works
 
-**User messages are prioritized**—capping is not simply an oldest-first cutoff:
+The pure renderer/size guard lives in `extensions/lib/checkpoint-cap.ts`, separately
+from Pi hooks, cap-policy dialogs, and session access in `extensions/index.ts`.
+It accepts canonical span data and a line budget and never mutates its inputs.
+**Presentation reductions precede history omission.** Each rung walks oldest first
+across all eligible spans, stopping as soon as the budget fits:
 
-1. Remove non-user content, oldest first.
-2. If still over budget, shorten long user messages to marked prefix stubs,
-   oldest first.
-3. As a last resort, remove the oldest remaining content, including user messages.
+1. Shorten bash previews from 160 to 120 encoded characters.
+2. If still over budget, shorten them to 80 characters.
+3. Remove lower-priority refs from positively recognizable local read/view
+   commands or pipelines. Preserve refs on writes/edits, external probes,
+   terminal interactions, scripts, timings, and unknown shell shapes. This is
+   a priority heuristic, not a claim that unreferenced evidence is reproducible.
+4. Fold repeated `[Tools]:` prefixes across adjacent tool-only messages in the
+   same span. Do not cross prose, custom messages, user messages, or span boundaries.
+5. Only then remove non-user content, oldest first. Structured tool batches remain
+   independently trimmable by call even after prefixes have been folded.
+6. Shorten long user messages to marked prefix stubs, oldest first.
+7. As a last resort, remove the oldest remaining content, including user messages.
+
+File paths, read ranges, tool status, and output observations are not shortened by
+presentation stages. User and assistant prose remains verbatim until the destructive
+fallback. `tools-tightened="true"` identifies presentation changes without omitted
+prose/calls; `trimmed="true"` and a recovery note identify actual omissions or user
+text shortening. Both attributes can occur on one span. Empty spans are not marked
+unless they became empty through omission.
+
+New spans store versioned, bounded display records in `details.span.tools`, alongside
+their normal uncapped `lines`. Records contain signature fragments, the original
+encoded command preview ends, annotations, and ref priorities—not unbounded
+commands, write/edit payloads, or full tool outputs. Smaller previews are always derived
+from these same canonical ends, never from a previous 120/80-character rendering.
+Stored compaction entries are not edited: a later checkpoint re-renders its earlier
+spans for the current budget. Increasing the budget or disabling the cap restores
+normal previews and refs; reload/resume/fork follow the active branch's records.
+
+Only records that exactly reproduce the stored canonical tool line can be tightened.
+Legacy text-only spans, unsupported versions, and malformed/mismatched records stay
+opaque and use the conservative omission fallback. They are not regex-parsed or
+reconstructed from current raw history, which might differ from the projected
+content originally compacted. Inherited model-summary/opaque bases remain fixed.
 
 Retained startup reads count as fixed budget overhead and are never trimmed.
 Like an inherited base, they can exceed the budget by themselves; in that case
 the extension warns and preserves them. The conversation-line budget still has
-a 500-character minimum. Every span changed by the cap carries `trimmed="true"`
-and a recovery note, including partial line removal and shortened user messages.
-An originally empty span is not marked as trimmed. Originals remain recoverable
-from the session.
+a 500-character minimum. Space for span annotations is reserved in the size guard.
+Originals remain recoverable from the session; cap settings and warn/on/off dialog
+behavior are unchanged.
 
 
 ### Session-backed lookup

@@ -9,7 +9,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const assert = require("node:assert/strict");
-const { execFileSync } = require("node:child_process");
+const snapshotExtension = require("./git-extension-snapshot.cjs");
 const { piRoot, jitiAliases } = require("./pi-runtime.cjs");
 const { createJiti } = require(require.resolve("jiti", { paths: [piRoot] }));
 const repo = path.resolve(__dirname, "..");
@@ -64,8 +64,7 @@ async function main() {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), "tc-file-evidence-replay-"));
   try {
     const baselineRef = process.env.TC_BASELINE_REF || "d74d334";
-    const baseline = path.join(temp, "baseline.ts");
-    fs.writeFileSync(baseline, execFileSync("git", ["show", `${baselineRef}:extensions/index.ts`], { cwd: repo, encoding: "utf8" }));
+    const { entryPath: baseline } = snapshotExtension(repo, baselineRef, temp);
     delete process.env.MECH_COMPACT_MAX_SUMMARY_CHARS;
     process.env.MECH_COMPACT_MAX_SUMMARY_PERCENT = "25";
     const jiti = createJiti(__filename, { alias: jitiAliases });

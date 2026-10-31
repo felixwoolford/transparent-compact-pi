@@ -3,7 +3,7 @@
 // Read-only, explicitly requested session audit. Never executes recorded tools,
 // opens inputs through SessionManager, migrates sessions, or calls a model.
 // Usage: node scripts/tool-stub-replay.cjs [--out DIR] <session.jsonl> [...]
-// TC_BASELINE_REF defaults to HEAD (the pre-overhaul renderer while uncommitted).
+// TC_BASELINE_REF defaults to HEAD; select a pre-change commit for comparisons.
 // Both renderers rebuild all spans at recorded cuts with capping disabled, so
 // savings measure rendering, not different evidence retention or tokenization.
 const fs = require("node:fs");
@@ -11,7 +11,7 @@ const os = require("node:os");
 const path = require("node:path");
 const assert = require("node:assert/strict");
 const { createHash } = require("node:crypto");
-const { execFileSync } = require("node:child_process");
+const snapshotExtension = require("./git-extension-snapshot.cjs");
 const { piRoot, jitiAliases } = require("./pi-runtime.cjs");
 const { createJiti } = require(require.resolve("jiti", { paths: [piRoot] }));
 const repo = path.resolve(__dirname, "..");
@@ -84,9 +84,7 @@ async function main() {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), "tc-stub-baseline-"));
   try {
     const baselineRef = process.env.TC_BASELINE_REF || "HEAD";
-    const baselineCommit = execFileSync("git", ["rev-parse", baselineRef], { cwd: repo, encoding: "utf8" }).trim();
-    const baselineFile = path.join(temp, "baseline.ts");
-    fs.writeFileSync(baselineFile, execFileSync("git", ["show", `${baselineCommit}:extensions/index.ts`], { cwd: repo }));
+    const { commit: baselineCommit, entryPath: baselineFile } = snapshotExtension(repo, baselineRef, temp);
     for (const key of Object.keys(process.env)) if (key.startsWith("MECH_COMPACT_")) delete process.env[key];
     const jiti = createJiti(__filename, { alias: jitiAliases });
     const { buildSessionProjection } = await jiti.import("@earendil-works/pi-coding-agent");

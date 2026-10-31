@@ -33,6 +33,8 @@ import type { Message as AiMessage, Model, Tool as AiTool } from "@earendil-work
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { buildSessionProjection, SessionManager } from "@earendil-works/pi-coding-agent";
 import type { ExtensionAPI, ExtensionContext, ModelRegistry, SessionEntry } from "@earendil-works/pi-coding-agent";
+import { capSpans, commandPreview, renderToolLine, renderToolStub, NORMAL_PREVIEW_CHARS, TIGHTENED_ATTR } from "./lib/checkpoint-cap.js";
+import type { SpanContent, ToolLines, ToolStub } from "./lib/checkpoint-cap.js";
 
 // ============================================================================
 // Configuration
@@ -82,7 +84,7 @@ const cfg = {
   lookupTurns: intFromEnv("MECH_COMPACT_LOOKUP_TURNS", 25),
   lookupMaxCalls: lookupMaxCallsFromEnv(),
   lookupModel: process.env.MECH_COMPACT_LOOKUP_MODEL?.trim() || undefined,
-  argSnippetChars: 160,
+  argSnippetChars: NORMAL_PREVIEW_CHARS,
   listMaxChars: 12_000,
   grepMaxChars: 12_000,
   showEntryMaxChars: 24_000,
@@ -487,23 +489,12 @@ function argumentSnippet(value: unknown): string {
   return s.length > cfg.argSnippetChars ? `${s.slice(0, cfg.argSnippetChars)}…` : s;
 }
 
-function commandSnippet(command: string, cwd: string): string {
-  const encoded = JSON.stringify(checkpointCommand(command, cwd));
-  if (encoded.length <= cfg.argSnippetChars) return encoded;
-  // Keep both identifying ends, including the quotes. No shell rewriting,
-  // import removal, or diff against another (possibly truncated) command.
-  let head = Math.floor((cfg.argSnippetChars - 1) * 0.62);
-  let tail = encoded.length - (cfg.argSnippetChars - head - 1);
-  if (/[\uD800-\uDBFF]/.test(encoded[head - 1])) head--;
-  if (/[\uDC00-\uDFFF]/.test(encoded[tail])) tail++;
-  return `${encoded.slice(0, head)}…${encoded.slice(tail)}`;
-}
-
-function toolCallSignature(name: string, args: Record<string, unknown> | undefined, cwd: string): string {
+function toolSignature(name: string, args: Record<string, unknown> | undefined, cwd: string): ToolStub {
   const a = args ?? {};
   if (!["read", "write", "edit", "bash"].includes(name))
-    return `${name}(${Object.entries(a).map(([k, v]) => `${k}=${argumentSnippet(v)}`).join(", ")})`;
+    return { prefix: `${name}(${Object.entries(a).map(([k, v]) => `${k}=${argumentSnippet(v)}`).join(", ")})`, suffix: "", retainRef: true };
   const parts: string[] = [];
+  let command: ToolStub["command"];
   const fileTool = ["read", "write", "edit"].includes(name) && typeof a.path === "string";
   let base = fileTool ? `${name} ${JSON.stringify(checkpointPath(a.path as string, cwd))}` : name;
   const range = name === "read" && fileTool &&
@@ -519,7 +510,7 @@ function toolCallSignature(name: string, args: Record<string, unknown> | undefin
     if (range && (k === "offset" || k === "limit")) continue;
     if (name === "bash" && k === "timeout") continue;
     if (name === "bash" && k === "command" && typeof v === "string")
-      base += ` ${commandSnippet(v, cwd)}`;
+      command = commandPreview(JSON.stringify(checkpointCommand(v, cwd)));
     else if (name === "write" && k === "content" && typeof v === "string")
       parts.push(`(${v.length} chars)`);
     else if (name === "edit" && k === "edits" && Array.isArray(v))
@@ -528,7 +519,12 @@ function toolCallSignature(name: string, args: Record<string, unknown> | undefin
       parts.push(`${k}=<${v.length} chars>`);
     else parts.push(`${k}=${argumentSnippet(v)}`);
   }
-  return [base, ...parts].join(" ");
+  return command ? { prefix: `${base} `, command, suffix: parts.length ? ` ${parts.join(" ")}` : "", retainRef: true }
+    : { prefix: [base, ...parts].join(" "), suffix: "", retainRef: true };
+}
+
+function toolCallSignature(name: string, args: Record<string, unknown> | undefined, cwd: string): string {
+  return renderToolStub(toolSignature(name, args, cwd));
 }
 
 // These are positive salience hints, not a reproducibility classifier. Do not
@@ -543,6 +539,15 @@ function commandHints(command: string): { tests: boolean; network: boolean; hist
     /^(?:uv run )?(?:\S*\/)?(?:python[\d.]*|node)\b/.test(core) ||
     /^(?:time|hyperfine)\b|\b(?:bench(?:mark)?|timeit)\b/.test(core));
   return { tests, network, historical };
+}
+
+// Only positively recognizable local read/view pipelines get lower-priority
+// refs. Unknown shell syntax, external probes, scripts, and all mutations keep
+// theirs. This is a rendering priority, never a claim of reproducibility.
+function lowPriorityRef(command: string): boolean {
+  const core = command.replace(/^\s*cd\s+(?:"[^"\n]*"|'[^'\n]*'|[^\s;&|]+)\s*&&\s*/, "").trim();
+  if (/[;&\n<>`]|\$\(|\|\||--pre\b|--ext-diff\b|--output\b|--in-place\b|(?:^|\s)-\w*i\w*\b/.test(core)) return false;
+  return core.split("|").every((part) => /^\s*(?:(?:cat|head|tail|grep|rg|wc|ls|pwd)\b|sed\s+-n\b|git\s+(?:status|diff|log|show)\b)/.test(part));
 }
 
 function observationQuote(text: string): string {
@@ -611,7 +616,7 @@ function bashOutputLabel(command: string, result: Record<string, any>): string {
   return labels.join("; ");
 }
 
-function summarizeMessages(messages: AgentMessage[], cwd: string, entries: SessionEntry[]): string[] {
+function summarizeMessages(messages: AgentMessage[], cwd: string, entries: SessionEntry[]): SpanContent {
   const results = pairedToolResults(messages);
   // Identity matching fails closed for projected replacements and synthetic
   // messages. Never guess an ENTRY id from a repeated command or timestamp.
@@ -628,6 +633,7 @@ function summarizeMessages(messages: AgentMessage[], cwd: string, entries: Sessi
   }
   const rawResults = pairedToolResults(rawMessages);
   const lines: string[] = [];
+  const tools: ToolLines = { version: 1, lines: [] };
   for (const msg of messages) {
     const m = msg as unknown as Record<string, any>;
     switch (msg.role) {
@@ -638,7 +644,7 @@ function summarizeMessages(messages: AgentMessage[], cwd: string, entries: Sessi
       }
       case "assistant": {
         let prose = "";
-        const calls: string[] = [];
+        const calls: ToolStub[] = [];
         for (const block of m.content ?? []) {
           if (block.type === "text") prose += (prose ? "\n" : "") + String(block.text ?? "");
           else if (block.type === "toolCall") {
@@ -654,12 +660,19 @@ function summarizeMessages(messages: AgentMessage[], cwd: string, entries: Sessi
             const ref = needsRef && callEntries.has(block)
               ? (result && rawResults.get(block) === result ? entryIds.get(result) : undefined) ?? callEntries.get(block)
               : undefined;
-            calls.push(`${toolCallSignature(name, args, cwd)}${status}${label ? ` → ${label}` : ""}${ref ? ` ref=${ref}` : ""}`);
+            const stub = toolSignature(name, args, cwd);
+            stub.suffix += status + (label ? ` → ${label}` : "");
+            if (ref) stub.ref = ref;
+            stub.retainRef = command === undefined || !lowPriorityRef(command);
+            calls.push(stub);
           }
           // thinking blocks: removed by design (kept in the session)
         }
         if (prose.trim()) lines.push(`[Assistant]: ${prose.trim()}`);
-        if (calls.length > 0) lines.push(`[Tools]: ${calls.join("; ")}`);
+        if (calls.length > 0) {
+          tools.lines.push({ index: lines.length, calls, mergeable: !prose.trim() });
+          lines.push(renderToolLine(calls));
+        }
         break;
       }
       case "toolResult":
@@ -682,7 +695,7 @@ function summarizeMessages(messages: AgentMessage[], cwd: string, entries: Sessi
         break;
     }
   }
-  return lines;
+  return { lines, ...(tools.lines.length ? { tools } : {}) };
 }
 
 // Startup reference retention is a lexical heuristic, not an interpretation of
@@ -926,15 +939,17 @@ function spanOpen(n: number, compactedAt: string, reason: string, covers?: strin
  * base, oldest first. Spans before the base are deliberately NOT re-rendered
  * (the base is opaque; the session holds the raw history).
  */
+type StoredSpan = SpanContent & { at: string; reason: string; from?: string; to?: string };
+
 function collectBaseAndSpans(branchEntries: SessionEntry[]): {
   base: { kind: "model-summary" | "legacy-checkpoint"; at: string; summary: string } | null;
-  spans: { at: string; reason: string; from?: string; to?: string; lines: string[] }[];
+  spans: StoredSpan[];
 } {
   const spanDetails = (e: SessionEntry) => {
     if (e.type !== "compaction") return undefined;
     const d = (e as { details?: Record<string, any> }).details;
     if (!d || d.kind !== MECH_KIND || !Array.isArray(d.span?.lines)) return undefined;
-    return d.span as { at?: unknown; reason?: unknown; from?: unknown; to?: unknown; lines: string[] };
+    return d.span as { at?: unknown; reason?: unknown; from?: unknown; to?: unknown; lines: string[]; tools?: ToolLines };
   };
   let baseIdx = -1;
   for (let i = branchEntries.length - 1; i >= 0; i--) {
@@ -954,7 +969,7 @@ function collectBaseAndSpans(branchEntries: SessionEntry[]): {
         summary: (baseEntry as { summary?: string }).summary ?? "",
       }
     : null;
-  const spans: { at: string; reason: string; from?: string; to?: string; lines: string[] }[] = [];
+  const spans: StoredSpan[] = [];
   for (let i = Math.max(baseIdx + 1, 0); i < branchEntries.length; i++) {
     const sd = spanDetails(branchEntries[i]);
     if (sd)
@@ -966,46 +981,10 @@ function collectBaseAndSpans(branchEntries: SessionEntry[]): {
         from: typeof sd.from === "string" && sd.from !== "" ? sd.from : undefined,
         to: typeof sd.to === "string" && sd.to !== "" ? sd.to : undefined,
         lines: sd.lines,
+        tools: sd.tools,
       });
   }
   return { base, spans };
-}
-
-/**
- * Size guard across ordered spans (oldest first): if the total line budget is
- * exceeded, (1) drop the oldest non-user lines, (2) stub each oversized user
- * line at most once in a single forward pass (never re-stub → no loops),
- * (3) drop the oldest remaining lines until under budget. Everything dropped
- * remains in the session.
- */
-function capSpans(spans: string[][], budget: number): string[][] {
-  const items: { span: number; line: string }[] = spans.flatMap((lines, span) => lines.map((line) => ({ span, line })));
-  let size = items.reduce((a, it) => a + it.line.length + 1, 0);
-  const over = () => size > budget;
-  const remove = (i: number) => {
-    size -= items[i].line.length + 1;
-    items.splice(i, 1);
-  };
-
-  // 1) drop oldest non-user lines (flat order = span order = oldest first;
-  //    terminates: each pass removes a line or advances i)
-  for (let i = 0; i < items.length && over(); ) {
-    if (items[i].line.startsWith("[User]:")) i++;
-    else remove(i);
-  }
-  // 2) stub user lines, oldest first, each at most once (terminates: single forward pass)
-  for (let i = 0; i < items.length && over(); i++) {
-    const line = items[i].line;
-    if (!line.startsWith("[User]:") || line.length <= 120) continue;
-    const stub = `${line.slice(0, 120)}…[truncated +${line.length - 120} chars — use context_lookup]`;
-    if (stub.length >= line.length) continue; // stubbing would not shrink it; step 3 drops it
-    size += stub.length - line.length;
-    items[i] = { ...items[i], line: stub };
-  }
-  // 3) drop oldest remaining lines until under budget (terminates: removes one per iteration)
-  while (over() && items.length > 0) remove(0);
-
-  return spans.map((_, span) => items.filter((it) => it.span === span).map((it) => it.line));
 }
 
 const RECOVERY_HISTORY_NOTE = "Compaction hides earlier details from your current view. The original conversation history, including recorded tool outputs and your reasoning, is preserved in the session and can be retrieved.";
@@ -1077,6 +1056,7 @@ async function buildMechanicalSummary(opts: {
   branchEntries: SessionEntry[];
   now: string;
   spanLines: string[]; // this compaction's own span, un-capped
+  spanTools?: ToolLines; // versioned, bounded display records; no raw payloads
   spanFrom?: string; // ISO timestamp of the first summarised message
   spanTo?: string; // ISO timestamp of the last summarised message
   firstKeptEntryId?: string; // start of the verbatim (uncompacted) tail
@@ -1088,7 +1068,8 @@ async function buildMechanicalSummary(opts: {
   chooseCap: (size: { overhead: number; lineChars: number }) => Promise<number | undefined | null>;
 }): Promise<string | undefined> {
   const { base, spans } = collectBaseAndSpans(opts.branchEntries);
-  const allSpans = [...spans, { at: opts.now, reason: opts.reason, from: opts.spanFrom, to: opts.spanTo, lines: opts.spanLines }];
+  const allSpans = [...spans, { at: opts.now, reason: opts.reason, from: opts.spanFrom, to: opts.spanTo,
+    lines: opts.spanLines, tools: opts.spanTools }];
   const coversOf = (s: { from?: string; to?: string }): string | undefined => (s.from && s.to ? `${s.from} → ${s.to}` : undefined);
 
   // Size guard: the budget covers the conversation section plus retained reads.
@@ -1099,7 +1080,7 @@ async function buildMechanicalSummary(opts: {
   let overhead = SECTION_HEADER.length + 2 + (retainedReads ? retainedReads.length + 2 : 0);
   if (base) overhead += baseOpen.length + 1 + BASE_CLOSE.length + 2 + base.summary.length;
   overhead += allSpans.reduce(
-    (a, s, i) => a + spanOpen(i + 1, s.at, s.reason, coversOf(s)).length + SPAN_TRIMMED_ATTR.length + 2 + SPAN_TRIMMED_NOTE.length + 1 + SPAN_CLOSE.length + 2,
+    (a, s, i) => a + spanOpen(i + 1, s.at, s.reason, coversOf(s)).length + SPAN_TRIMMED_ATTR.length + TIGHTENED_ATTR.length + 2 + SPAN_TRIMMED_NOTE.length + 1 + SPAN_CLOSE.length + 2,
     0,
   );
   // Closing line: where the verbatim (uncompacted) tail begins. Spans end at
@@ -1120,16 +1101,17 @@ async function buildMechanicalSummary(opts: {
     opts.notify(`transparent-compact: the base block alone is ${base.summary.length.toLocaleString()} chars (budget ${maxChars.toLocaleString()}); it is kept un-capped`);
   if (maxChars !== undefined && retainedReads.length > maxChars)
     opts.notify(`transparent-compact: retained startup reads alone are ${retainedReads.length.toLocaleString()} chars (budget ${maxChars.toLocaleString()}); they are kept un-capped`);
-  const capped = maxChars === undefined ? lines : capSpans(lines, Math.max(500, maxChars - overhead));
+  const capped = capSpans(allSpans, maxChars === undefined ? undefined : Math.max(500, maxChars - overhead));
 
   const blocks: string[] = [];
   if (base) blocks.push(`${baseOpen}\n${base.summary.replace(/\n+$/, "")}\n${BASE_CLOSE}`);
-  capped.forEach((lines, i) => {
+  capped.lines.forEach((lines, i) => {
     const s = allSpans[i];
-    const trimmed = lines.length !== s.lines.length || lines.some((line, j) => line !== s.lines[j]);
+    const trimmed = capped.trimmed[i];
     const open = spanOpen(i + 1, s.at, s.reason, coversOf(s));
+    const attributes = (capped.tightened[i] ? TIGHTENED_ATTR : "") + (trimmed ? SPAN_TRIMMED_ATTR : "");
     blocks.push([
-      trimmed ? `${open.slice(0, -1)}${SPAN_TRIMMED_ATTR}>` : open,
+      attributes ? `${open.slice(0, -1)}${attributes}>` : open,
       ...(trimmed ? [SPAN_TRIMMED_NOTE] : []),
       ...lines,
       SPAN_CLOSE,
@@ -1148,7 +1130,8 @@ async function buildMechanicalSummary(opts: {
   parts.push("- In the compacted spans, user and assistant prose is kept verbatim, subject to budget trimming. Retained prose is a record of what was said, not verification of its claims. Tool signatures are display notation, not replayable shell commands: paths under the working directory become relative (`.` in commands); read ranges are requested lines; write/edit payloads become sizes/counts. Bash previews keep up to 160 encoded characters, head + … + tail, with escaped newlines. Thinking and most output are removed; selected output observations remain after →.");
   parts.push("- [tool error] means the result was flagged as an error; [unknown] means no safely matched result/status. Unlabelled does NOT establish exit 0 or passing tests. → exit N is a reported shell status; output: quotes/extracts selected output, not an inferred verdict. Everything shown is historical. Legacy [ok] only means not flagged as a tool error; legacy calls without status are unknown.");
   parts.push("- ref=ID marks useful historical evidence (including full truncated commands and write/edit payloads), not a lookup requirement. No ref makes no claim about reproducibility or whether old evidence still exists on disk. For current state, inspect files; for past observations, recover history.");
-  parts.push("- Newly compacted custom messages are kept only as type stubs (long types abbreviated); their content is removed and remains recoverable in the session through context_lookup. Previously saved spans are unchanged.");
+  parts.push("- Under size pressure, `tools-tightened` marks 120/80-character previews, fewer low-priority refs, or grouped tool-only lines. Conversation prose and tool calls are retained unless `trimmed` is also marked. Tightening stops as soon as the budget fits; outcome observations and identifying file paths are not shortened by these stages.");
+  parts.push("- Newly compacted custom messages are kept only as type stubs (long types abbreviated); their content is removed and remains recoverable in the session through context_lookup. Stored canonical spans are unchanged; their presentation may tighten under the cap.");
   parts.push(
     "- pi keeps the most recent part of the conversation verbatim (its `keepRecentTokens` setting). The spans below cover only what came *before* that. The retained verbatim conversation begins after the explicit boundary marker at the end of this checkpoint.",
   );
@@ -1872,7 +1855,8 @@ export default function (pi: ExtensionAPI) {
       const msgTs = (m: AgentMessage): unknown => (m as unknown as { timestamp?: unknown }).timestamp;
       const spanFrom = toIso(msgTs(allMessages[0]));
       const spanTo = toIso(msgTs(allMessages[allMessages.length - 1]));
-      const spanLines = summarizeMessages(allMessages, ctx.cwd, branchEntries);
+      const span = summarizeMessages(allMessages, ctx.cwd, branchEntries);
+      const spanLines = span.lines;
 
       // 3) Freeze startup references after the second user prompt, then carry
       // their original outputs forward outside the trimmable conversation spans.
@@ -1883,6 +1867,7 @@ export default function (pi: ExtensionAPI) {
         branchEntries,
         now: nowIso,
         spanLines,
+        spanTools: span.tools,
         spanFrom,
         spanTo,
         firstKeptEntryId: preparation.firstKeptEntryId,
@@ -1912,7 +1897,8 @@ export default function (pi: ExtensionAPI) {
             startupReads: retained,
             // Only this compaction's own span (un-capped lines). Earlier spans
             // are re-rendered from the earlier entries' details — no nesting.
-            span: { at: nowIso, from: spanFrom, to: spanTo, reason, tokensBefore: preparation.tokensBefore, lines: spanLines },
+            span: { at: nowIso, from: spanFrom, to: spanTo, reason, tokensBefore: preparation.tokensBefore,
+              lines: spanLines, ...(span.tools ? { tools: span.tools } : {}) },
           },
         },
       };

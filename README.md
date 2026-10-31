@@ -122,14 +122,20 @@ New sessions default to verbatim.
 
 ### Control the compaction cap
 
-Capping of the context eventually applies to strip further elements from the checkpoint.
-See [how cap trimming works](docs/DESIGN.md#how-cap-trimming-works) for the removal order.
+When the checkpoint exceeds its budget, capping first tightens tool presentation:
+160→120→80-character previews, fewer low-priority refs, then grouped tool-only
+prefixes. Only if those stages cannot make it fit does it remove conversation
+content. `tools-tightened` marks presentation changes; `trimmed` marks actual
+omissions. Earlier structured spans can be tightened in the new checkpoint without
+editing their stored originals; disabling the cap restores their normal rendering.
+Text-only legacy spans use a conservative fallback.
+See [how cap trimming works](docs/DESIGN.md#how-cap-trimming-works) for the full order.
 This is meant as a fallback option for allowing compaction rounds to run far in excess of the intended use case, and should probably be used to allow work to be wrapped up before handing off to a new session. 
 If you find that in normal usage you frequently work over the compaction cap, other compaction tools are likely to be more suitable.
 
 The default is **`warn 25%`**: a conversation-and-retained-reads budget estimated at 25% of
 the current model's context window, using **4 characters per token**, not an
-exact tokenizer. When content would actually be trimmed, choose **Apply trimming**,
+exact tokenizer. When tightening or omission would be needed, choose **Apply trimming**,
 **Disable cap for this session**, **Change budget**, or **Cancel compaction**. Disabling persists as `off`, rather than
 bypassing just once. 
 

@@ -12,6 +12,11 @@ history, including recorded tool outputs and your reasoning, is preserved in the
 session and can be retrieved. Retained startup reads and the uncompacted tail
 remain available as evidence; recover only hidden information needed for the task.
 
+Under size pressure, `tools-tightened` on its own marks reduced tool previews/refs
+or grouped tool-only lines, without omitted conversation prose or calls. If
+`trimmed` is also present, content was omitted or user text was shortened. Neither means that the original evidence
+was never recorded; recover task-relevant missing detail through the tools below.
+
 Use the recovery tools for history established by this conversation or its checkpoint,
 not project discovery, requirements never supplied, other sessions, or abandoned branches.
 For unfamiliar project details or missing requirements, inspect project files or

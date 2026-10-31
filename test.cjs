@@ -462,6 +462,7 @@ async function main() {
     await require("./scripts/file-evidence-tests.cjs")({ ...hybridHelpers, factory, load, compact, jiti, piRoot });
     await require("./scripts/compaction-format-tests.cjs")({ ...hybridHelpers, compact });
     await require("./scripts/tool-stub-tests.cjs")({ ...hybridHelpers, compact, jiti });
+    await require("./scripts/progressive-cap-tests.cjs")({ ...hybridHelpers, compact, jiti });
     await capPolicyTests(capHelpers);
     assert.deepEqual(Object.keys(ext.tools.context_lookup.parameters.properties), ["question"]);
 

@@ -52,6 +52,12 @@ checks local dependencies and global npm installations.
   invalid-value fallbacks, and the 3× total-call ceiling. Soft-limit answers cover
   incomplete markers, fallback guidance, pagination, and long/empty responses.
 - Default-budget retention, small-budget termination, and cross-span size guards.
+  Pure progressive-cap tests cover every presentation rung before omission, early
+  stopping, immutable canonical records, Unicode preview ends, protected refs and
+  outcomes, opaque legacy/future records, and independently removable grouped calls.
+  Session integration covers retroactive span rendering, cap-off restoration, and
+  metadata round-trips through resume/fork. The module lives under `extensions/lib/`
+  so it is packaged but not discovered as a second extension.
 - A package smoke test checking `npm pack --dry-run`, then Pi's real package
   resolver, extension loader, registered tool/schema, and skill loader.
 
@@ -93,6 +99,39 @@ writes before/after checkpoints and a JSON report into a private temporary direc
 (or `--out DIR`). Artifacts contain session content: do not commit or share them
 without approval. Measurements are characters, not tokens or live-model outcomes;
 recorded tool commands are never executed and input files remain byte-identical.
+
+For compaction/cap timing, including valid doubled history:
+
+```bash
+node scripts/compaction-benchmark.cjs --runs 7 /path/to/session.jsonl
+```
+
+This optional benchmark rebuilds recorded active-branch cuts cap-off, independently
+for `HEAD` and the worktree, so earlier spans have the respective renderer's
+canonical data. It then times one additional compaction with the cap off, at
+131072 characters (25% of a simulated 131072-token context), and at 8000 characters.
+The pure progressive cap is timed separately, including a mild 5% reduction case.
+Reported hook times exclude runtime import, file loading, history reconstruction,
+projection/preparation, and persistence; reconstruction/preparation times are
+reported separately. Each case has two warmups and the requested measured runs.
+
+The 2× case links two in-memory copies with unique entry and tool-call IDs and
+remapped cut/context-edit targets, rather than naively appending duplicate-ID
+JSONL. Assertions check identical uncapped history across renderers, twice the
+emitted tool calls, immutable canonical metadata, and unchanged source files.
+Set `TC_BASELINE_REF` to compare a specific commit; use the pre-progressive-cap
+renderer with the same stub format, not a pre-stub-overhaul baseline. The report
+includes source hashes, environment, raw timing samples, sizes, and flags, but no
+checkpoint contents. It is written to a private temporary directory (or `--out DIR`).
+No sessions are opened through SessionManager and no recorded tools/models run.
+Process peak RSS reflects the entire audit harness, not incremental cap memory.
+
+Add `--headroom` to evaluate the same 131072-character cap at every recorded cut.
+The report then records the first presentation tightening, first destructive cap,
+and extra recorded rounds before destruction for each renderer. These are replayed
+cut intervals, not a prediction of live trigger times: tighter checkpoints could
+also change when Pi next needs to compact. The extra audit is excluded from timed
+hook samples and reported separately within setup time.
 
 ## Manual check
 
