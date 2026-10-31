@@ -87,8 +87,8 @@ async function compact(ext, ctx, ids, kept, reason = "manual", fileOps) {
   assert(!c.summary.includes("Redo the startup process"));
   assert(c.summary.includes("user and assistant prose is kept verbatim, subject to budget trimming"));
   assert(c.summary.includes("Retained prose is a record of what was said, not verification of its claims."));
-  assert(c.summary.includes("Assistant thinking and tool outputs are removed."));
-  assert(c.summary.includes("**Evidence boundary:** Tool signatures and file lists do not contain command output, file contents, or rules from read documents;"));
+  assert(c.summary.includes("Thinking and most output are removed; selected output observations remain after →."));
+  assert(c.summary.includes("**Evidence boundary:** Previews and file lists are incomplete;"));
   assert(c.summary.lastIndexOf("**Evidence boundary:**") < c.summary.lastIndexOf("Conversation"), "closing evidence rule stays above the uncompacted tail");
   assert(!c.summary.includes("EARLIEST_TOOL_OUTPUT"));
   assert(!c.summary.includes("EARLIEST_THINKING"));
@@ -461,6 +461,7 @@ async function main() {
     await require("./scripts/checkpoint-evidence-tests.cjs")({ ...hybridHelpers, compact });
     await require("./scripts/file-evidence-tests.cjs")({ ...hybridHelpers, factory, load, compact, jiti, piRoot });
     await require("./scripts/compaction-format-tests.cjs")({ ...hybridHelpers, compact });
+    await require("./scripts/tool-stub-tests.cjs")({ ...hybridHelpers, compact, jiti });
     await capPolicyTests(capHelpers);
     assert.deepEqual(Object.keys(ext.tools.context_lookup.parameters.properties), ["question"]);
 
@@ -497,8 +498,8 @@ async function main() {
     const c1 = await compact(ext, ctx, [f.u, f.a, f.t], f.kept, "manual", { read: new Set(["src/bar.ts"]), written: new Set(), edited: new Set(["src/foo.ts"]) });
     assert(c1.summary.includes("Please fix the N=7 bug."));
     assert(c1.summary.includes("I will inspect the file."));
-    assert(c1.summary.includes("[Assistant tool calls]: read("));
-    assert(c1.summary.includes("[ok]"));
+    assert(c1.summary.includes('[Tools]: read "src/foo.ts"'));
+    assert(!c1.details.span.lines.some((line) => line.includes("[ok]")));
     assert(!c1.summary.includes(argumentsText), "checkpoint truncates long arguments");
     const next = f.manager.appendMessage(user("The next retained tail.", epoch + 2000));
     const c2 = await compact(ext, ctx, [f.kept], next, "threshold");

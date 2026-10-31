@@ -2,6 +2,22 @@
 
 ## Unreleased — initial release preparation
 
+- Render compact `[Tools]:` signatures with complete file paths, requested read
+  ranges, payload sizes/counts, and 160-character head-and-tail bash previews.
+  Keep escaped newlines and shell syntax intact; omit tool-level timeout fields.
+  Replace new `[ok]` labels with conservative historical output observations;
+  retain explicit tool-error/unknown status. Recognized test/build summaries,
+  HTTP observations, tiny complete historical outputs, and commit hashes can
+  remain visible. Unlabelled calls do not imply success. No command diffs,
+  arbitrary output tails, cross-message merging, or read folding.
+- Add checkpoint `ref=ID` hints for write/edit payloads, truncated commands, and
+  likely historical observations. `context_show_entry` can open refs directly
+  with `includeRelated=true`, recovering matched calls and results together in
+  bounded pages. Ordinary single-entry retrieval stays unchanged; related-entry
+  indexing respects tool names, duplicate ambiguity, sequential reuse, and the
+  active branch. Refs do not depend on deletion inference; no ref makes no
+  reproducibility claim. Existing saved span lines are preserved.
+
 - Raise the default lookup budget from 10 to 25 substantive search turns (75 total
   search-phase model calls, plus a final tool-free write-up). Keep the consecutive
   lookup limit at 1. Mark plain-text answers after the paging-only budget warning

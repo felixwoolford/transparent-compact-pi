@@ -57,7 +57,7 @@ module.exports = async function lookupPagingTests(h) {
       return writeup(context);
     }
     // Explicit defaults are equivalent to the original omitted defaults.
-    return response([toolCall("show_entry", { id: hugeId, maxLines: 400, ...cursor(output) }, `entry-${turn}`)]);
+    return response([toolCall("show_entry", { id: hugeId, includeRelated: false, maxLines: 400, ...cursor(output) }, `entry-${turn}`)]);
   });
   assert.equal(showPages, 4);
   assert.equal(fullEntry.calls, 6); // five searching/paging requests + write-up
@@ -152,6 +152,18 @@ module.exports = async function lookupPagingTests(h) {
     assert.equal(rejected.calls, 4, mode);
     assert(rejected.answer.includes("2-turn limit"), mode);
   }
+
+  // Related-entry mode changes the source being paged, even if this particular
+  // entry has no relations. It cannot inherit a single-entry cursor exemption.
+  const relatedMode = await run((turn, context) => {
+    if (turn === 1) return response([toolCall("show_entry", { id: hugeId }, "single")]);
+    if (turn === 2) return response([toolCall("show_entry", { id: hugeId, includeRelated: true, ...cursor(lastResult(context)) }, "related")]);
+    if (turn === 3) return response([toolCall("show_entry", { id: smallId }, "not-admitted-related")]);
+    assert(!results(context).some((m) => m.toolCallId === "not-admitted-related"));
+    return writeup(context);
+  });
+  assert.equal(relatedMode.calls, 4);
+  assert(relatedMode.answer.includes("2-turn limit"));
 
   let replay;
   const replayed = await run((turn, context) => {

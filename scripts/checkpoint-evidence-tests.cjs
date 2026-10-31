@@ -48,24 +48,24 @@ module.exports = async function ({ ext, SessionManager, root, compact, makeConte
   const c = await compact(ext, ctx, ids, kept, "manual", {
     read: new Set(["SPEC.md", "docs/a guide.md"]), written: new Set(), edited: new Set(["changed.ts"]),
   });
-  assert(c.summary.includes('bash(command="check") [ok]; read(path="missing.md") [error]'));
+  assert(c.summary.includes('bash "check"; read "missing.md" [tool error]'));
   assert(c.summary.includes('[Assistant]: All checks passed.'), "assistant prose stays verbatim, not endorsed");
-  assert(c.summary.includes('bash(command="first-reuse") [ok]'));
-  assert(c.summary.includes('bash(command="second-reuse") [error]'));
+  assert(c.summary.includes('bash "first-reuse"'));
+  assert(c.summary.includes('bash "second-reuse" [tool error]'));
   for (const file of ["unfinished.md", "missing-status.md", "wrong-name.md", "before-call.md", "duplicate-a.md", "duplicate-b.md", "outside-selection.md"]) {
-    assert(c.summary.includes(`read(path="${file}") [unknown]`), file);
+    assert(c.summary.includes(`read "${file}" [unknown]`), file);
   }
   assert(!c.summary.includes("REMOVED_EVIDENCE_SECRET"), "neither successful nor failed output bodies leak");
-  assert(c.summary.includes("ok does not prove a command or tests passed."));
+  assert(c.summary.includes("Unlabelled does NOT establish exit 0 or passing tests."));
   assert(c.summary.includes("SPEC.md\ndocs/a guide.md\n</read-files>"));
   assert(c.summary.includes("changed.ts (no read-tool output in tail)"));
   assert.deepEqual(c.details.readFiles, ["SPEC.md", "docs/a guide.md"], "metadata retains bare paths");
   assert.deepEqual(c.details.modifiedFiles, ["changed.ts"]);
-  const rule = "**Evidence boundary:** Tool signatures and file lists do not contain command output, file contents, or rules from read documents; use `context_lookup` when you need that historical evidence or its provenance, and inspect the source when you need current state.";
+  const rule = "**Evidence boundary:** Previews and file lists are incomplete; output labels are historical observations, prose is not verification. Open refs with `context_show_entry` (`includeRelated=true`), or use `context_lookup`. Inspect sources for current state.";
   assert(c.summary.includes(`</modified-files>\n\n${rule}\n\nConversation`), "rule sits after file lists, immediately before the tail boundary");
   const next = manager.appendMessage(user("Next retained tail"));
   const repeated = await compact(ext, ctx, [kept], next);
-  assert(repeated.summary.includes('bash(command="check") [ok]'), "statuses persist in saved uncapped spans");
+  assert(repeated.summary.includes('bash "check"'), "signatures persist in saved uncapped spans");
   assert(repeated.summary.includes("SPEC.md\ndocs/a guide.md\n</read-files>"), "cumulative read lists make no unsupported absence claim");
   assert.equal(repeated.summary.split(rule).length - 1, 1, "closing rule is not nested on repeated compaction");
 
@@ -78,7 +78,7 @@ module.exports = async function ({ ext, SessionManager, root, compact, makeConte
     preparation: { messagesToSummarize: [split.getEntry(a).message], turnPrefixMessages: [split.getEntry(t).message],
       isSplitTurn: true, firstKeptEntryId: tail, tokensBefore: 1000 },
   }, makeContext(split, cwd));
-  assert(splitResult.compaction.summary.includes('read(path="split.md") [error]'), "pairing spans both preparation arrays");
+  assert(splitResult.compaction.summary.includes('read "split.md" [tool error]'), "pairing spans both preparation arrays");
   assert(splitResult.compaction.summary.includes(rule), "rule is present without any file lists");
 
   const old = SessionManager.inMemory(cwd);
@@ -93,7 +93,7 @@ module.exports = async function ({ ext, SessionManager, root, compact, makeConte
   const legacy = await compact(ext, makeContext(old, cwd), [oldTail], newTail);
   assert(legacy.summary.includes(oldLine), "old spans are not rewritten with guessed outcomes");
   assert(legacy.summary.includes(oldCustom), "previously saved custom-message bodies are not migrated");
-  assert(legacy.summary.includes("Calls without a status in older spans have unknown outcomes."));
+  assert(legacy.summary.includes("legacy calls without status are unknown."));
   assert(legacy.summary.includes("OLD.md\n</read-files>"));
   console.log("== Custom messages: generic bounded stubs, raw recovery, and repeated compaction ==");
   const custom = SessionManager.inMemory(cwd);

@@ -54,11 +54,15 @@ module.exports = function (h) {
 
   for (const name of ["context_list_entries", "context_grep", "context_show_entry"]) {
     const tool = ext.tools[name];
-    assert(tool.description.startsWith("Fallback after context_lookup, when its findings are incomplete; same scope as context_lookup."), name);
+    assert(tool.description.startsWith(name === "context_show_entry"
+      ? "Retrieve historical evidence directly from a checkpoint ref, or after context_lookup if findings are incomplete; same scope as context_lookup."
+      : "Fallback after context_lookup, when its findings are incomplete; same scope as context_lookup."), name);
     assert(!tool.description.includes(scope), `${name}: refer to lookup scope without repeating it`);
     assert(tool.promptSnippet.includes("this conversation's"), name);
     assert(tool.promptSnippet.includes("compaction"), name);
   }
+  assert(ext.tools.context_show_entry.parameters.properties.includeRelated);
+  assert.match(ext.tools.context_show_entry.description, /full matched tool call and result/);
   for (const tool of Object.values(ext.tools)) {
     assert.doesNotMatch(JSON.stringify({ description: tool.description, promptSnippet: tool.promptSnippet,
       parameters: tool.parameters }), /\blost\b|nothing is lost|retrieve anything/i,

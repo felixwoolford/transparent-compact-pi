@@ -294,6 +294,28 @@ interface TranscriptIndexSection {
   startLine: number;
 }
 
+// Pair only selected messages, by call id AND tool name. Ambiguous concurrent
+// ids stay unknown; sequential reuse is allowed after consuming a result.
+function pairedToolResults(messages: AgentMessage[]): Map<object, Record<string, any>> {
+  const results = new Map<object, Record<string, any>>();
+  const pending = new Map<string, { block: object; name: string } | null>();
+  for (const message of messages) {
+    const m = message as unknown as Record<string, any>;
+    if (m.role === "assistant") {
+      for (const block of m.content ?? []) {
+        if (block.type !== "toolCall" || typeof block.id !== "string" || !block.id) continue;
+        pending.set(block.id, pending.has(block.id) ? null : { block, name: block.name });
+      }
+    } else if (m.role === "toolResult") {
+      const call = pending.get(m.toolCallId);
+      if (!call || call.name !== m.toolName) continue;
+      results.set(call.block, m);
+      pending.delete(m.toolCallId);
+    }
+  }
+  return results;
+}
+
 interface TranscriptIndexEntry {
   id: string;
   type: string;
@@ -303,6 +325,8 @@ interface TranscriptIndexEntry {
   /** 1-based line number of the last line of the block (inclusive) */
   endLine: number;
   sections?: TranscriptIndexSection[];
+  /** Raw, unambiguously matched call/result entries; never parsed from text. */
+  relatedIds?: string[];
 }
 
 function branchToTranscript(entries: SessionEntry[]): { lines: string[]; index: TranscriptIndexEntry[] } {
@@ -414,6 +438,25 @@ function branchToTranscript(entries: SessionEntry[]): { lines: string[]; index: 
     if (b.sections && b.sections.length > 0) e.sections = b.sections.map((s) => ({ kind: s.kind, startLine: b.hrIdx + s.rel + 3 }));
     return e;
   });
+  const byMessage = new Map<object, string>();
+  const byCall = new Map<object, string>();
+  const messages: AgentMessage[] = [];
+  for (const entry of entries) {
+    if (entry.type !== "message") continue;
+    messages.push(entry.message);
+    byMessage.set(entry.message, entry.id);
+    if (entry.message.role === "assistant")
+      for (const block of entry.message.content ?? [])
+        if (block.type === "toolCall") byCall.set(block, entry.id);
+  }
+  const byId = new Map(index.map((entry) => [entry.id, entry]));
+  for (const [call, result] of pairedToolResults(messages)) {
+    const callId = byCall.get(call), resultId = byMessage.get(result);
+    if (!callId || !resultId) continue;
+    const callEntry = byId.get(callId)!, resultEntry = byId.get(resultId)!;
+    (callEntry.relatedIds ??= []).push(resultId);
+    resultEntry.relatedIds = [callId];
+  }
   return { lines, index };
 }
 
@@ -444,46 +487,146 @@ function argumentSnippet(value: unknown): string {
   return s.length > cfg.argSnippetChars ? `${s.slice(0, cfg.argSnippetChars)}…` : s;
 }
 
-function toolCallSignature(name: string, args: Record<string, unknown> | undefined, cwd: string): string {
-  const parts: string[] = [];
-  for (const [k, v] of Object.entries(args ?? {})) {
-    let s: string;
-    if (["read", "write", "edit"].includes(name) && k === "path" && typeof v === "string")
-      s = JSON.stringify(checkpointPath(v, cwd)); // Keep the whole identifying path.
-    else if (name === "write" && k === "content" && typeof v === "string")
-      s = `<${v.length} chars>`;
-    else if (name === "edit" && k === "edits" && Array.isArray(v))
-      s = String(v.length);
-    else if (name === "edit" && (k === "oldText" || k === "newText") && typeof v === "string")
-      s = `<${v.length} chars>`;
-    else
-      s = argumentSnippet(name === "bash" && k === "command" && typeof v === "string" ? checkpointCommand(v, cwd) : v);
-    parts.push(`${k}=${s}`);
-  }
-  return `${name}(${parts.join(", ")})`;
+function commandSnippet(command: string, cwd: string): string {
+  const encoded = JSON.stringify(checkpointCommand(command, cwd));
+  if (encoded.length <= cfg.argSnippetChars) return encoded;
+  // Keep both identifying ends, including the quotes. No shell rewriting,
+  // import removal, or diff against another (possibly truncated) command.
+  let head = Math.floor((cfg.argSnippetChars - 1) * 0.62);
+  let tail = encoded.length - (cfg.argSnippetChars - head - 1);
+  if (/[\uD800-\uDBFF]/.test(encoded[head - 1])) head--;
+  if (/[\uDC00-\uDFFF]/.test(encoded[tail])) tail++;
+  return `${encoded.slice(0, head)}…${encoded.slice(tail)}`;
 }
 
-function summarizeMessages(messages: AgentMessage[], cwd: string): string[] {
-  // Pair calls with later results in Pi's selected messages only. Never infer
-  // outcomes from result text, assistant claims, or another branch/the kept tail.
-  const outcomes = new Map<object, "ok" | "error">();
-  const pending = new Map<string, { block: object; name: string } | null>();
-  for (const msg of messages) {
-    const m = msg as unknown as Record<string, any>;
-    if (m.role === "assistant") {
-      for (const block of m.content ?? []) {
-        if (block.type !== "toolCall" || typeof block.id !== "string" || !block.id) continue;
-        // Concurrent duplicate IDs cannot be attributed safely. Sequential
-        // reuse is fine once the preceding call's result has been consumed.
-        pending.set(block.id, pending.has(block.id) ? null : { block, name: block.name });
-      }
-    } else if (m.role === "toolResult") {
-      const call = pending.get(m.toolCallId);
-      if (!call || call.name !== m.toolName) continue;
-      if (typeof m.isError === "boolean") outcomes.set(call.block, m.isError ? "error" : "ok");
-      pending.delete(m.toolCallId);
-    }
+function toolCallSignature(name: string, args: Record<string, unknown> | undefined, cwd: string): string {
+  const a = args ?? {};
+  if (!["read", "write", "edit", "bash"].includes(name))
+    return `${name}(${Object.entries(a).map(([k, v]) => `${k}=${argumentSnippet(v)}`).join(", ")})`;
+  const parts: string[] = [];
+  const fileTool = ["read", "write", "edit"].includes(name) && typeof a.path === "string";
+  let base = fileTool ? `${name} ${JSON.stringify(checkpointPath(a.path as string, cwd))}` : name;
+  const range = name === "read" && fileTool &&
+    (a.offset === undefined || (Number.isSafeInteger(a.offset) && (a.offset as number) > 0)) &&
+    (a.limit === undefined || (Number.isSafeInteger(a.limit) && (a.limit as number) > 0));
+  if (range && (a.offset !== undefined || a.limit !== undefined)) {
+    const start = (a.offset as number | undefined) ?? 1;
+    const end = a.limit === undefined ? "" : start + (a.limit as number) - 1;
+    base += `:${start}-${end}`; // Requested range, not a claim about returned lines.
   }
+  for (const [k, v] of Object.entries(a)) {
+    if (fileTool && k === "path") continue;
+    if (range && (k === "offset" || k === "limit")) continue;
+    if (name === "bash" && k === "timeout") continue;
+    if (name === "bash" && k === "command" && typeof v === "string")
+      base += ` ${commandSnippet(v, cwd)}`;
+    else if (name === "write" && k === "content" && typeof v === "string")
+      parts.push(`(${v.length} chars)`);
+    else if (name === "edit" && k === "edits" && Array.isArray(v))
+      parts.push(`×${v.length}`);
+    else if (name === "edit" && (k === "oldText" || k === "newText") && typeof v === "string")
+      parts.push(`${k}=<${v.length} chars>`);
+    else parts.push(`${k}=${argumentSnippet(v)}`);
+  }
+  return [base, ...parts].join(" ");
+}
+
+// These are positive salience hints, not a reproducibility classifier. Do not
+// parse shell syntax or claim unreferenced evidence still exists elsewhere.
+function commandHints(command: string): { tests: boolean; network: boolean; historical: boolean } {
+  const core = command.replace(/^\s*cd\s+(?:"[^"\n]*"|'[^'\n]*'|[^\s;&|]+)\s*&&\s*/, "").trimStart();
+  const tests = /^(?:(?:uv run |(?:\S*\/)?python[\d.]* -m )?pytest\b|(?:\S*\/)?pytest\b|(?:npm|pnpm|yarn) (?:run )?(?:test|build)\b|node --test\b|(?:\.\/)?gradlew\b|cargo (?:test|build)\b|go (?:test|build)\b|dotnet (?:test|build)\b|mvn (?:test|verify|package)\b)/.test(core);
+  const network = /^(?:curl|wget)\b/.test(core);
+  const readOnly = /^(?:cat|sed|awk|rg|grep|head|tail|find|ls|man|git)\b/.test(core);
+  const historical = !readOnly && (network || /^(?:timeout\s+\S+\s+)?tmux\b/.test(core) ||
+    /^(?:\S*\/)?(?:python[\d.]*|node|ruby|perl)\b[^\n]*(?:\s-[ce]\b|\s-\s*<<)/.test(core) ||
+    /^(?:uv run )?(?:\S*\/)?(?:python[\d.]*|node)\b/.test(core) ||
+    /^(?:time|hyperfine)\b|\b(?:bench(?:mark)?|timeit)\b/.test(core));
+  return { tests, network, historical };
+}
+
+function observationQuote(text: string): string {
+  if (JSON.stringify(text).length <= cfg.argSnippetChars) return JSON.stringify(text);
+  // Unlike a generic argument prefix, keep output quotations closed and escaped
+  // even when the source contains control characters or ends at a surrogate.
+  let end = Math.min(text.length, cfg.argSnippetChars);
+  while (JSON.stringify(text.slice(0, end) + "…").length > cfg.argSnippetChars) end--;
+  if (/[\uD800-\uDBFF]/.test(text[end - 1])) end--;
+  return JSON.stringify(text.slice(0, end) + "…");
+}
+
+function bashOutputLabel(command: string, result: Record<string, any>): string {
+  const content = result.content;
+  // Do not treat an image, structured-only result, or truncation notice as a
+  // tiny complete text observation. Summaries below quote selected text only.
+  const textOnly = typeof content === "string" || (Array.isArray(content) && content.length > 0 && content.every((b) => b?.type === "text" && typeof b.text === "string"));
+  if (!textOnly) return "";
+  const raw = textOf(content).text;
+  const structuredExit = result.structuredContent?.exit_code;
+  const hasStructuredExit = Number.isSafeInteger(structuredExit);
+  const suffix = /(?:^|\n)Command exited with code (-?\d+)\s*$/.exec(raw);
+  // Successful reads can print a fixture containing the wrapper's exact text.
+  // Prefer explicit metadata; trust a legacy nonzero footer only on tool error.
+  const exit = suffix && (hasStructuredExit ? Number(suffix[1]) === structuredExit : result.isError === true) ? suffix : undefined;
+  const bodyText = exit ? raw.slice(0, exit.index) : raw;
+  const body = bodyText.trim();
+  const partial = result.details?.truncation?.truncated === true || /\[(?:Output truncated|Showing last |Showing lines )/i.test(body);
+  const labels: string[] = [];
+  const reportedExit = hasStructuredExit ? structuredExit : exit ? Number(exit[1]) : undefined;
+  const exitCode = Number.isSafeInteger(reportedExit) ? reportedExit : undefined;
+  if (exitCode !== undefined && exitCode !== 0) labels.push(`exit ${exitCode}`); // Reported shell status, NOT pipeline/test status.
+  if (!partial && (bodyText === "" || body === "(no output)")) return [...labels, "no output"].join("; ");
+  const hints = commandHints(command);
+  const lines = body.replace(/\x1b\[[0-9;]*m/g, "").split("\n");
+  let observed: string[] = [];
+  if (hints.tests) {
+    observed = lines.filter((line) =>
+      /^=+ .*\b\d+ (?:passed|failed|errors?|skipped|xfailed)\b.*=+$/.test(line.trim()) ||
+      /^(?:\d+ (?:passed|failed|errors?|skipped|xfailed|deselected|warnings?)(?:, )?)+ in [\d.]+s$/.test(line.trim()) ||
+      /^(?:ℹ|#) (?:pass|fail) \d+$/.test(line.trim()) ||
+      /^BUILD (?:SUCCESSFUL|FAILED)\b/.test(line.trim()) ||
+      /^(?:PASS|FAIL): \d+\/\d+$/.test(line.trim())).slice(-3);
+  }
+  if (hints.network) {
+    const codes = [...body.matchAll(/(?:^|\n)(?:HTTP\/[\d.]+\s+([1-5]\d\d)\b|http(?:_code)?[=: ]\s*([1-5]\d\d)\b)/gi)].map((m) => m[1] ?? m[2]);
+    if (codes.length) labels.push(`output: http ${codes.slice(0, 4).join(",")}${codes.length > 4 ? ",…" : ""}`);
+  }
+  // Only recognized execution commands get error-text scanning. In particular,
+  // never extract test/error labels from file reads, searches, or git views.
+  if (!observed.length && (hints.tests || hints.historical)) {
+    const errors = lines.filter((line) => line.trim()).slice(-6).filter((line) =>
+      /^(?:\s*\w*(?:Error|Exception):|Traceback \(most recent call last\):|error(?:\[\w+\])?:|fatal:)|command not found/.test(line));
+    observed = errors.slice(-1);
+  }
+  if (observed.length) labels.push(`output: ${observed.map((line) => observationQuote(line.trim())).join(" / ")}`);
+  else if (!labels.some((label) => label.startsWith("output:")) && hints.historical && !partial &&
+    bodyText.length <= 100 && JSON.stringify(bodyText).length <= cfg.argSnippetChars)
+    labels.push(`output: ${JSON.stringify(bodyText)}`);
+  // A commit hash is useful provenance, but only extract the git-generated
+  // bracketed form, not arbitrary lines that merely start with hex digits.
+  if (/^(?:git\b|.*&&\s*git\b)/.test(command) && /\bgit commit\b/.test(command)) {
+    const hash = /^\[[^\]\n]+ ([0-9a-f]{7,40})\]/m.exec(body)?.[1];
+    if (hash) labels.push(`commit ${hash}`);
+  }
+  return labels.join("; ");
+}
+
+function summarizeMessages(messages: AgentMessage[], cwd: string, entries: SessionEntry[]): string[] {
+  const results = pairedToolResults(messages);
+  // Identity matching fails closed for projected replacements and synthetic
+  // messages. Never guess an ENTRY id from a repeated command or timestamp.
+  const entryIds = new Map<object, string>();
+  const callEntries = new Map<object, string>();
+  const rawMessages: AgentMessage[] = [];
+  for (const entry of entries) {
+    if (entry.type !== "message") continue;
+    entryIds.set(entry.message, entry.id);
+    rawMessages.push(entry.message);
+    if (entry.message.role === "assistant")
+      for (const block of entry.message.content ?? [])
+        if (block.type === "toolCall") callEntries.set(block, entry.id);
+  }
+  const rawResults = pairedToolResults(rawMessages);
   const lines: string[] = [];
   for (const msg of messages) {
     const m = msg as unknown as Record<string, any>;
@@ -498,12 +641,25 @@ function summarizeMessages(messages: AgentMessage[], cwd: string): string[] {
         const calls: string[] = [];
         for (const block of m.content ?? []) {
           if (block.type === "text") prose += (prose ? "\n" : "") + String(block.text ?? "");
-          else if (block.type === "toolCall")
-            calls.push(`${toolCallSignature(String(block.name), block.arguments, cwd)} [${outcomes.get(block) ?? "unknown"}]`);
+          else if (block.type === "toolCall") {
+            const name = String(block.name), args = block.arguments ?? {};
+            const result = results.get(block);
+            const status = typeof result?.isError !== "boolean" ? " [unknown]" : result.isError ? " [tool error]" : "";
+            const command = name === "bash" && typeof args.command === "string" ? args.command : undefined;
+            const label = result && command !== undefined ? bashOutputLabel(command, result) : "";
+            const needsRef = name === "write" || name === "edit" || (command !== undefined &&
+              (JSON.stringify(checkpointCommand(command, cwd)).length > cfg.argSnippetChars || commandHints(command).historical));
+            // Results identify one call even when the assistant made a batch.
+            // Otherwise the assistant ENTRY still preserves the full arguments.
+            const ref = needsRef && callEntries.has(block)
+              ? (result && rawResults.get(block) === result ? entryIds.get(result) : undefined) ?? callEntries.get(block)
+              : undefined;
+            calls.push(`${toolCallSignature(name, args, cwd)}${status}${label ? ` → ${label}` : ""}${ref ? ` ref=${ref}` : ""}`);
+          }
           // thinking blocks: removed by design (kept in the session)
         }
         if (prose.trim()) lines.push(`[Assistant]: ${prose.trim()}`);
-        if (calls.length > 0) lines.push(`[Assistant tool calls]: ${calls.join("; ")}`);
+        if (calls.length > 0) lines.push(`[Tools]: ${calls.join("; ")}`);
         break;
       }
       case "toolResult":
@@ -640,7 +796,7 @@ function renderStartupReads(state: StartupReads, entries: SessionEntry[], firstK
   const retained = state.reads.filter((r) => !tail.has(r.entryId));
   if (retained.length === 0) return "";
   return ["### Retained startup reads",
-    "Original read outputs, preserved verbatim. Offsets and truncation notices are part of the original reads. These are not new filesystem reads. Tool-call status labels refer to the conversation spans, where outputs are removed, not these retained copies.",
+    "Original read outputs, preserved verbatim. Offsets and truncation notices are part of the original reads. These are not new filesystem reads. Tool-call status labels refer to the conversation spans, not these retained copies.",
     ...retained.map((r) => `<retained-read entry=${JSON.stringify(r.entryId)} path=${JSON.stringify(r.path)} offset=${r.offset ?? 1}${r.limit === undefined ? "" : ` limit=${r.limit}`}>
 ${r.text.join("\n")}
 </retained-read>`),
@@ -859,15 +1015,15 @@ const RECOVERY_SCOPE_RULE = "Use the recovery tools for history established by t
 const RECOVERY_FILESYSTEM_RULE = "For recovery of details hidden by compaction, do not read or grep raw session JSONL files through filesystem tools; use the recovery tools instead.";
 
 const REORIENT_BLOCK = `**Post-compaction re-orientation.** ${RECOVERY_HISTORY_NOTE} Retained startup reads and the uncompacted tail remain available as evidence. Recover only hidden information needed for the current task.
-1. **Restore only information needed to continue.** Re-read project files when you need their current contents; cheap local rereads and recomputations are reasonable. If you need an earlier observation, the source of a finding, or the reason for a conclusion that compaction hid, use \`context_lookup\`. This can avoid repeating slow or unreliable research. Restore inputs, not completed actions: do not redo writes, edits, or other state-changing actions merely because their results are hidden. **Before using \`write\` to replace an existing file, re-read it unless its current contents are already visible in context. Do not reconstruct unchanged sections from memory.**
+1. **Restore only information needed to continue.** Re-read project files when you need their current contents; cheap local rereads and recomputations are reasonable. For hidden historical evidence with a checkpoint \`ref\`, use \`context_show_entry\` with that id and \`includeRelated=true\`; otherwise use \`context_lookup\` for an earlier observation, provenance, or reasoning. This can avoid repeating slow or unreliable research. Restore inputs, not completed actions: do not redo writes, edits, or other state-changing actions merely because their results are hidden. **Before using \`write\` to replace an existing file, re-read it unless its current contents are already visible in context. Do not reconstruct unchanged sections from memory.**
 2. If this is a Git repository, run \`git status\` and review uncommitted work. Re-verify build/test state if you are about to rely on it.
 3. **Distinguish earlier claims from supporting evidence.** Retained assistant prose records what was said, not independent verification. If a task-relevant claim has uncertain provenance or conflicts with new evidence, check its supporting output (using \`context_lookup\` if hidden) or the current source before treating it as established; label unresolved claims unverified. Retrieved reasoning remains a historical hypothesis, and historical outputs do not establish current file or build/test state.`;
 
 const CHECKPOINT_EXPLANATION = `**Compacted conversation follows.** The earlier part of this conversation has been compacted into the checkpoint below. This is not the full transcript. ${RECOVERY_HISTORY_NOTE}`;
 
-const RECOVERY_INSTRUCTIONS = `**Recovering hidden details.** Prefer \`context_lookup\` with a specific historical question: a subagent searches this conversation's full raw active branch in its own context and returns relevant findings. ${RECOVERY_SCOPE_RULE} If its findings are incomplete, use the bounded fallback tools \`context_list_entries\`, \`context_grep\`, and \`context_show_entry\`; follow their pagination instructions for more detail. ${RECOVERY_FILESYSTEM_RULE}`;
+const RECOVERY_INSTRUCTIONS = `**Recovering hidden details.** A checkpoint \`ref=ID\` can be opened directly with \`context_show_entry({id: "ID", includeRelated: true})\` to recover the full call and result. Without a known ref, prefer \`context_lookup\` with a specific historical question: a subagent searches this conversation's full raw active branch in its own context and returns relevant findings. ${RECOVERY_SCOPE_RULE} If its findings are incomplete, use the bounded fallback tools \`context_list_entries\`, \`context_grep\`, and \`context_show_entry\`; follow their pagination instructions for more detail. ${RECOVERY_FILESYSTEM_RULE}`;
 
-const EVIDENCE_BOUNDARY_RULE = "**Evidence boundary:** Tool signatures and file lists do not contain command output, file contents, or rules from read documents; use `context_lookup` when you need that historical evidence or its provenance, and inspect the source when you need current state.";
+const EVIDENCE_BOUNDARY_RULE = "**Evidence boundary:** Previews and file lists are incomplete; output labels are historical observations, prose is not verification. Open refs with `context_show_entry` (`includeRelated=true`), or use `context_lookup`. Inspect sources for current state.";
 
 const REORIENT_MESSAGE = "transparent-compact:reorient";
 const RECOVERY_RECAP = `**Recovery recap.** ${RECOVERY_SCOPE_RULE} For unfamiliar project details or missing requirements, inspect project files or ask the user instead. If lookup findings are incomplete, use \`context_list_entries\`, \`context_grep\`, or \`context_show_entry\`, following pagination instructions. ${RECOVERY_FILESYSTEM_RULE} Keep these evidence/recovery rules in force as work continues.`;
@@ -989,8 +1145,9 @@ async function buildMechanicalSummary(opts: {
     opts.notify(MIXED_CONTEXT_WARNING);
   }
   parts.push(`- Latest: ${opts.now} (trigger: ${opts.reason}, ~${opts.tokensBefore.toLocaleString()} tokens before compaction)`);
-  parts.push("- In the compacted spans, user and assistant prose is kept verbatim, subject to budget trimming; tool calls are kept as one-line signatures. Paths under the session working directory are shown relative to it (as `.` in shell commands). Write contents and edit payloads are replaced by sizes/counts; other argument snippets keep up to 160 characters followed by an ellipsis when abbreviated. Assistant thinking and tool outputs are removed. Retained prose is a record of what was said, not verification of its claims.");
-  parts.push("- Tool status: ok = result not flagged as an error; error = result flagged as an error; unknown = no safely matched result/status. Output content is removed in all cases. ok does not prove a command or tests passed. Calls without a status in older spans have unknown outcomes.");
+  parts.push("- In the compacted spans, user and assistant prose is kept verbatim, subject to budget trimming. Retained prose is a record of what was said, not verification of its claims. Tool signatures are display notation, not replayable shell commands: paths under the working directory become relative (`.` in commands); read ranges are requested lines; write/edit payloads become sizes/counts. Bash previews keep up to 160 encoded characters, head + … + tail, with escaped newlines. Thinking and most output are removed; selected output observations remain after →.");
+  parts.push("- [tool error] means the result was flagged as an error; [unknown] means no safely matched result/status. Unlabelled does NOT establish exit 0 or passing tests. → exit N is a reported shell status; output: quotes/extracts selected output, not an inferred verdict. Everything shown is historical. Legacy [ok] only means not flagged as a tool error; legacy calls without status are unknown.");
+  parts.push("- ref=ID marks useful historical evidence (including full truncated commands and write/edit payloads), not a lookup requirement. No ref makes no claim about reproducibility or whether old evidence still exists on disk. For current state, inspect files; for past observations, recover history.");
   parts.push("- Newly compacted custom messages are kept only as type stubs (long types abbreviated); their content is removed and remains recoverable in the session through context_lookup. Previously saved spans are unchanged.");
   parts.push(
     "- pi keeps the most recent part of the conversation verbatim (its `keepRecentTokens` setting). The spans below cover only what came *before* that. The retained verbatim conversation begins after the explicit boundary marker at the end of this checkpoint.",
@@ -1189,16 +1346,22 @@ function grepTranscript(transcripts: Transcript[], opts: GrepOptions, onContinua
   return out.join("\n\n") + notice;
 }
 
-function showEntry(transcripts: Transcript[], opts: { id: string; file?: string; maxLines?: number; offset?: number }, onContinuation?: OnContinuation): string {
+function showEntry(transcripts: Transcript[], opts: { id: string; includeRelated?: boolean; file?: string; maxLines?: number; offset?: number }, onContinuation?: OnContinuation): string {
   const targets = opts.file ? transcripts.filter((d) => d.name === opts.file) : transcripts;
   const out: string[] = [];
   const headers: string[] = [];
   for (const d of targets) {
     const e = d.index.find((x) => x.id === opts.id);
     if (!e) continue;
-    const block = d.lines.slice(e.startLine - 2, e.endLine); // includes the rule before the header
-    out.push(`### ${d.name}\n${block.join("\n")}`);
-    headers.push(`${d.name}: ${d.lines[e.startLine - 1]}`);
+    const ids = new Set([e.id, ...(opts.includeRelated === true ? e.relatedIds ?? [] : [])]);
+    // Chronological, one-hop expansion: a result includes its originating
+    // assistant, not all sibling outputs. An assistant includes its results.
+    for (const entry of d.index) {
+      if (!ids.has(entry.id)) continue;
+      const block = d.lines.slice(entry.startLine - 2, entry.endLine);
+      out.push(`### ${d.name}\n${block.join("\n")}`);
+      headers.push(`${d.name}: ${d.lines[entry.startLine - 1]}`);
+    }
   }
   return out.length ? pageText(out.join("\n\n"), {
     offset: opts.offset, maxChars: cfg.showEntryMaxChars,
@@ -1222,7 +1385,8 @@ const GREP_FIELDS = {
   throughEntry: THROUGH_ENTRY_FIELD,
 };
 const SHOW_FIELDS = {
-  id: Type.String({ description: "Entry id" }),
+  id: Type.String({ description: "ENTRY id, including a checkpoint ref" }),
+  includeRelated: Type.Optional(Type.Boolean({ description: "Include unambiguously matched tool call/result entries (default false). Use true with checkpoint refs to recover the full command/payload and its result. Keep unchanged when paging." })),
   maxLines: Type.Optional(Type.Integer({ minimum: 1, description: "Max lines per page (default 400); character limit also applies" })),
   offset: OFFSET_FIELD,
 };
@@ -1248,7 +1412,7 @@ const LOOKUP_SYSTEM_PROMPT = `You are a context-lookup subagent for a coding age
 You have three tools:
 - list_entries: paginated overview of entries (id, role, timestamp, preview)
 - grep: paginated transcript search; matches come with surrounding lines and authoritative ENTRY attribution
-- show_entry: retrieve an entry by id in bounded pages
+- show_entry: retrieve an entry by id in bounded pages; includeRelated=true also shows its matched tool call/result
 
 Search tools bound each response, not the underlying history. A partial page is not the entire evidence, but you do NOT need to exhaust every page. Follow continuation parameters only when omitted content is needed to answer the question, keeping all other search/context parameters unchanged. Narrow an overly broad search rather than paging through irrelevant matches. Stop paging once you have sufficient relevant evidence.
 
@@ -1289,6 +1453,7 @@ function lookupPageKey(name: string, args: Record<string, any>): string | undefi
       break;
     case "show_entry":
       fields = [typeof args.id === "string" ? args.id : undefined, string("file"),
+        typeof (args.includeRelated ?? false) === "boolean" ? (args.includeRelated ?? false) : undefined,
         number("maxLines", 400, 1), number("offset", 0)];
       break;
     default:
@@ -1319,7 +1484,7 @@ async function runLookupSubagent(opts: {
     },
     {
       name: "show_entry",
-      description: "Retrieve an indexed entry by ENTRY id in pages of up to 24000 payload characters and maxLines lines, plus attribution/cursor notes. Follow the reported offset only if omitted content is needed; a page may not contain the entire entry.",
+      description: "Retrieve an indexed entry by ENTRY id, optionally with matched tool call/result entries (includeRelated=true), in pages of up to 24000 payload characters and maxLines lines, plus attribution/cursor notes. Follow the reported offset only if omitted content is needed; keep includeRelated unchanged when paging.",
       parameters: Type.Object({ ...SHOW_FIELDS, file: FILE_FIELD }),
     },
   ];
@@ -1534,8 +1699,8 @@ function registerDirectTools(pi: ExtensionAPI): void {
   pi.registerTool({
     name: "context_show_entry",
     label: "Context: show entry",
-    description: pre + "Retrieve an indexed session entry by ENTRY id (from context_list_entries or context_grep) in pages of up to 24000 payload characters and maxLines lines, plus attribution/cursor notes. Follow the reported offset for the rest; a page may not contain the entire entry.",
-    promptSnippet: "Fallback: retrieve this conversation's entries for post-compaction recovery",
+    description: "Retrieve historical evidence directly from a checkpoint ref, or after context_lookup if findings are incomplete; same scope as context_lookup. Retrieve an indexed session entry by ENTRY id in pages of up to 24000 payload characters and maxLines lines, plus attribution/cursor notes. Set includeRelated=true with checkpoint refs to retrieve the full matched tool call and result. Follow the reported offset for the rest, keeping includeRelated unchanged; a page may not contain the entire entry.",
+    promptSnippet: "Retrieve this conversation's entries by checkpoint ref or for post-compaction recovery",
     parameters: Type.Object(SHOW_FIELDS),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       return run(ctx, (t) => showEntry(t, params));
@@ -1707,7 +1872,7 @@ export default function (pi: ExtensionAPI) {
       const msgTs = (m: AgentMessage): unknown => (m as unknown as { timestamp?: unknown }).timestamp;
       const spanFrom = toIso(msgTs(allMessages[0]));
       const spanTo = toIso(msgTs(allMessages[allMessages.length - 1]));
-      const spanLines = summarizeMessages(allMessages, ctx.cwd);
+      const spanLines = summarizeMessages(allMessages, ctx.cwd, branchEntries);
 
       // 3) Freeze startup references after the second user prompt, then carry
       // their original outputs forward outside the trimmable conversation spans.

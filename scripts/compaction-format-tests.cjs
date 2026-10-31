@@ -4,7 +4,7 @@ const assert = require("node:assert/strict");
 const path = require("node:path");
 
 module.exports = async function ({ ext, SessionManager, root, compact, makeContext, assistant, toolCall, text, user }) {
-  console.log("== Compact signatures: relative paths, payload sizes, and 160-character snippets ==");
+  console.log("== Compact signatures: relative paths, payload sizes, and 160-character head/tail previews ==");
   const cwd = path.join(root, "format project+[a](b)");
   const build = async (messages, { budget, fileOps } = {}) => {
     const manager = SessionManager.inMemory(cwd);
@@ -60,22 +60,22 @@ module.exports = async function ({ ext, SessionManager, root, compact, makeConte
     user(userProse), assistant([text(assistantProse), ...args.map(([name, a], i) => toolCall(name, a, `format-${i}`))], "toolUse"),
   ], { fileOps: { read: new Set([path.join(cwd, "docs/spec.md")]),
     written: new Set([path.join(cwd, "src/out.ts")]), edited: new Set() } });
-  const stubs = c.details.span.lines.filter((s) => s.startsWith("[Assistant tool calls]:")).join("\n");
+  const stubs = c.details.span.lines.filter((s) => s.startsWith("[Tools]:")).join("\n");
   for (const signature of [
-    'read(path="src/example.ts", offset=12, limit=30)',
-    `read(path=${JSON.stringify(longPath)})`,
-    `read(path=${JSON.stringify(cwd + "-sibling/file.ts")})`,
-    'read(path="../relative-file.ts")', 'read(path=".")',
-    `write(path="src/out.ts", content=<${content.length} chars>)`,
-    'edit(path="src/out.ts", edits=2)',
-    `edit(path="src/out.ts", oldText=<${oldText.length} chars>, newText=<${newText.length} chars>)`,
-    'edit(path="empty.ts", edits=0)',
-    'edit(path="malformed.ts", edits={"unexpected":"kept generically"})',
+    'read "src/example.ts":12-41',
+    `read ${JSON.stringify(longPath)}`,
+    `read ${JSON.stringify(cwd + "-sibling/file.ts")}`,
+    'read "../relative-file.ts"', 'read "."',
+    `write "src/out.ts" (${content.length} chars)`,
+    'edit "src/out.ts" ×2',
+    `edit "src/out.ts" oldText=<${oldText.length} chars> newText=<${newText.length} chars>`,
+    'edit "empty.ts" ×0',
+    'edit "malformed.ts" edits={"unexpected":"kept generically"}',
   ]) assert(stubs.includes(signature), signature);
   for (const [command, expected] of commands) {
     const encoded = JSON.stringify(expected);
-    const snippet = encoded.length > 160 ? encoded.slice(0, 160) + "…" : encoded;
-    assert(stubs.includes(`bash(command=${snippet}, timeout=60) [unknown]`), command);
+    const snippet = encoded.length > 160 ? encoded.slice(0, 98) + "…" + encoded.slice(-61) : encoded;
+    assert(stubs.includes(`bash ${snippet} [unknown]`), command);
     assert(snippet.length <= encoded.length, "abbreviating never increases argument size");
   }
   assert(stubs.includes("IDENTIFYING_TARGET"), "keep multiline identifying text beyond character 100");
@@ -96,7 +96,7 @@ module.exports = async function ({ ext, SessionManager, root, compact, makeConte
   const execution = await build([{ role: "bashExecution", command: `cd '${cwd}' && ` + "x".repeat(2000),
     output: "EXECUTION_OUTPUT_SECRET", exitCode: 0, cancelled: false, truncated: false, timestamp: 0 }]);
   const executionStub = execution.c.details.span.lines[0];
-  assert(executionStub.startsWith('[BashExecution]: bash(command="cd \'.\' && '));
+  assert(executionStub.startsWith('[BashExecution]: bash "cd \'.\' && '));
   assert(executionStub.length < 230 && !executionStub.includes("\n"));
   assert(!execution.c.summary.includes("EXECUTION_OUTPUT_SECRET"));
 

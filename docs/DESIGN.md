@@ -12,28 +12,67 @@ extension builds a checkpoint without changing that boundary or calling a model:
 | Assistant prose | Kept, subject to the size guard. |
 | Tool calls | Short signatures with outcome labels; full arguments and outputs remain recoverable. |
 | Assistant thinking | Removed from the checkpoint; retained in the raw session. |
-| Tool outputs | Removed from the checkpoint except selected startup reads; all remain in the raw session. |
+| Tool outputs | Mostly removed; selected bash observations and startup reads remain. All remain in raw history. |
 | Custom messages | Short type stubs marked `content removed`; bodies remain in the raw session. Managed re-orientation messages are regenerated instead. |
 | Recent conversation | Pi keeps its normal verbatim tail. |
 | Earlier compacted spans | Re-rendered chronologically, without repeated model summarization. |
 | Read/modified file lists | Cumulative operation lists with checkpoint-relative retained-evidence annotations. |
 
-Checkpoints label tool outcomes as `ok`, `error`, or `unknown` and remind the
-agent to recover missing evidence when needed. These labels describe tool
-results, not a guarantee that tests passed. Output removal is explained once in
-the checkpoint header rather than repeated beside every outcome. There is no
-required-document reread checklist: retained reads remain available as evidence.
+New tool lines use `[Tools]:` with compact display signatures:
 
-File-tool signatures keep complete identifying paths, made relative to the session
-working directory where possible. Shell commands abbreviate that directory to
-`.` at path boundaries, without changing raw arguments. This is display notation,
-not a replayable command. Read/modified file lists use the same relative paths.
-Write bodies become `content=<N chars>`; edit arrays become `edits=K` (individual
-`oldText`/`newText` arguments become character counts). Other argument previews,
-including bash commands, retain a 160-character JSON-encoded prefix with a single
-ellipsis when abbreviated. Multi-line command prefixes are not reduced to their
-first line. These changes affect only checkpoint signatures, never conversation
-prose, retained read outputs, or raw session evidence.
+```text
+read "src/example.ts":12-41
+write "scratch.py" (2144 chars) ref=0123abcd
+edit "src/example.ts" ×2 ref=4567abcd
+bash "uv run pytest -q 2>&1 | tail -25" → output: "3 failed, 16 passed in 0.21s"
+```
+
+File paths remain complete and are relative to the session working directory where
+possible. Read ranges record requested lines, not actual returned coverage or symbol
+locations. Write bodies become sizes; edit arrays become counts (individual
+`oldText`/`newText` fields become sizes). Bash omits its tool-level `timeout` argument
+but retains other arguments such as `background`. Commands abbreviate the working
+directory to `.` at path boundaries. Their JSON-encoded previews keep up to 160
+characters, about 62% head plus an ellipsis and the tail. Newlines remain escaped;
+imports, redirections, and shell syntax are not rewritten. Other argument previews
+remain bounded prefixes. These signatures are display notation, not replayable shell
+commands. Calls from different assistant messages remain separate, preserving order
+and cap granularity; no command diffs or read folding are performed.
+
+`[tool error]` means a safely matched result was flagged as an error; `[unknown]`
+means no safely matched result/status. Plain successes have no status label; this
+**does not establish exit 0 or passing tests**. Legacy `[ok]` means only that the
+result was not flagged as an error. Selected bash observations appear after `→`:
+reported nonzero shell status, `no output`, recognized test/build summary lines,
+explicit HTTP status observations for leading curl/wget commands, or a short
+error-text quote. Detectors are conservative lexical heuristics, not verdicts.
+Test summaries are scanned only for recognized test/build invocations; error text
+only for recognized execution commands, not leading file-read/search/git commands.
+Unknown formats remain unlabelled. A status for a pipeline does not establish the
+status of its individual commands. A bracketed git commit hash can also be retained.
+
+Likely historical bash observations (network, terminal, scripts, timings) may retain
+a complete text output of at most 100 characters, but not arbitrary output tails.
+Media, structured-only results, and detected truncated output do not qualify as tiny
+complete observations. Every quote is escaped and bounded. All observations are
+historical, not proof of current state; assistant prose remains a record of claims,
+not independent verification.
+
+`ref=ID` supplies an existing raw ENTRY id for write/edit payloads and for bash
+commands that are truncated or have a positive historical-observation hint. It is
+not a requirement to look up, and its absence makes no reproducibility claim.
+Write/edit refs do not depend on inferring later deletion or filesystem state.
+A ref normally points at the matched result, identifying one call in a batch; an
+unmatched call can point at its assistant entry. IDs are assigned only by object
+identity with raw branch entries, never by guessing from command text or timestamps.
+Projected replacement content can therefore lack a ref. Only selected preparation
+messages supply output labels; raw history and the retained tail do not supply
+missing outcomes. Previously stored span lines remain unchanged.
+
+Open a known ref directly with `context_show_entry({id: "0123abcd", includeRelated: true})`.
+This recovers the original call/payload and result together, including code no longer
+on disk. For current state, inspect files; for a historical question without a known
+ref, prefer `context_lookup`. There is no required-document reread checklist.
 
 All newly compacted custom messages follow the same stub policy, regardless of
 extension, display setting, or content format. Long type names are abbreviated
@@ -206,7 +245,7 @@ The extension registers a subagent lookup and three direct-search fallback tools
 | `context_lookup` | Recover specific historical details from the full raw session branch. Accepts only `question`. |
 | `context_list_entries` | Fallback: list entry ids, roles, timestamps, and previews. |
 | `context_grep` | Fallback: regex-search the raw branch with surrounding lines and entry attribution. |
-| `context_show_entry` | Fallback: retrieve an entry by id. |
+| `context_show_entry` | Open a known checkpoint ref directly, or retrieve an entry after lookup. Optional `includeRelated` recovers matched call/result entries. |
 
 For example, ask the agent to recover the build error observed before compaction.
 It can call `context_lookup` with:
@@ -216,6 +255,21 @@ It can call `context_lookup` with:
   "question": "What exact build error did we observe for src/auth.ts before compaction? Include the ENTRY id and observed tool output."
 }
 ```
+
+With a checkpoint `ref=ID`, skip the search and use
+`context_show_entry({id: "ID", includeRelated: true})`. Ordinary entry retrieval
+(default `includeRelated=false`) is unchanged. Related expansion is one-hop and
+chronological: a result includes its originating assistant entry (including any
+sibling calls), not sibling outputs; an assistant includes its matched results.
+Relations come from raw call IDs and matching tool names, never transcript text.
+Ambiguous duplicate IDs, orphan results, and mismatched tool names do not establish
+relations. Sequential ID reuse is matched separately. Branch scoping and source
+overrides apply equally to both modes.
+
+Related expansions share the usual character/line guards. Keep `includeRelated`
+unchanged when following an offset; changing it starts a different retrieval and
+spends a substantive subagent search turn. An expansion of an unfinished call may
+change if results arrive later; restart paging if its source changes.
 
 The subagent searches in its own context and returns findings with entry
 references. Its raw search results stay out of the main conversation. If findings

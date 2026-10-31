@@ -12,11 +12,13 @@ module.exports = async function hybridTests(h) {
   const ctx = makeContext(f.manager, cwd);
   const direct = async (name, args = {}, c = ctx) => toolText(await ext.tools[name].execute("direct", args, undefined, undefined, c));
   for (const name of ["context_list_entries", "context_grep", "context_show_entry"]) {
-    assert(ext.tools[name].description.startsWith("Fallback after context_lookup, when its findings are incomplete"));
+    assert(ext.tools[name].description.startsWith(name === "context_show_entry"
+      ? "Retrieve historical evidence directly from a checkpoint ref"
+      : "Fallback after context_lookup, when its findings are incomplete"));
   }
   assert.deepEqual(Object.keys(ext.tools.context_list_entries.parameters.properties), ["offset", "throughEntry"]);
   assert.deepEqual(Object.keys(ext.tools.context_grep.parameters.properties), ["pattern", "before", "after", "maxMatches", "offset", "charOffset", "throughEntry"]);
-  assert.deepEqual(Object.keys(ext.tools.context_show_entry.parameters.properties), ["id", "maxLines", "offset"]);
+  assert.deepEqual(Object.keys(ext.tools.context_show_entry.parameters.properties), ["id", "includeRelated", "maxLines", "offset"]);
   assert.equal(ext.tools.context_lookup.executionMode, "sequential");
   assert.match(ext.tools.context_lookup.description, /if findings are incomplete/i);
   assert(ext.tools.context_lookup.description.includes("filesystem tools"));

@@ -38,6 +38,12 @@ checks local dependencies and global npm installations.
   visible write payloads, later mutations, context edits, startup reads, and repeated
   compaction. Actual SDK requests cover both retained-source and plan-only tails.
 - Skill validation and agreement with the question-only lookup contract.
+- Compact stub rendering, head/tail command previews, conservative historical
+  output labels, and direct call/result refs. Synthetic regressions cover tiny
+  outputs versus truncated/media results, read/search false positives, deleted
+  scratch payload recovery, repeated compaction, related-entry pagination, reverse
+  results, reused/ambiguous IDs, and branch scoping. These test mechanics, not
+  live-model recovery quality.
 - Header/section spoofing resistance and internal lookup tool dispatch.
 - Absolute session-file override tests, including pruned forks, reload at lookup
   time, invalid paths, missing/empty files, and no silent fallback.
@@ -73,6 +79,20 @@ The default baseline is the 0.8.7 commit; set `TC_BASELINE_REF` to override it.
 Inputs are not modified or copied into fixtures. Results measure deterministic
 formatting and evidence labels, not live-model behaviour. Do not commit private
 sessions or sensitive audit output.
+
+For tool-stub comparisons, use the separate read-only replay:
+
+```bash
+TC_BASELINE_REF=81aa585e node scripts/tool-stub-replay.cjs /path/to/session.jsonl
+```
+
+Choose the pre-change baseline commit (`HEAD` by default). This rebuilds both
+renderers at recorded active-branch cut points with capping disabled, checks prose
+and reference preservation, and smoke-tests paginated call/result recovery. It
+writes before/after checkpoints and a JSON report into a private temporary directory
+(or `--out DIR`). Artifacts contain session content: do not commit or share them
+without approval. Measurements are characters, not tokens or live-model outcomes;
+recorded tool commands are never executed and input files remain byte-identical.
 
 ## Manual check
 
