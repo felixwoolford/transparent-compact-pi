@@ -15,7 +15,7 @@
  *                                    Valid continuation-only turns are exempt;
  *                                    total search-phase calls capped at 3x this,
  *                                    plus one final write-up on exhaustion
- *   MECH_COMPACT_LOOKUP_MAX_CALLS     consecutive lookup limit (default 1;
+ *   MECH_COMPACT_LOOKUP_MAX_CALLS     consecutive lookup limit (default 3;
  *                                    0 = unlimited). Non-recovery tool results,
  *                                    bash executions, or user messages reset it.
  *                                    Fallback tools neither count nor reset it.
@@ -74,7 +74,7 @@ function percentFromEnv(name: string, fallback: number): number {
 function lookupMaxCallsFromEnv(): number {
   const raw = process.env.MECH_COMPACT_LOOKUP_MAX_CALLS?.trim();
   const n = raw && /^\d+$/.test(raw) ? Number(raw) : NaN;
-  return Number.isSafeInteger(n) && n >= 0 ? n : 1;
+  return Number.isSafeInteger(n) && n >= 0 ? n : 3;
 }
 
 const cfg = {
