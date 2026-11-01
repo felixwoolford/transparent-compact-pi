@@ -76,6 +76,34 @@ extension, display setting, or content format. Long type names are abbreviated
 like tool-call arguments. This applies even with the cap disabled. Previously
 saved canonical spans are not rewritten; older custom-message bodies may remain in them.
 
+### Optional manual turn filtering
+
+`/compact-filtered` requests verbatim manual compaction with a tree-like whole-turn
+checklist and a complete, scrollable confirmation preview. The picker runs after
+Pi has prepared its boundary. Only turns wholly before that boundary are eligible;
+turns overlapping the retained tail are locked. Agent/tool subentries are for
+inspection, not independent deletion. Escape goes back from confirmation, or
+cancels without saving a compaction. No filtering UI runs for ordinary manual,
+threshold or overflow compaction.
+
+Canonical span lines carry parallel `turnIds`, anchored to raw user entry IDs
+through Pi's source-preserving projection (including explicit context replacements).
+A group includes all activity until the next raw user message, even across multiple
+compaction spans. Confirmed IDs are stored as cumulative `filteredTurnIds` on the
+compaction entry. Later verbatim checkpoints apply that branch-local selection to
+the original canonical spans before size trimming, reindexing tool display records
+without changing stored history. There is no migration or reconstruction of saved
+spans without turn ownership; opaque content is not individually selectable.
+
+One `[Turn manually filtered]` marker replaces each excluded group at its original
+position, even across spans. Markers survive the size cap. Startup-read copies owned
+by the group are excluded; file-list paths used only by excluded turns are removed.
+Filtering does not undo filesystem mutations. The checkpoint introduction and
+persistent reorientation conditionally explain that the user excluded low-value
+context, which remains retrievable from the full raw history. Recovery tools are
+unchanged. Cancellation or build failure never falls through to an unfiltered model
+summary during filtered compaction.
+
 ### File-list evidence annotations
 
 The lists record reads and modifications in compacted history, not an exhaustive

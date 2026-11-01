@@ -456,7 +456,8 @@ async function main() {
     await require("./scripts/runtime-lookup-tests.cjs")({ ...hybridHelpers, jiti, piRoot });
     await require("./scripts/reorientation-tests.cjs")({ ...hybridHelpers, factory, load, compact, jiti, piRoot });
     await require("./scripts/startup-reads-tests.cjs")({ ...hybridHelpers, factory, load });
-    assert.deepEqual(Object.keys(ext.commands), ["compaction-method", "cap-compaction"]);
+    assert.deepEqual(Object.keys(ext.commands), ["compaction-method", "cap-compaction", "compact-filtered"]);
+    await require("./scripts/turn-filter-tests.cjs")({ ...hybridHelpers, factory, load, jiti, piRoot });
     await methodTests(factory, SessionManager, root);
     await require("./scripts/checkpoint-evidence-tests.cjs")({ ...hybridHelpers, compact });
     await require("./scripts/file-evidence-tests.cjs")({ ...hybridHelpers, factory, load, compact, jiti, piRoot });

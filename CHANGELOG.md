@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- Add `/compact-filtered` for optional manual whole-turn filtering in the terminal:
+  tree-like selection, scrollable confirmation, and cancellation without history
+  edits. Replace excluded groups with `[Turn manually filtered]`, remove their
+  retained startup-read copies and exclusive file-list paths, and explain the
+  marker conditionally in the checkpoint and reorientation. Exclusions persist
+  through later verbatim compactions and follow the active branch; original
+  history remains recoverable. Recent-tail turns cannot be partially filtered.
+
 ## 0.9.3
 
 - Restore the `706b04b` advertisements for lookup, listing, and grep, including the

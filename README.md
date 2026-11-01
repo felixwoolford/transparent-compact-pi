@@ -91,6 +91,31 @@ Before replacing an existing file with `write`, the agent is told to reread it
 unless current contents are already visible, rather than reconstruct unchanged
 sections from memory. Small exact-match edits have no blanket reread requirement.
 
+### Manually filter low-value turns
+
+```text
+/compact-filtered
+```
+
+In the interactive terminal, this opens a tree-like checklist of user turns.
+Use **↑/↓** to navigate, **←/→** to collapse/expand agent/tool subentries, and
+**Space** to mark a whole user turn and everything after it until the next user
+turn. Unchecked turns stay. **Enter** opens a scrollable preview of the checkpoint
+content to exclude; **Enter** again confirms, **Esc** goes back or cancels.
+
+Filtering requires verbatim mode and an idle agent. Turns overlapping Pi's retained
+recent tail are unavailable: filtering never removes only half a turn or changes
+Pi's retention boundary. Content inside an opaque inherited summary cannot be
+selected individually.
+
+Each excluded group becomes `[Turn manually filtered]`. Its retained startup reads
+and file-list paths used only in excluded turns are removed too. The checkpoint
+and post-compaction reorientation explain the marker only when filtering is present.
+Exclusions follow the active branch through later verbatim compactions, reload and
+resume. Original session entries remain unchanged and recoverable; filtering does
+not undo file changes. Ordinary `/compact` and automatic compactions never open the
+picker or choose additional turns to exclude.
+
 ### Automatic startup-read retention
 
 Successful text reads between the first and second user prompts are retained when

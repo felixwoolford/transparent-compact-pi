@@ -62,7 +62,7 @@ async function main() {
     assert.equal(loaded.extensions.length, 1);
     const extension = loaded.extensions[0];
     assert.deepEqual([...extension.tools.keys()], ["context_list_entries", "context_grep", "context_show_entry", "context_lookup"], "session lookup and three direct fallback tools are registered");
-    assert.deepEqual([...extension.commands.keys()], ["compaction-method", "cap-compaction"], "only method and cap selection commands are registered");
+    assert.deepEqual([...extension.commands.keys()], ["compaction-method", "cap-compaction", "compact-filtered"], "method, cap and filtered compaction commands are registered");
     const lookup = extension.tools.get("context_lookup");
     assert.deepEqual(Object.keys(lookup.definition.parameters.properties), ["question"], "lookup accepts only question");
     const skills = loadSkills({ cwd: root, agentDir: temp, skillPaths, includeDefaults: false });
@@ -70,7 +70,7 @@ async function main() {
     assert.equal(skills.skills[0].name, "context-retrieval");
     assert.deepEqual(skills.diagnostics, []);
     assert.deepEqual([...packedPaths].filter((p) => p.startsWith("extensions/")).sort(),
-      ["extensions/index.ts", "extensions/lib/checkpoint-cap.ts"], "package ships one extension entry and its pure cap module, with no wrapper");
+      ["extensions/index.ts", "extensions/lib/checkpoint-cap.ts", "extensions/lib/turn-filter.ts"], "package ships one extension entry and its helper modules, with no wrapper");
     assert(![...packedPaths].some((p) => p.startsWith("source/")), "package has no obsolete source tree");
     console.log("PACKAGE TEST OK — manifest, packed resources, package-only label, real Pi loader, session lookup, and bundled skill");
   } finally {

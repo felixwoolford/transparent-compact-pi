@@ -2,6 +2,7 @@
  * model calls, or session mutation. Canonical span lines/records are never edited.
  */
 export const TOOL_PREFIX = "[Tools]: ";
+export const FILTER_MARKER = "[Turn manually filtered]";
 export const NORMAL_PREVIEW_CHARS = 160;
 export const TIGHTENED_ATTR = ' tools-tightened="true"';
 
@@ -142,7 +143,7 @@ export function capSpans(spans: SpanContent[], budget = Infinity): CappedSpans {
     const rows = states[span];
     for (let i = 0; i < rows.length && size > budget;) {
       const row = rows[i];
-      if (row.text.startsWith("[User]:")) { i++; continue; }
+      if (row.text.startsWith("[User]:") || row.text === FILTER_MARKER) { i++; continue; }
       if (row.calls && row.calls.length > 1) {
         row.calls.shift();
         row.text = render(row);
@@ -168,8 +169,10 @@ export function capSpans(spans: SpanContent[], budget = Infinity): CappedSpans {
     }
   }
   for (let span = 0; span < states.length && size > budget; span++) {
-    while (states[span].length && size > budget) {
-      states[span].shift();
+    while (size > budget) {
+      const index = states[span].findIndex((row) => row.text !== FILTER_MARKER);
+      if (index < 0) break;
+      states[span].splice(index, 1);
       trimmed[span] = true;
       size = measure();
     }

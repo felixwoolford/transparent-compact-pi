@@ -34,7 +34,9 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { buildSessionProjection, SessionManager } from "@earendil-works/pi-coding-agent";
 import type { ExtensionAPI, ExtensionContext, ModelRegistry, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { capSpans, commandPreview, renderToolLine, renderToolStub, NORMAL_PREVIEW_CHARS, TIGHTENED_ATTR } from "./lib/checkpoint-cap.js";
-import type { SpanContent, ToolLines, ToolStub } from "./lib/checkpoint-cap.js";
+import type { ToolLines, ToolStub } from "./lib/checkpoint-cap.js";
+import { FILTER_REQUEST, FILTER_EXPLANATION, filterSpans, pickFilteredTurns, turnOwners } from "./lib/turn-filter.js";
+import type { FilterTurn, TurnSpan } from "./lib/turn-filter.js";
 
 // ============================================================================
 // Configuration
@@ -607,11 +609,12 @@ function bashOutputLabel(command: string, result: Record<string, any>): string {
   return labels.join("; ");
 }
 
-function summarizeMessages(messages: AgentMessage[], cwd: string): SpanContent {
+function summarizeMessages(messages: AgentMessage[], cwd: string, owners?: (string | null)[]): TurnSpan {
   const results = pairedToolResults(messages);
-  const lines: string[] = [];
+  const lines: string[] = [], turnIds: (string | null)[] = [];
   const tools: ToolLines = { version: 2, lines: [] };
-  for (const msg of messages) {
+  for (const [messageIndex, msg] of messages.entries()) {
+    const start = lines.length;
     const m = msg as unknown as Record<string, any>;
     switch (msg.role) {
       case "user": {
@@ -662,8 +665,9 @@ function summarizeMessages(messages: AgentMessage[], cwd: string): SpanContent {
       default:
         break;
     }
+    for (let i = start; i < lines.length; i++) turnIds.push(owners?.[messageIndex] ?? null);
   }
-  return { lines, ...(tools.lines.length ? { tools } : {}) };
+  return { lines, ...(owners ? { turnIds } : {}), ...(tools.lines.length ? { tools } : {}) };
 }
 
 // Startup reference retention is a lexical heuristic, not an interpretation of
@@ -907,7 +911,7 @@ function spanOpen(n: number, compactedAt: string, reason: string, covers?: strin
  * base, oldest first. Spans before the base are deliberately NOT re-rendered
  * (the base is opaque; the session holds the raw history).
  */
-type StoredSpan = SpanContent & { at: string; reason: string; from?: string; to?: string };
+type StoredSpan = TurnSpan & { at: string; reason: string; from?: string; to?: string };
 
 function collectBaseAndSpans(branchEntries: SessionEntry[]): {
   base: { kind: "model-summary" | "legacy-checkpoint"; at: string; summary: string } | null;
@@ -917,7 +921,7 @@ function collectBaseAndSpans(branchEntries: SessionEntry[]): {
     if (e.type !== "compaction") return undefined;
     const d = (e as { details?: Record<string, any> }).details;
     if (!d || d.kind !== MECH_KIND || !Array.isArray(d.span?.lines)) return undefined;
-    return d.span as { at?: unknown; reason?: unknown; from?: unknown; to?: unknown; lines: string[]; tools?: ToolLines };
+    return d.span as TurnSpan & { at?: unknown; reason?: unknown; from?: unknown; to?: unknown };
   };
   let baseIdx = -1;
   for (let i = branchEntries.length - 1; i >= 0; i--) {
@@ -950,9 +954,75 @@ function collectBaseAndSpans(branchEntries: SessionEntry[]): {
         to: typeof sd.to === "string" && sd.to !== "" ? sd.to : undefined,
         lines: sd.lines,
         tools: sd.tools,
+        turnIds: sd.turnIds,
       });
   }
   return { base, spans };
+}
+
+function filteredTurns(entries: SessionEntry[]): string[] {
+  const latest = latestVerbatimCompaction(entries);
+  return (latest?.details as { filteredTurnIds?: string[] } | undefined)?.filteredTurnIds ?? [];
+}
+
+// Match Pi's prepared messages to their source entries, including explicit
+// context replacements and generated custom messages. No raw bodies are stored.
+function preparedTurnOwners(entries: SessionEntry[], messages: AgentMessage[]): (string | null)[] {
+  const owners = turnOwners(entries);
+  const queues = new Map<string, (string | null)[]>();
+  for (const projected of buildSessionProjection(entries).entries) {
+    if (projected.sourceEntry.type === "compaction") continue;
+    for (const message of projected.messages) {
+      const key = JSON.stringify(message);
+      const queue = queues.get(key) ?? [];
+      queue.push(owners.get(projected.sourceEntry.id) ?? null);
+      queues.set(key, queue);
+    }
+  }
+  return messages.map((message) => queues.get(JSON.stringify(message))?.shift() ?? null);
+}
+
+function filterChoices(entries: SessionEntry[], spans: TurnSpan[], excluded: Set<string>, firstKeptEntryId: string,
+  retained: StartupReads): FilterTurn[] {
+  const owners = turnOwners(entries);
+  const cut = entries.findIndex((entry) => entry.id === firstKeptEntryId);
+  const tailOwners = new Set(entries.slice(cut).filter((entry) => entry.type === "message" || entry.type === "custom_message" || entry.type === "branch_summary")
+    .map((entry) => owners.get(entry.id)));
+  const lines = new Map<string, string[]>();
+  for (const span of spans) span.lines.forEach((line, index) => {
+    const owner = span.turnIds?.[index];
+    if (owner) { const group = lines.get(owner) ?? []; group.push(line); lines.set(owner, group); }
+  });
+  for (const read of retained.reads) {
+    const owner = owners.get(read.entryId);
+    if (owner && entries.findIndex((entry) => entry.id === read.entryId) < cut)
+      lines.get(owner)?.push(`[Retained startup read: ${read.path}]\n${read.text.join("\n")}`);
+  }
+  return entries.filter((entry) => entry.type === "message" && entry.message.role === "user").map((entry) => {
+    const content = lines.get(entry.id) ?? [];
+    return { id: entry.id, label: content[0] ?? `[User]: ${entry.type === "message" ? textOf((entry.message as any).content).text : ""}`,
+      lines: content, unavailable: excluded.has(entry.id) ? "already filtered"
+        : tailOwners.has(entry.id) ? "in retained recent tail"
+        : content.length === 0 ? "not individually represented in checkpoint" : undefined };
+  });
+}
+
+// Remove file-list traces belonging only to excluded turns. A path also used
+// by a kept turn stays listed; filtering is not a claim that mutations were undone.
+function excludedFilePaths(entries: SessionEntry[], excluded: Set<string>, firstKeptEntryId: string, cwd: string): Set<string> {
+  const owners = turnOwners(entries), removed = new Set<string>(), kept = new Set<string>();
+  const cut = entries.findIndex((entry) => entry.id === firstKeptEntryId);
+  for (const entry of entries.slice(0, cut)) {
+    if (entry.type !== "message") continue;
+    const m = entry.message as any;
+    const calls = m.role === "assistant" ? (m.content ?? []).filter((b: any) => b.type === "toolCall")
+      : m.role === "toolResult" ? m.nestedCalls?.calls ?? [] : [];
+    for (const call of calls) {
+      if (!["read", "write", "edit"].includes(call.name) || typeof call.arguments?.path !== "string") continue;
+      (excluded.has(owners.get(entry.id) ?? "") ? removed : kept).add(fileEvidenceKey(call.arguments.path, cwd));
+    }
+  }
+  return new Set([...removed].filter((file) => !kept.has(file)));
 }
 
 const RECOVERY_HISTORY_NOTE = "Compaction hides earlier details from your current view. The original conversation history, including recorded tool outputs and your reasoning, is preserved in the session and can be retrieved.";
@@ -982,8 +1052,8 @@ function latestVerbatimCompaction(entries: SessionEntry[]) {
   }
 }
 
-function reorientationMessage(compactionId: string) {
-  return { customType: REORIENT_MESSAGE, content: `${REORIENT_BLOCK}\n\n${RECOVERY_RECAP}`,
+function reorientationMessage(compactionId: string, filtered = false) {
+  return { customType: REORIENT_MESSAGE, content: `${REORIENT_BLOCK}${filtered ? `\n\n${FILTER_EXPLANATION}` : ""}\n\n${RECOVERY_RECAP}`,
     display: false, details: { compactionId } };
 }
 
@@ -1024,6 +1094,8 @@ async function buildMechanicalSummary(opts: {
   now: string;
   spanLines: string[]; // this compaction's own span, un-capped
   spanTools?: ToolLines; // versioned, bounded display records; no raw payloads
+  spanTurnIds?: (string | null)[];
+  filteredTurnIds?: string[];
   spanFrom?: string; // ISO timestamp of the first summarised message
   spanTo?: string; // ISO timestamp of the last summarised message
   firstKeptEntryId?: string; // start of the verbatim (uncompacted) tail
@@ -1035,8 +1107,8 @@ async function buildMechanicalSummary(opts: {
   chooseCap: (size: { overhead: number; lineChars: number }) => Promise<number | undefined | null>;
 }): Promise<string | undefined> {
   const { base, spans } = collectBaseAndSpans(opts.branchEntries);
-  const allSpans = [...spans, { at: opts.now, reason: opts.reason, from: opts.spanFrom, to: opts.spanTo,
-    lines: opts.spanLines, tools: opts.spanTools }];
+  const allSpans = filterSpans([...spans, { at: opts.now, reason: opts.reason, from: opts.spanFrom, to: opts.spanTo,
+    lines: opts.spanLines, tools: opts.spanTools, turnIds: opts.spanTurnIds }], new Set(opts.filteredTurnIds));
   const coversOf = (s: { from?: string; to?: string }): string | undefined => (s.from && s.to ? `${s.from} → ${s.to}` : undefined);
 
   // Size guard: the budget covers the conversation section plus retained reads.
@@ -1089,6 +1161,7 @@ async function buildMechanicalSummary(opts: {
   const parts: string[] = [];
   parts.push(`## Verbatim compaction checkpoint (compaction ${compactionCount} on this branch)`);
   parts.push(CHECKPOINT_EXPLANATION);
+  if (opts.filteredTurnIds?.length) parts.push(FILTER_EXPLANATION);
   if (base?.kind === "model-summary") {
     parts.push(MIXED_CONTEXT_WARNING);
     opts.notify(MIXED_CONTEXT_WARNING);
@@ -1670,7 +1743,7 @@ export default function (pi: ExtensionAPI) {
     if (!compaction) return;
     const found = entries.some((e) => e.type === "custom_message" && e.customType === REORIENT_MESSAGE &&
       (e.details as { compactionId?: string } | undefined)?.compactionId === compaction.id);
-    if (!found) return { message: reorientationMessage(compaction.id) };
+    if (!found) return { message: reorientationMessage(compaction.id, filteredTurns(entries).length > 0) };
   });
 
   // Between-turn compaction and overflow continuation do not necessarily pass
@@ -1680,7 +1753,8 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_compact", (event, ctx) => {
     if ((event.compactionEntry.details as { kind?: string } | undefined)?.kind !== MECH_KIND) return;
     if (event.willRetry || ctx.signal)
-      pi.sendMessage(reorientationMessage(event.compactionEntry.id), { deliverAs: "steer" });
+      pi.sendMessage(reorientationMessage(event.compactionEntry.id,
+        ((event.compactionEntry.details as { filteredTurnIds?: string[] }).filteredTurnIds?.length ?? 0) > 0), { deliverAs: "steer" });
   });
 
   // Run after ordinary transforms and system/tool restoration. Preserve all
@@ -1738,6 +1812,24 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
+  pi.registerCommand("compact-filtered", {
+    description: "Manually compact with whole-turn filtering and a confirmation preview",
+    handler: async (args, ctx) => {
+      if (args.trim()) { ctx.ui.notify("Usage: /compact-filtered", "error"); return; }
+      if (ctx.mode !== "tui" || !ctx.hasUI) {
+        ctx.ui.notify("/compact-filtered requires the interactive terminal UI.", "error"); return;
+      }
+      if (!ctx.isIdle() || ctx.hasPendingMessages()) {
+        ctx.ui.notify("Wait until the agent is idle and queued messages have been handled before filtering turns.", "warning"); return;
+      }
+      if (compactionMethod(ctx.sessionManager.getBranch()) !== "verbatim") {
+        ctx.ui.notify("/compact-filtered requires verbatim compaction. Use /compaction-method verbatim first.", "error"); return;
+      }
+      ctx.compact({ customInstructions: FILTER_REQUEST,
+        onError: (error) => ctx.ui.notify(`Filtered compaction: ${errMsg(error)}`, "error") });
+    },
+  });
+
   pi.on("session_start", (_event, ctx) => {
     const entries = ctx.sessionManager.getBranch();
     if (compactionMethod(entries) === "verbatim" && collectBaseAndSpans(entries).base?.kind === "model-summary") {
@@ -1772,6 +1864,9 @@ export default function (pi: ExtensionAPI) {
   // --------------------------------------------------------------------------
   pi.on("session_before_compact", async (event, ctx) => {
     const { preparation, branchEntries, reason, signal } = event;
+    const filtering = reason === "manual" && event.customInstructions === FILTER_REQUEST;
+    if (filtering && (ctx.mode !== "tui" || !ctx.hasUI || compactionMethod(branchEntries) !== "verbatim"))
+      return { cancel: true };
     if (!preparation) return;
     if (signal?.aborted) return;
     if (preparation.messagesToSummarize.length === 0 && preparation.turnPrefixMessages.length === 0) return;
@@ -1800,8 +1895,8 @@ export default function (pi: ExtensionAPI) {
       }
 
       const modified = new Set([...(fileOps?.edited ?? []), ...(fileOps?.written ?? [])]);
-      const modifiedFiles = [...modified].sort();
-      const readFiles = [...(fileOps?.read ?? [])].filter((f) => !modified.has(f)).sort();
+      let modifiedFiles = [...modified].sort();
+      let readFiles = [...(fileOps?.read ?? [])].filter((f) => !modified.has(f)).sort();
 
       // 2) The new span. Pi's preparation span is [previous cut, current cut)
       //    — it includes the previous compaction's retained tail (verified
@@ -1821,12 +1916,27 @@ export default function (pi: ExtensionAPI) {
       const msgTs = (m: AgentMessage): unknown => (m as unknown as { timestamp?: unknown }).timestamp;
       const spanFrom = toIso(msgTs(allMessages[0]));
       const spanTo = toIso(msgTs(allMessages[allMessages.length - 1]));
-      const span = summarizeMessages(allMessages, ctx.cwd);
+      const span = summarizeMessages(allMessages, ctx.cwd, preparedTurnOwners(branchEntries, allMessages));
       const spanLines = span.lines;
 
       // 3) Freeze startup references after the second user prompt, then carry
       // their original outputs forward outside the trimmable conversation spans.
-      const retained = startupReads(branchEntries, ctx);
+      let retained = startupReads(branchEntries, ctx);
+      let filteredTurnIds = filteredTurns(branchEntries);
+      if (filtering) {
+        const choices = filterChoices(branchEntries, [...collectBaseAndSpans(branchEntries).spans, span],
+          new Set(filteredTurnIds), preparation.firstKeptEntryId, retained);
+        const selected = await pickFilteredTurns(ctx, choices, signal);
+        if (selected === undefined || signal.aborted) return { cancel: true };
+        filteredTurnIds = [...new Set([...filteredTurnIds, ...selected])];
+      }
+      if (filteredTurnIds.length) {
+        const excluded = new Set(filteredTurnIds), owners = turnOwners(branchEntries);
+        retained = { ...retained, reads: retained.reads.filter((read) => !excluded.has(owners.get(read.entryId) ?? "")) };
+        const removedPaths = excludedFilePaths(branchEntries, excluded, preparation.firstKeptEntryId, ctx.cwd);
+        readFiles = readFiles.filter((file) => !removedPaths.has(fileEvidenceKey(file, ctx.cwd)));
+        modifiedFiles = modifiedFiles.filter((file) => !removedPaths.has(fileEvidenceKey(file, ctx.cwd)));
+      }
       const summary = await buildMechanicalSummary({
         reason, // pi's raw reason, passed through unchanged
         tokensBefore: preparation.tokensBefore,
@@ -1834,6 +1944,8 @@ export default function (pi: ExtensionAPI) {
         now: nowIso,
         spanLines,
         spanTools: span.tools,
+        spanTurnIds: span.turnIds,
+        filteredTurnIds,
         spanFrom,
         spanTo,
         firstKeptEntryId: preparation.firstKeptEntryId,
@@ -1861,16 +1973,19 @@ export default function (pi: ExtensionAPI) {
             readFiles,
             modifiedFiles,
             startupReads: retained,
+            ...(filteredTurnIds.length ? { filteredTurnIds } : {}),
             // Only this compaction's own span (un-capped lines). Earlier spans
             // are re-rendered from the earlier entries' details — no nesting.
             span: { at: nowIso, from: spanFrom, to: spanTo, reason, tokensBefore: preparation.tokensBefore,
-              lines: spanLines, ...(span.tools ? { tools: span.tools } : {}) },
+              lines: spanLines, turnIds: span.turnIds, ...(span.tools ? { tools: span.tools } : {}) },
           },
         },
       };
     } catch (err) {
-      ctx.ui?.notify?.(`transparent-compact: failed to build checkpoint (${errMsg(err)}); falling back to Pi's summary compaction`, "error");
-      return;
+      // Never replace a filtered checkpoint with an unfiltered model summary.
+      const preserveFiltering = filtering || filteredTurns(branchEntries).length > 0;
+      ctx.ui?.notify?.(`transparent-compact: failed to build checkpoint (${errMsg(err)}); ${preserveFiltering ? "compaction cancelled" : "falling back to Pi's summary compaction"}`, "error");
+      return preserveFiltering ? { cancel: true } : undefined;
     }
   });
 

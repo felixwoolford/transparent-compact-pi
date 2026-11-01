@@ -1,0 +1,5 @@
+-a command that pre-sets a turn to be flagged for filtering as its made, kind of like a heavyweight btw. Undoable during manual filtering
+
+-opt-in for automatic compaction
+
+-ability to go into past chekpoints

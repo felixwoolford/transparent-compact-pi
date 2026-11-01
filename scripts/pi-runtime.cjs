@@ -52,6 +52,7 @@ const jitiAliases = {
   "@earendil-works/pi-coding-agent": path.join(piRoot, "dist", "index.js"),
   "@earendil-works/pi-agent-core": path.join(packageRoot("@earendil-works/pi-agent-core", piRoot), "dist", "index.js"),
   "@earendil-works/pi-ai": path.join(packageRoot("@earendil-works/pi-ai", piRoot), "dist", "compat.js"),
+  "@earendil-works/pi-tui": path.join(packageRoot("@earendil-works/pi-tui", piRoot), "dist", "index.js"),
   typebox: require.resolve("typebox", { paths: [piRoot] }),
 };
 
