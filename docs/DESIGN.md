@@ -269,9 +269,9 @@ The extension registers a subagent lookup and three bounded direct-recovery tool
 
 | Tool | Purpose |
 |---|---|
-| `context_lookup` | Recover details hidden by compaction: earlier outputs, decisions, reasoning, and provenance, including conflicts with new evidence or uncertainty about what happened. A subagent searches the raw branch and returns focused findings. Accepts only `question`. |
-| `context_list_entries` | Post-compaction fallback: locate an entry when its location is unknown, not reread the conversation. |
-| `context_grep` | Post-compaction fallback: find a narrow passage in raw history, including thinking and tool outputs. |
+| `context_lookup` | Recover outputs, findings, decisions, reasoning, and provenance hidden by compaction, including conflicts with new evidence. A subagent searches the raw branch and returns relevant findings. Accepts only `question`. |
+| `context_list_entries` | Post-compaction fallback: list raw session ENTRY headers and previews. |
+| `context_grep` | Post-compaction fallback: regex-search raw history, including thinking and tool outputs, with entry attribution. |
 | `context_show_entry` | Recover a specific detail hidden by compaction at a known ENTRY id, or after lookup. Optional `includeRelated` recovers matched call/result entries only when that counterpart is needed. |
 
 For example, ask the agent to recover the build error observed before compaction.
@@ -286,13 +286,14 @@ It can call `context_lookup` with:
 ENTRY ids returned by recovery tools can narrow subsequent `context_lookup`
 questions or identify a specific passage for `context_show_entry`. Prefer lookup
 when search or interpretation is needed.
-The advertisements ask for a small first page, little grep context, and continuation
+Lookup, listing, and grep use concise capability-oriented advertisements. The
+`context_show_entry` advertisement retains small-first retrieval and continuation
 only while the requested detail is missing, incomplete, or needs more context to
-resolve ambiguity; stop once the question is answered. A partial search does not
-establish that something never happened.
-These are prompting changes: payload limits, defaults, and retrieval behavior are
-unchanged, not a guarantee of small total responses. No automatic decision sweep
-or new re-orientation instruction is added.
+resolve ambiguity; stop once the question is answered. The skill retains bounded
+recovery guidance, including that a partial search does not establish absence.
+Advertisement changes do not change payload limits, defaults, or retrieval behavior,
+and do not guarantee small total responses. No automatic decision sweep or new
+re-orientation instruction is added.
 
 Ordinary entry retrieval defaults to `includeRelated=false`. Related expansion
 remains available to the subagent and direct entry tool; it is one-hop and

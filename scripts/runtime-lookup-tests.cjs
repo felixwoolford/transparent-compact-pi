@@ -57,7 +57,7 @@ module.exports = async function runtimeLookupTests(h) {
     const grep = (id) => toolCall("context_grep", { pattern: "prior evidence", before: 0, after: 0 }, id);
     const work = (id) => toolCall("ordinary_work", {}, id);
     const scripted = [
-      assistant([text("Not found yet, let me check twice."), lookup("a"), lookup("b")], "toolUse"),
+      assistant([text("Not found yet, let me use the three lookup slots."), lookup("a"), lookup("a2"), lookup("a3"), lookup("b")], "toolUse"),
       assistant([text("Let me narrate and try again."), lookup("c")], "toolUse"),
       assistant([grep("fallback")], "toolUse"),
       assistant([lookup("d")], "toolUse"),
@@ -91,14 +91,14 @@ module.exports = async function runtimeLookupTests(h) {
       await session.prompt("Recover prior evidence.");
       assert.equal(turns, scripted.length);
       const results = new Map(observed);
-      assert.equal(results.get("a"), "Runtime findings.");
+      for (const id of ["a", "a2", "a3"]) assert.equal(results.get(id), "Runtime findings.");
       assert(results.get("b")?.includes("consecutive-call limit reached"));
       assert(results.get("c")?.includes("consecutive-call limit reached"), "narration cannot reset the cap");
       assert(results.get("d")?.includes("consecutive-call limit reached"), "fallback result does not reset the recovery episode");
       if (sequential) assert(results.get("e")?.includes("consecutive-call limit reached"), "same-message fallback search does not reset the streak either");
       assert.equal(results.get("f"), "Runtime findings.", "ordinary-work result resets the streak");
       if (sequential) assert.equal(results.get("g"), "Runtime findings.", "ordinary work between same-message calls is a boundary");
-      assert.equal(subagentCalls, sequential ? 3 : 2);
+      assert.equal(subagentCalls, sequential ? 5 : 4);
       assert.equal(new Set(lookupSessionIds).size, subagentCalls, "independent lookups have separate cache identities");
       const persisted = manager.getBranch().filter((e) => e.type === "message" && e.message.role === "toolResult" && e.message.toolName === "context_lookup");
       assert.equal(persisted.length, observed.length);

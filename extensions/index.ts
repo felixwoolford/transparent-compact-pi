@@ -1628,8 +1628,8 @@ function registerDirectTools(pi: ExtensionAPI): void {
   pi.registerTool({
     name: "context_list_entries",
     label: "Context: list entries",
-    description: pre + "Locate ENTRY ids for details hidden by compaction when you do not know where a specific earlier item is recorded. Returns raw session headers and previews, including compacted entries, in pages of up to 12000 payload characters, plus cursor notes. Use it to locate the item, not to reread the conversation. Continue only if the location is still unknown, using the reported offset and throughEntry. Stop once you have found the entry you need.",
-    promptSnippet: "Fallback: locate a specific entry in this conversation for post-compaction recovery.",
+    description: pre + "List raw session ENTRY headers and previews, including compacted entries, in pages of up to 12000 payload characters, plus cursor notes. Follow all reported continuation parameters (offset and throughEntry).",
+    promptSnippet: "Fallback: list this conversation's entries for post-compaction recovery",
     parameters: Type.Object(LIST_FIELDS),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       return run(ctx, (t) => listEntries(t, params));
@@ -1638,8 +1638,8 @@ function registerDirectTools(pi: ExtensionAPI): void {
   pi.registerTool({
     name: "context_grep",
     label: "Context: grep",
-    description: pre + "Find a narrow passage or locate a specific detail hidden by compaction. Regex-search the full raw session branch, including compacted thinking and tool outputs, with surrounding lines and entry attribution. pattern is a JS regex (case-insensitive). Start with a few matches and little surrounding context; retrieve enough context to interpret the passage. Up to 12000 payload characters per page, plus cursor notes. Continue only if the needed passage is missing, incomplete, or needs more context to resolve ambiguity, using all reported continuation parameters (offset, charOffset, throughEntry). Stop once the question is answered. A partial search does not establish that something never happened. Historical thinking is not verified fact.",
-    promptSnippet: "Fallback: search this conversation's history hidden by compaction for a specific passage.",
+    description: pre + "Regex-search the full raw session branch, including compacted thinking and tool outputs, with surrounding lines and entry attribution. pattern is a JS regex (case-insensitive). Up to 12000 payload characters per page, plus cursor notes. Follow all reported continuation parameters (offset, charOffset, throughEntry) for remaining matches or oversized lines. Historical thinking is not verified fact.",
+    promptSnippet: "Fallback: search this conversation's evidence hidden by compaction",
     parameters: Type.Object(GREP_FIELDS),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       return run(ctx, (t) => grepTranscript(t, params));
@@ -1883,10 +1883,10 @@ export default function (pi: ExtensionAPI) {
     label: "Context lookup",
     executionMode: "sequential",
     description:
-      `Retrieve earlier outputs, findings, decisions, and reasoning hidden by compaction when you need an exact detail or are unsure what you previously did, observed, or decided. Ask where an earlier finding came from, what a command actually printed, or why you reached a conclusion, especially when earlier notes conflict with new evidence. Ask a specific historical question—for example, "What exact command did I use?", "Did that check actually pass?", or "Why did I reject that approach?" A subagent searches this conversation's full raw active branch in its own context and returns focused findings rather than the transcript. ${RECOVERY_SOURCE_GUIDANCE} ${RECOVERY_SCOPE_RULE} If findings are incomplete, use context_list_entries, context_grep, or context_show_entry for the specific detail still missing, following their pagination instructions only as needed to answer the question. ${RECOVERY_FILESYSTEM_RULE}`,
-    promptSnippet: "Recover outputs, decisions, reasoning, and provenance hidden by compaction; check earlier details when unsure.",
+      `Retrieve earlier outputs, findings, decisions, and reasoning hidden by compaction. Ask \`context_lookup\` where an earlier finding came from, what a command actually printed, or why you reached a conclusion, especially when earlier notes conflict with new evidence. A subagent searches this conversation's full raw active branch in its own context and returns relevant findings. ${RECOVERY_SOURCE_GUIDANCE} ${RECOVERY_SCOPE_RULE} If findings are incomplete, use context_list_entries, context_grep, or context_show_entry, following pagination instructions. ${RECOVERY_FILESYSTEM_RULE}`,
+    promptSnippet: "Retrieve earlier outputs, findings, decisions, and reasoning hidden by compaction, including the provenance of earlier conclusions",
     parameters: Type.Object({
-      question: Type.String({ description: "A specific question about earlier details hidden by compaction in this conversation, phrased in ordinary language: an output, source of a finding, reason for a decision, or evidence behind notes that conflict with new observations. You may include an ENTRY id from an earlier recovery result to narrow the search." }),
+      question: Type.String({ description: "A specific question about earlier in this conversation: an output, source of a finding, reason for a decision, or evidence behind notes that conflict with new observations." }),
     }),
     async execute(toolCallId, params, signal, _onUpdate, ctx) {
       if (cfg.lookupMaxCalls > 0 && consecutiveLookups(ctx, toolCallId) >= cfg.lookupMaxCalls) {

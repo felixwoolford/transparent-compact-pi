@@ -78,7 +78,7 @@ module.exports = async function hybridTests(h) {
   }
   assert.deepEqual(fs.readdirSync(cwd), [], "direct searches write no transcript files");
 
-  await module.exports.limitTests({ ...h, expected: 1 });
+  await module.exports.limitTests({ ...h, expected: 3 });
 };
 
 module.exports.limitTests = async function limitTests(h) {

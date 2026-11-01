@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.9.3
+
+- Restore the `706b04b` advertisements for lookup, listing, and grep, including the
+  lookup question description; omit "authoritative" from grep attribution. Keep
+  the 0.9.2 `context_show_entry` advertisement and ref-free checkpoints unchanged.
+  This changes wording only; capping, retrieval behavior, the current lookup-call
+  limit, re-orientation, and the retrieval skill remain unchanged.
+- consecutive context_lookups now default to a limit of 3 rather than 1
+
 ## 0.9.2
 
 - Remove inline checkpoint refs, their selection heuristics, stored locator/priority
