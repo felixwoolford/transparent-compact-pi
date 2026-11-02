@@ -108,6 +108,7 @@ module.exports = function (h) {
   assert.doesNotMatch(description, /read before|must read|always read/i, "no mandatory preflight skill read");
   checkRecoveryTriggers(skill);
   checkRefFreeRecoveryLanguage(skill);
+  assert.doesNotMatch(skill, /Under size pressure|tools-tightened|trimmed/, "skill omits presentation-tightening guidance");
   assert.doesNotMatch(skill, /before repeating the\s+investigation/i,
     "skill does not mandate lookup before ordinary investigation");
   checkFilesystemScope(skill);

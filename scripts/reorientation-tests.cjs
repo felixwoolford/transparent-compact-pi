@@ -57,15 +57,16 @@ function checkEnvelope(summary) {
   assert(summary.includes("The retained verbatim conversation begins after the explicit boundary marker at the end of this checkpoint."));
   assert(!summary.includes("everything after the last span is uncompacted"));
   assert.equal(count(summary, "**Recovering hidden details.**"), 1);
-  require("./recovery-guidance-tests.cjs").checkFilesystemScope(summary);
-  assert(summary.includes("Use the recovery tools for history established by this conversation or its checkpoint, not project discovery, requirements never supplied, other sessions, or abandoned branches."));
+  require("./recovery-guidance-tests.cjs").checkCurrentRecoveryLanguage(summary);
+  const recovery = summary.slice(summary.indexOf("**Recovering hidden details.**")).split("\n\n")[0];
+  assert.equal(recovery, "**Recovering hidden details.** Use `context_lookup` with a specific historical question: a subagent searches this conversation's full session history and returns relevant findings. Use the recovery tools for history established by this conversation or its checkpoint, not for project discovery or exploration of other sessions. If its findings are incomplete, use the bounded fallback tools `context_list_entries`, `context_grep`, and `context_show_entry`.");
   assert(summary.indexOf("**Recovering hidden details.**") < summary.indexOf("### Compacted conversation"));
   assert.equal(count(summary, "**Evidence boundary:**"), 1);
   assert(summary.indexOf("**Evidence boundary:**") > summary.lastIndexOf("</compacted-span>"));
   assert(summary.indexOf("**Evidence boundary:**") < summary.lastIndexOf("Conversation"));
   assert(!summary.includes(heading), "checklist is not inside the compacted conversation");
   assert(!summary.includes("**Recovery recap.**"));
-  assert(summary.includes("**Recovering hidden details.** Prefer `context_lookup`"));
+  assert.doesNotMatch(summary, /^- Under size pressure,/m, "checkpoint omits presentation-tightening guidance");
   assert(summary.includes("Most output and detailed payloads are omitted"));
   assert(!summary.includes("marks useful historical evidence") && !summary.includes("Without a known ref"));
 }

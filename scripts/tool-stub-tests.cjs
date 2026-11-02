@@ -81,7 +81,7 @@ module.exports = async function (h) {
   assert(lines.every((line) => !line.includes("\n")), "output quotes cannot inject checkpoint lines");
   assert.doesNotMatch(c.summary, /\brefs?\b|ref=/i, "no checkpoint markers or guidance advertise refs");
   assert(c.summary.includes("Unlabelled does NOT establish exit 0"));
-  assert(c.summary.includes("**Recovering hidden details.** Prefer `context_lookup`"));
+  assert(c.summary.includes("**Recovering hidden details.** Use `context_lookup`"));
 
   const callDirect = async (id, includeRelated, extra = {}, context = ctx) => toolText(await ext.tools.context_show_entry.execute(
     "stub-entry", { id, includeRelated, ...extra }, undefined, undefined, context));
