@@ -35,7 +35,8 @@ import { buildSessionProjection, SessionManager } from "@earendil-works/pi-codin
 import type { ExtensionAPI, ExtensionContext, ModelRegistry, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { capSpans, commandPreview, renderToolLine, renderToolStub, NORMAL_PREVIEW_CHARS, TIGHTENED_ATTR } from "./lib/checkpoint-cap.js";
 import type { ToolLines, ToolStub } from "./lib/checkpoint-cap.js";
-import { FILTER_REQUEST, FILTER_EXPLANATION, filterSpans, pickFilteredTurns, turnOwners } from "./lib/turn-filter.js";
+import { FILTER_REQUEST, FILTER_EXPLANATION, PREFLAG_ENTRY, AUTO_FILTER_ENTRY, autoFilterEnabled, preflaggedTurns,
+  filterSpans, pickFilteredTurns, turnOwners } from "./lib/turn-filter.js";
 import type { FilterTurn, TurnSpan } from "./lib/turn-filter.js";
 
 // ============================================================================
@@ -965,6 +966,10 @@ function filteredTurns(entries: SessionEntry[]): string[] {
   return (latest?.details as { filteredTurnIds?: string[] } | undefined)?.filteredTurnIds ?? [];
 }
 
+function keptAsideTurns(entries: SessionEntry[]): string[] {
+  return (latestVerbatimCompaction(entries)?.details as { keptAsideTurnIds?: string[] } | undefined)?.keptAsideTurnIds ?? [];
+}
+
 // Match Pi's prepared messages to their source entries, including explicit
 // context replacements and generated custom messages. No raw bodies are stored.
 function preparedTurnOwners(entries: SessionEntry[], messages: AgentMessage[]): (string | null)[] {
@@ -983,8 +988,8 @@ function preparedTurnOwners(entries: SessionEntry[], messages: AgentMessage[]): 
 }
 
 function filterChoices(entries: SessionEntry[], spans: TurnSpan[], excluded: Set<string>, firstKeptEntryId: string,
-  retained: StartupReads): FilterTurn[] {
-  const owners = turnOwners(entries);
+  retained: StartupReads, selected = excluded): FilterTurn[] {
+  const owners = turnOwners(entries), flagged = preflaggedTurns(entries);
   const cut = entries.findIndex((entry) => entry.id === firstKeptEntryId);
   const tailOwners = new Set(entries.slice(cut).filter((entry) => entry.type === "message" || entry.type === "custom_message" || entry.type === "branch_summary")
     .map((entry) => owners.get(entry.id)));
@@ -1000,10 +1005,12 @@ function filterChoices(entries: SessionEntry[], spans: TurnSpan[], excluded: Set
   }
   return entries.filter((entry) => entry.type === "message" && entry.message.role === "user").map((entry) => {
     const content = lines.get(entry.id) ?? [];
+    const deferred = tailOwners.has(entry.id);
+    const unavailable = deferred ? (flagged.has(entry.id) ? undefined : "in retained recent tail")
+      : content.length === 0 ? "not individually represented in checkpoint" : undefined;
     return { id: entry.id, label: content[0] ?? `[User]: ${entry.type === "message" ? textOf((entry.message as any).content).text : ""}`,
-      lines: content, unavailable: excluded.has(entry.id) ? "already filtered"
-        : tailOwners.has(entry.id) ? "in retained recent tail"
-        : content.length === 0 ? "not individually represented in checkpoint" : undefined };
+      lines: content, selected: excluded.has(entry.id) || (!unavailable && selected.has(entry.id)),
+      filtered: excluded.has(entry.id), deferred, unavailable };
   });
 }
 
@@ -1735,6 +1742,26 @@ function registerDirectTools(pi: ExtensionAPI): void {
 // ============================================================================
 
 export default function (pi: ExtensionAPI) {
+  // Only bridge a specific /filter-later (or /fl) submission to its actual persisted user
+  // message. The next input clears a failed/handled submission, so it cannot
+  // accidentally flag a later ordinary prompt. Durable state uses raw entries.
+  let requestedAside: { sessionId: string; text: string } | undefined;
+  let asideInputSession: string | undefined;
+  const clearAsideSubmission = () => { requestedAside = undefined; asideInputSession = undefined; };
+  pi.on("input", (event, ctx) => {
+    asideInputSession = event.source === "extension" && requestedAside?.sessionId === ctx.sessionManager.getSessionId() &&
+      requestedAside.text === event.text ? requestedAside.sessionId : undefined;
+    requestedAside = undefined;
+  });
+  pi.on("message_end", (event, ctx) => {
+    if (event.message.role !== "user" || asideInputSession !== ctx.sessionManager.getSessionId()) return;
+    asideInputSession = undefined;
+    // Pi persists this user message immediately after message_end handlers.
+    pi.appendEntry(PREFLAG_ENTRY, { timestamp: event.message.timestamp });
+  });
+  pi.on("session_shutdown", clearAsideSubmission);
+  pi.on("session_tree", clearAsideSubmission);
+
   // Starting/resuming a run persists the checklist AFTER the starting user
   // message. Existing branch history, not an in-memory flag, prevents repeats.
   pi.on("before_agent_start", (_event, ctx) => {
@@ -1812,8 +1839,43 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
+  for (const name of ["filter-later", "fl"]) pi.registerCommand(name, {
+    description: "Submit a normal user turn pre-flagged for future checkpoint filtering",
+    handler: async (args, ctx) => {
+      if (!args.trim()) { ctx.ui.notify(`Usage: /${name} <message>`, "error"); return; }
+      if (!ctx.isIdle() || ctx.hasPendingMessages()) {
+        ctx.ui.notify("Wait until the agent is idle and queued messages have been handled before submitting an aside.", "warning"); return;
+      }
+      if (compactionMethod(ctx.sessionManager.getBranch()) !== "verbatim") {
+        ctx.ui.notify(`/${name} requires verbatim compaction. Use /compaction-method verbatim first.`, "error"); return;
+      }
+      clearAsideSubmission();
+      requestedAside = { sessionId: ctx.sessionManager.getSessionId(), text: args };
+      try {
+        pi.sendUserMessage(args);
+      } catch (error) {
+        clearAsideSubmission();
+        throw error;
+      }
+    },
+  });
+
+  pi.registerCommand("filter-auto", {
+    description: "Show or set automatic application of pre-flagged asides: on|off (default off)",
+    getArgumentCompletions: (prefix) => ["on", "off"].filter((value) => value.startsWith(prefix))
+      .map((value) => ({ value, label: value })),
+    handler: async (args, ctx) => {
+      const value = args.trim();
+      if (value && value !== "on" && value !== "off") { ctx.ui.notify("Usage: /filter-auto [on|off]", "error"); return; }
+      const previous = autoFilterEnabled(ctx.sessionManager.getBranch());
+      const enabled = value ? value === "on" : previous;
+      if (enabled !== previous) pi.appendEntry(AUTO_FILTER_ENTRY, { enabled });
+      ctx.ui.notify(`Automatic aside filtering: ${enabled ? "on" : "off"}. Applies user pre-flags during verbatim threshold/overflow compaction; no picker or automatic relevance judgments.`, "info");
+    },
+  });
+
   pi.registerCommand("compact-filtered", {
-    description: "Manually compact with whole-turn filtering and a confirmation preview",
+    description: "Manually filter or restore whole turns with a confirmation preview",
     handler: async (args, ctx) => {
       if (args.trim()) { ctx.ui.notify("Usage: /compact-filtered", "error"); return; }
       if (ctx.mode !== "tui" || !ctx.hasUI) {
@@ -1831,6 +1893,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("session_start", (_event, ctx) => {
+    clearAsideSubmission();
     const entries = ctx.sessionManager.getBranch();
     if (compactionMethod(entries) === "verbatim" && collectBaseAndSpans(entries).base?.kind === "model-summary") {
       ctx.ui.notify(MIXED_CONTEXT_WARNING, "warning");
@@ -1865,6 +1928,7 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_before_compact", async (event, ctx) => {
     const { preparation, branchEntries, reason, signal } = event;
     const filtering = reason === "manual" && event.customInstructions === FILTER_REQUEST;
+    const automaticFiltering = reason !== "manual" && autoFilterEnabled(branchEntries);
     if (filtering && (ctx.mode !== "tui" || !ctx.hasUI || compactionMethod(branchEntries) !== "verbatim"))
       return { cancel: true };
     if (!preparation) return;
@@ -1895,8 +1959,9 @@ export default function (pi: ExtensionAPI) {
       }
 
       const modified = new Set([...(fileOps?.edited ?? []), ...(fileOps?.written ?? [])]);
-      let modifiedFiles = [...modified].sort();
-      let readFiles = [...(fileOps?.read ?? [])].filter((f) => !modified.has(f)).sort();
+      const canonicalModifiedFiles = [...modified].sort();
+      const canonicalReadFiles = [...(fileOps?.read ?? [])].filter((f) => !modified.has(f)).sort();
+      let modifiedFiles = canonicalModifiedFiles, readFiles = canonicalReadFiles;
 
       // 2) The new span. Pi's preparation span is [previous cut, current cut)
       //    — it includes the previous compaction's retained tail (verified
@@ -1921,15 +1986,34 @@ export default function (pi: ExtensionAPI) {
 
       // 3) Freeze startup references after the second user prompt, then carry
       // their original outputs forward outside the trimmable conversation spans.
-      let retained = startupReads(branchEntries, ctx);
-      let filteredTurnIds = filteredTurns(branchEntries);
-      if (filtering) {
+      const canonicalRetained = startupReads(branchEntries, ctx);
+      let retained = canonicalRetained;
+      const excluded = new Set(filteredTurns(branchEntries));
+      const keptAsides = new Set(keptAsideTurns(branchEntries));
+      if (filtering || automaticFiltering) {
+        const preflags = preflaggedTurns(branchEntries);
+        const proposed = new Set([...excluded, ...[...preflags].filter((id) => !keptAsides.has(id))]);
         const choices = filterChoices(branchEntries, [...collectBaseAndSpans(branchEntries).spans, span],
-          new Set(filteredTurnIds), preparation.firstKeptEntryId, retained);
-        const selected = await pickFilteredTurns(ctx, choices, signal);
-        if (selected === undefined || signal.aborted) return { cancel: true };
-        filteredTurnIds = [...new Set([...filteredTurnIds, ...selected])];
+          excluded, preparation.firstKeptEntryId, retained, proposed);
+        if (filtering) {
+          const result = await pickFilteredTurns(ctx, choices, signal);
+          if (result === undefined || signal.aborted) return { cancel: true };
+          const selected = new Set(result);
+          for (const turn of choices) {
+            if (turn.unavailable) continue;
+            if (!turn.deferred) {
+              if (selected.has(turn.id)) excluded.add(turn.id); else excluded.delete(turn.id);
+            }
+            if (preflags.has(turn.id)) {
+              if (selected.has(turn.id)) keptAsides.delete(turn.id); else keptAsides.add(turn.id);
+            }
+          }
+        } else {
+          for (const turn of choices)
+            if (!turn.unavailable && !turn.deferred && proposed.has(turn.id)) excluded.add(turn.id);
+        }
       }
+      const filteredTurnIds = [...excluded];
       if (filteredTurnIds.length) {
         const excluded = new Set(filteredTurnIds), owners = turnOwners(branchEntries);
         retained = { ...retained, reads: retained.reads.filter((read) => !excluded.has(owners.get(read.entryId) ?? "")) };
@@ -1970,10 +2054,13 @@ export default function (pi: ExtensionAPI) {
           tokensBefore: preparation.tokensBefore,
           details: {
             kind: MECH_KIND,
-            readFiles,
-            modifiedFiles,
-            startupReads: retained,
+            // Canonical metadata stays reversible; only the rendered checkpoint
+            // masks file paths/startup reads owned by excluded turns.
+            readFiles: canonicalReadFiles,
+            modifiedFiles: canonicalModifiedFiles,
+            startupReads: canonicalRetained,
             ...(filteredTurnIds.length ? { filteredTurnIds } : {}),
+            ...(keptAsides.size ? { keptAsideTurnIds: [...keptAsides] } : {}),
             // Only this compaction's own span (un-capped lines). Earlier spans
             // are re-rendered from the earlier entries' details — no nesting.
             span: { at: nowIso, from: spanFrom, to: spanTo, reason, tokensBefore: preparation.tokensBefore,
@@ -1983,7 +2070,7 @@ export default function (pi: ExtensionAPI) {
       };
     } catch (err) {
       // Never replace a filtered checkpoint with an unfiltered model summary.
-      const preserveFiltering = filtering || filteredTurns(branchEntries).length > 0;
+      const preserveFiltering = filtering || automaticFiltering || filteredTurns(branchEntries).length > 0;
       ctx.ui?.notify?.(`transparent-compact: failed to build checkpoint (${errMsg(err)}); ${preserveFiltering ? "compaction cancelled" : "falling back to Pi's summary compaction"}`, "error");
       return preserveFiltering ? { cancel: true } : undefined;
     }

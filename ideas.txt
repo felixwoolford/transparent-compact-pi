@@ -2,4 +2,11 @@
 
 -opt-in for automatic compaction
 
--ability to go into past chekpoints
+
+-ability to rebuild previously filtered turns back in from the session history
+
+-ability to selectively construct uncompacted context segments
+
+-Research: check if this has been done. It's cool!
+
+

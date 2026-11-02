@@ -35,6 +35,10 @@ function load(factory, sessionRef) {
       assert(sessionRef?.current, "state writes must target the bound session");
       sessionRef.current.appendCustomEntry(type, data);
     },
+    sendUserMessage: (content) => {
+      assert(sessionRef?.sendUserMessage, "test must provide user-message delivery");
+      sessionRef.sendUserMessage(content);
+    },
     sendMessage: (message) => {
       assert(sessionRef?.current, "messages must target the bound session");
       sessionRef.current.appendCustomMessageEntry(message.customType, message.content, message.display, message.details);
@@ -456,7 +460,7 @@ async function main() {
     await require("./scripts/runtime-lookup-tests.cjs")({ ...hybridHelpers, jiti, piRoot });
     await require("./scripts/reorientation-tests.cjs")({ ...hybridHelpers, factory, load, compact, jiti, piRoot });
     await require("./scripts/startup-reads-tests.cjs")({ ...hybridHelpers, factory, load });
-    assert.deepEqual(Object.keys(ext.commands), ["compaction-method", "cap-compaction", "compact-filtered"]);
+    assert.deepEqual(Object.keys(ext.commands), ["compaction-method", "cap-compaction", "filter-later", "fl", "filter-auto", "compact-filtered"]);
     await require("./scripts/turn-filter-tests.cjs")({ ...hybridHelpers, factory, load, jiti, piRoot });
     await methodTests(factory, SessionManager, root);
     await require("./scripts/checkpoint-evidence-tests.cjs")({ ...hybridHelpers, compact });

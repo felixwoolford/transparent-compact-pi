@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Add `/filter-later <message>` (alias `/fl`) to submit a normal user turn pre-flagged for future
+  filtering. Add branch-local `/filter-auto on|off` (default off) to apply eligible
+  user pre-flags during verbatim threshold/overflow compaction without a picker.
+- Allow previously filtered turns to be unchecked and restored at the next manual
+  filtered compaction. Preview restorations and pending-flag cancellations; preserve
+  canonical startup-read and file-operation metadata for reversible checkpoints.
+  Explicit keep/restore decisions prevent automatic re-filtering of the same aside.
+
 - Add `/compact-filtered` for optional manual whole-turn filtering in the terminal:
   tree-like selection, scrollable confirmation, and cancellation without history
   edits. Replace excluded groups with `[Turn manually filtered]`, remove their

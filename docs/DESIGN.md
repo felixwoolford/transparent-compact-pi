@@ -76,24 +76,32 @@ extension, display setting, or content format. Long type names are abbreviated
 like tool-call arguments. This applies even with the cap disabled. Previously
 saved canonical spans are not rewritten; older custom-message bodies may remain in them.
 
-### Optional manual turn filtering
+### User-controlled turn filtering
 
 `/compact-filtered` requests verbatim manual compaction with a tree-like whole-turn
 checklist and a complete, scrollable confirmation preview. The picker runs after
-Pi has prepared its boundary. Only turns wholly before that boundary are eligible;
-turns overlapping the retained tail are locked. Agent/tool subentries are for
-inspection, not independent deletion. Escape goes back from confirmation, or
-cancels without saving a compaction. No filtering UI runs for ordinary manual,
-threshold or overflow compaction.
+Pi has prepared its boundary. Only turns wholly before that boundary can be
+excluded; pre-flagged turns overlapping the retained tail remain pending and their
+flags can be cancelled in the picker. Other recent turns are locked. Agent/tool
+subentries are for inspection, not independent deletion. Previously filtered turns
+start checked; unchecking restores their compacted representation. The confirmation
+preview distinguishes exclusions, restorations and pending-flag changes. Escape goes
+back from confirmation, or cancels without saving a compaction. No filtering UI runs
+for ordinary manual, threshold or overflow compaction. Restoration uses another
+normal Pi compaction; it does not bypass preparation or change the retained boundary.
 
 Canonical span lines carry parallel `turnIds`, anchored to raw user entry IDs
 through Pi's source-preserving projection (including explicit context replacements).
 A group includes all activity until the next raw user message, even across multiple
-compaction spans. Confirmed IDs are stored as cumulative `filteredTurnIds` on the
-compaction entry. Later verbatim checkpoints apply that branch-local selection to
-the original canonical spans before size trimming, reindexing tool display records
-without changing stored history. There is no migration or reconstruction of saved
-spans without turn ownership; opaque content is not individually selectable.
+compaction spans. Confirmed exclusions are stored as the current `filteredTurnIds`
+snapshot on the compaction entry, not an append-only union. Later verbatim checkpoints
+apply that branch-local selection to the original canonical spans before size
+trimming, reindexing tool display records without changing stored history. File
+operation lists and startup-read snapshots in compaction details remain canonical
+and unfiltered; only the rendered checkpoint masks them. Restoring a turn therefore
+also restores its retained-read copies and file-list membership without re-reading
+files or reselecting startup evidence. There is no migration or reconstruction of
+saved spans without turn ownership; opaque content is not individually selectable.
 
 One `[Turn manually filtered]` marker replaces each excluded group at its original
 position, even across spans. Markers survive the size cap. Startup-read copies owned
@@ -103,6 +111,23 @@ persistent reorientation conditionally explain that the user excluded low-value
 context, which remains retrievable from the full raw history. Recovery tools are
 unchanged. Cancellation or build failure never falls through to an unfiltered model
 summary during filtered compaction.
+
+`/filter-later <message>` (alias `/fl`) submits an ordinary user message through Pi's user-message API.
+A short-lived bridge from that submission's input event writes a non-context
+`transparent-compact:aside-turn` entry just before its user message is persisted.
+The next raw user entry consumes the flag, guarded by that message's timestamp.
+A failed/handled input is cleared by the next input, and session changes clear the
+bridge; no content heuristic is used to flag historical messages. Asides remain
+visible until eligible and are pre-checked by manual filtering.
+
+`/filter-auto on|off` persists a branch-local
+`transparent-compact:auto-filter` policy (default off). When enabled, threshold
+and overflow compaction apply eligible user pre-flags without opening a picker.
+Ordinary `/compact` does not apply new pre-flags; summary mode is unchanged.
+The compaction's `keptAsideTurnIds` snapshot records explicit manual keep/restore
+overrides, so future auto compactions do not re-exclude those asides. Turning off
+auto filtering affects new applications, not existing exclusions. No automatic
+relevance judgment, model call or filesystem mutation is introduced.
 
 ### File-list evidence annotations
 

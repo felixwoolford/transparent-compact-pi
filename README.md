@@ -100,21 +100,47 @@ sections from memory. Small exact-match edits have no blanket reread requirement
 In the interactive terminal, this opens a tree-like checklist of user turns.
 Use **↑/↓** to navigate, **←/→** to collapse/expand agent/tool subentries, and
 **Space** to mark a whole user turn and everything after it until the next user
-turn. Unchecked turns stay. **Enter** opens a scrollable preview of the checkpoint
-content to exclude; **Enter** again confirms, **Esc** goes back or cancels.
+turn. Unchecked turns stay. Previously filtered turns start checked: **uncheck one
+to restore it**. **Enter** opens a scrollable preview of exclusions, restorations,
+and pending-flag changes; **Enter** again confirms, **Esc** goes back or cancels.
 
 Filtering requires verbatim mode and an idle agent. Turns overlapping Pi's retained
-recent tail are unavailable: filtering never removes only half a turn or changes
-Pi's retention boundary. Content inside an opaque inherited summary cannot be
-selected individually.
+recent tail cannot be removed yet: filtering never removes only half a turn or
+changes Pi's retention boundary. Pre-flagged recent turns can be unchecked to cancel
+their pending exclusion. Content inside an opaque inherited summary cannot be
+selected individually. Restoration generates a new checkpoint using the original
+canonical spans, startup reads and file operations; it restores the normal compacted
+representation, subject to the size cap, not full uncompacted context. Pi must have
+enough new context to run another normal compaction.
 
 Each excluded group becomes `[Turn manually filtered]`. Its retained startup reads
 and file-list paths used only in excluded turns are removed too. The checkpoint
 and post-compaction reorientation explain the marker only when filtering is present.
 Exclusions follow the active branch through later verbatim compactions, reload and
 resume. Original session entries remain unchanged and recoverable; filtering does
-not undo file changes. Ordinary `/compact` and automatic compactions never open the
-picker or choose additional turns to exclude.
+not undo file changes. Ordinary `/compact` never applies new pre-flags or opens the
+picker. Automatic compactions apply new pre-flags only when explicitly enabled below.
+
+### Pre-flag an aside and optionally apply flags automatically
+
+```text
+/filter-later <message>  # normal user turn, pre-checked at the next /compact-filtered
+/fl <message>            # short alias for /filter-later
+/filter-auto             # report current policy (default off)
+/filter-auto on          # apply pre-flags during threshold/overflow compaction
+/filter-auto off         # stop applying new pre-flags automatically
+```
+
+`/filter-later` (or `/fl`) requires an idle agent in verbatim mode. The message and its following
+agent/tool activity remain in normal context until the entire group is eligible
+for filtering. It is not an isolated `/btw` conversation. In `/compact-filtered`,
+you can uncheck the aside before exclusion, or restore it afterward.
+
+Automatic filtering applies only user-authored pre-flags: no relevance judgments
+and no picker. Turning it off does not restore already filtered turns. Explicit
+keep/restore choices override an aside's original pre-flag, including on future
+automatic compactions. Flags, policy and keep decisions follow the active branch
+through reload/resume. Summary compaction is unchanged.
 
 ### Automatic startup-read retention
 
