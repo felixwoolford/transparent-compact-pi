@@ -62,7 +62,7 @@ async function main() {
     assert.equal(loaded.extensions.length, 1);
     const extension = loaded.extensions[0];
     assert.deepEqual([...extension.tools.keys()], ["context_list_entries", "context_grep", "context_show_entry", "context_lookup"], "session lookup and three direct fallback tools are registered");
-    assert.deepEqual([...extension.commands.keys()], ["compaction-method", "cap-compaction", "filter-later", "fl", "filter-auto", "compact-filtered"], "compaction policy, aside and turn-filtering commands are registered");
+    assert.deepEqual([...extension.commands.keys()], ["compaction-method", "cap-compaction", "filter-later", "fl", "filter-auto", "compact-filtered", "filter-turns"], "compaction policy, aside and turn-filtering commands are registered");
     const lookup = extension.tools.get("context_lookup");
     assert.deepEqual(Object.keys(lookup.definition.parameters.properties), ["question"], "lookup accepts only question");
     const skills = loadSkills({ cwd: root, agentDir: temp, skillPaths, includeDefaults: false });

@@ -2,11 +2,21 @@
 
 ## Unreleased
 
+- Clarify the filtering TUI with framed selection/review steps, a highlighted
+  focused row, numbered turns, semantic action labels and fixed keyboard controls.
+  Separate preview instructions from turn content and show a change summary.
+
+- Add `/filter-turns` to immediately filter or restore an existing checkpoint,
+  without compacting additional history, moving the boundary or starting an agent
+  turn. Persist branch-local revisions, refresh reorientation for each revision,
+  and carry choices into later verbatim or summary compaction. Recent messages
+  remain untouched; pending pre-flags can still be cancelled.
+
 - Add `/filter-later <message>` (alias `/fl`) to submit a normal user turn pre-flagged for future
   filtering. Add branch-local `/filter-auto on|off` (default off) to apply eligible
   user pre-flags during verbatim threshold/overflow compaction without a picker.
-- Allow previously filtered turns to be unchecked and restored at the next manual
-  filtered compaction. Preview restorations and pending-flag cancellations; preserve
+- Allow previously filtered turns to be unchecked and restored using `/filter-turns`
+  or manual filtered compaction. Preview restorations and pending-flag cancellations; preserve
   canonical startup-read and file-operation metadata for reversible checkpoints.
   Explicit keep/restore decisions prevent automatic re-filtering of the same aside.
 

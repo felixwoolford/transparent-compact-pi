@@ -87,15 +87,21 @@ subentries are for inspection, not independent deletion. Previously filtered tur
 start checked; unchecking restores their compacted representation. The confirmation
 preview distinguishes exclusions, restorations and pending-flag changes. Escape goes
 back from confirmation, or cancels without saving a compaction. No filtering UI runs
-for ordinary manual, threshold or overflow compaction. Restoration uses another
-normal Pi compaction; it does not bypass preparation or change the retained boundary.
+for ordinary manual, threshold or overflow compaction.
+
+`/filter-turns` uses the same selection/confirmation UI against the existing
+checkpoint only. It does not invoke Pi's compaction preparation, append a compaction,
+add a span, move `firstKeptEntryId`, or start an agent turn. It therefore also works
+immediately after compaction when Pi has nothing more to compact. An existing
+verbatim checkpoint and an idle interactive session are required; recent messages
+remain untouched, though pending aside flags can be cancelled.
 
 Canonical span lines carry parallel `turnIds`, anchored to raw user entry IDs
 through Pi's source-preserving projection (including explicit context replacements).
 A group includes all activity until the next raw user message, even across multiple
 compaction spans. Confirmed exclusions are stored as the current `filteredTurnIds`
-snapshot on the compaction entry, not an append-only union. Later verbatim checkpoints
-apply that branch-local selection to the original canonical spans before size
+snapshot on the compaction entry or its standalone revision, not an append-only
+union. Later verbatim checkpoints apply that branch-local selection to the original canonical spans before size
 trimming, reindexing tool display records without changing stored history. File
 operation lists and startup-read snapshots in compaction details remain canonical
 and unfiltered; only the rendered checkpoint masks them. Restoring a turn therefore
@@ -111,6 +117,21 @@ persistent reorientation conditionally explain that the user excluded low-value
 context, which remains retrievable from the full raw history. Recovery tools are
 unchanged. Cancellation or build failure never falls through to an unfiltered model
 summary during filtered compaction.
+
+Standalone updates append a non-context `transparent-compact:filter-revision`
+entry containing the source compaction ID, rendered checkpoint, exclusions and
+keep overrides. The latest revision for the active compaction wins. At request
+time, `context_with_system` replaces only Pi's projected `compactionSummary` and
+refreshes the managed reminder for that revision. Original compaction entries and
+the raw recent tail are never edited. Host views/estimates based solely on Pi's
+saved projection can still reflect the original summary; actual provider requests
+receive the revision. The checkpoint size guard applies before a revision is saved.
+
+Reload/resume and tree navigation select revisions from the raw active branch.
+The next real verbatim compaction inherits their choices and supersedes the old
+revision; model-summary compaction is also given the revised previous summary and
+file lists rather than stale saved checkpoint content. Cancelling the picker or
+size-cap decision saves no filtering revision. No-op confirmation writes nothing.
 
 `/filter-later <message>` (alias `/fl`) submits an ordinary user message through Pi's user-message API.
 A short-lived bridge from that submission's input event writes a non-context
@@ -405,7 +426,8 @@ There is no blanket edit-target reread. Before replacing an existing file with
 view, and forbids reconstructing unchanged sections from memory. Small exact-match
 edits and newly created files do not acquire a blanket reread requirement.
 It is a saved
-custom message tagged with the current compaction entry ID, not a temporary nudge:
+custom message tagged with the current compaction entry ID and, after standalone
+filtering, its revision ID, not a temporary nudge:
 subsequent responses and user turns retain it in history before the work that
 followed it. `before_agent_start` adds it on normal starts/resume when missing;
 `session_compact` steers it into automatic mid-run and overflow continuations.

@@ -35,7 +35,7 @@ import { buildSessionProjection, SessionManager } from "@earendil-works/pi-codin
 import type { ExtensionAPI, ExtensionContext, ModelRegistry, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { capSpans, commandPreview, renderToolLine, renderToolStub, NORMAL_PREVIEW_CHARS, TIGHTENED_ATTR } from "./lib/checkpoint-cap.js";
 import type { ToolLines, ToolStub } from "./lib/checkpoint-cap.js";
-import { FILTER_REQUEST, FILTER_EXPLANATION, PREFLAG_ENTRY, AUTO_FILTER_ENTRY, autoFilterEnabled, preflaggedTurns,
+import { FILTER_REQUEST, FILTER_EXPLANATION, PREFLAG_ENTRY, AUTO_FILTER_ENTRY, FILTER_REVISION_ENTRY, autoFilterEnabled, preflaggedTurns,
   filterSpans, pickFilteredTurns, turnOwners } from "./lib/turn-filter.js";
 import type { FilterTurn, TurnSpan } from "./lib/turn-filter.js";
 
@@ -152,7 +152,7 @@ function persistCap(pi: ExtensionAPI, previous: CapSettings, next: CapSettings):
 
 // undefined means uncapped; null means cancel (never fall through to summary).
 async function chooseCapBudget(pi: ExtensionAPI, ctx: ExtensionContext, signal: AbortSignal | undefined,
-  reason: string, size: { overhead: number; lineChars: number }): Promise<number | undefined | null> {
+  reason: string, size: { overhead: number; lineChars: number }, operation = "compaction"): Promise<number | undefined | null> {
   try {
     let state = capSettings(ctx.sessionManager.getBranch());
     for (;;) {
@@ -166,7 +166,7 @@ async function chooseCapBudget(pi: ExtensionAPI, ctx: ExtensionContext, signal: 
       // Exactly the existing cap's test, including its minimum 500-char line budget.
       const needsTrim = size.lineChars > Math.max(500, limit - size.overhead);
       if (state.mode !== "warn" || !needsTrim) return limit;
-      const warning = `Verbatim compaction would trim content: ~${(size.overhead + size.lineChars).toLocaleString()} conversation/retained-read chars; budget ${capBudgetText(state.budget)} (${limit.toLocaleString()} chars).`;
+      const warning = `Verbatim ${operation} would trim content: ~${(size.overhead + size.lineChars).toLocaleString()} conversation/retained-read chars; budget ${capBudgetText(state.budget)} (${limit.toLocaleString()} chars).`;
       if (!ctx.hasUI || typeof ctx.ui.select !== "function") {
         ctx.ui.notify(`${warning} Applying the cap because no interactive UI is available.`, "warning");
         return limit;
@@ -175,7 +175,7 @@ async function chooseCapBudget(pi: ExtensionAPI, ctx: ExtensionContext, signal: 
         ? "Overflow recovery: disabling the cap may leave too much context for the retry."
         : "Disabling the cap may leave too much context for the model.";
       const choice = await ctx.ui.select(`${warning}\n${risk}`, [
-        "Apply trimming", "Disable cap for this session", "Change budget", "Cancel compaction",
+        "Apply trimming", "Disable cap for this session", "Change budget", `Cancel ${operation}`,
       ], { signal });
       if (signal?.aborted) return null;
       if (choice === "Apply trimming") return limit;
@@ -203,7 +203,7 @@ async function chooseCapBudget(pi: ExtensionAPI, ctx: ExtensionContext, signal: 
       }
     }
   } catch (err) {
-    if (!signal?.aborted) ctx.ui?.notify?.(`transparent-compact: unable to resolve cap decision (${errMsg(err)}); compaction cancelled`, "error");
+    if (!signal?.aborted) ctx.ui?.notify?.(`transparent-compact: unable to resolve cap decision (${errMsg(err)}); ${operation} cancelled`, "error");
     return null;
   }
 }
@@ -961,13 +961,39 @@ function collectBaseAndSpans(branchEntries: SessionEntry[]): {
   return { base, spans };
 }
 
+interface FilterRevision {
+  compactionId: string;
+  summary: string;
+  filteredTurnIds: string[];
+  keptAsideTurnIds: string[];
+}
+
+function latestFilterRevision(entries: SessionEntry[]) {
+  const compaction = latestVerbatimCompaction(entries);
+  if (!compaction) return;
+  const entry = entries.slice(entries.indexOf(compaction) + 1).findLast((entry) =>
+    entry.type === "custom" && entry.customType === FILTER_REVISION_ENTRY &&
+    (entry.data as FilterRevision)?.compactionId === compaction.id);
+  return entry?.type === "custom" ? entry as typeof entry & { data: FilterRevision } : undefined;
+}
+
 function filteredTurns(entries: SessionEntry[]): string[] {
-  const latest = latestVerbatimCompaction(entries);
-  return (latest?.details as { filteredTurnIds?: string[] } | undefined)?.filteredTurnIds ?? [];
+  return latestFilterRevision(entries)?.data.filteredTurnIds ??
+    (latestVerbatimCompaction(entries)?.details as { filteredTurnIds?: string[] } | undefined)?.filteredTurnIds ?? [];
 }
 
 function keptAsideTurns(entries: SessionEntry[]): string[] {
-  return (latestVerbatimCompaction(entries)?.details as { keptAsideTurnIds?: string[] } | undefined)?.keptAsideTurnIds ?? [];
+  return latestFilterRevision(entries)?.data.keptAsideTurnIds ??
+    (latestVerbatimCompaction(entries)?.details as { keptAsideTurnIds?: string[] } | undefined)?.keptAsideTurnIds ?? [];
+}
+
+function projectCheckpoint(messages: AgentMessage[], entries: SessionEntry[]): AgentMessage[] {
+  const revision = latestFilterRevision(entries);
+  if (!revision) return messages;
+  // Pi projects exactly one active compaction summary. Revise only that message,
+  // never the retained tail, source entries, or an opaque inherited base.
+  return messages.map((message) => message.role === "compactionSummary"
+    ? { ...message, summary: revision.data.summary } : message);
 }
 
 // Match Pi's prepared messages to their source entries, including explicit
@@ -1014,6 +1040,19 @@ function filterChoices(entries: SessionEntry[], spans: TurnSpan[], excluded: Set
   });
 }
 
+function applyTurnSelection(choices: FilterTurn[], selected: Set<string>, preflags: Set<string>,
+  excluded: Set<string>, keptAsides: Set<string>): void {
+  for (const turn of choices) {
+    if (turn.unavailable) continue;
+    if (!turn.deferred) {
+      if (selected.has(turn.id)) excluded.add(turn.id); else excluded.delete(turn.id);
+    }
+    if (preflags.has(turn.id)) {
+      if (selected.has(turn.id)) keptAsides.delete(turn.id); else keptAsides.add(turn.id);
+    }
+  }
+}
+
 // Remove file-list traces belonging only to excluded turns. A path also used
 // by a kept turn stays listed; filtering is not a claim that mutations were undone.
 function excludedFilePaths(entries: SessionEntry[], excluded: Set<string>, firstKeptEntryId: string, cwd: string): Set<string> {
@@ -1030,6 +1069,18 @@ function excludedFilePaths(entries: SessionEntry[], excluded: Set<string>, first
     }
   }
   return new Set([...removed].filter((file) => !kept.has(file)));
+}
+
+function checkpointEvidence(entries: SessionEntry[], firstKeptEntryId: string, cwd: string,
+  startup: StartupReads, readFiles: string[], modifiedFiles: string[], excluded: Set<string>) {
+  if (!excluded.size) return { startupReads: startup, readFiles, modifiedFiles };
+  const owners = turnOwners(entries);
+  const removedPaths = excludedFilePaths(entries, excluded, firstKeptEntryId, cwd);
+  return {
+    startupReads: { ...startup, reads: startup.reads.filter((read) => !excluded.has(owners.get(read.entryId) ?? "")) },
+    readFiles: readFiles.filter((file) => !removedPaths.has(fileEvidenceKey(file, cwd))),
+    modifiedFiles: modifiedFiles.filter((file) => !removedPaths.has(fileEvidenceKey(file, cwd))),
+  };
 }
 
 const RECOVERY_HISTORY_NOTE = "Compaction hides earlier details from your current view. The original conversation history, including recorded tool outputs and your reasoning, is preserved in the session and can be retrieved.";
@@ -1059,18 +1110,19 @@ function latestVerbatimCompaction(entries: SessionEntry[]) {
   }
 }
 
-function reorientationMessage(compactionId: string, filtered = false) {
+function reorientationMessage(compactionId: string, filtered = false, revisionId = compactionId) {
   return { customType: REORIENT_MESSAGE, content: `${REORIENT_BLOCK}${filtered ? `\n\n${FILTER_EXPLANATION}` : ""}\n\n${RECOVERY_RECAP}`,
-    display: false, details: { compactionId } };
+    display: false, details: { compactionId, ...(revisionId !== compactionId ? { revisionId } : {}) } };
 }
 
 function isReorientation(msg: AgentMessage): boolean {
   return msg.role === "custom" && msg.customType === REORIENT_MESSAGE;
 }
 
-function reorientationFor(msg: AgentMessage, compactionId: string): boolean {
-  return msg.role === "custom" && msg.customType === REORIENT_MESSAGE &&
-    (msg.details as { compactionId?: string } | undefined)?.compactionId === compactionId;
+function reorientationFor(msg: AgentMessage, compactionId: string, revisionId: string): boolean {
+  const details = msg.role === "custom" ? msg.details as { compactionId?: string; revisionId?: string } | undefined : undefined;
+  return isReorientation(msg) && details?.compactionId === compactionId &&
+    (details.revisionId ?? details.compactionId) === revisionId;
 }
 
 /** Keep one current, persisted checklist. Obsolete managed messages can still be
@@ -1079,12 +1131,13 @@ function reorientationFor(msg: AgentMessage, compactionId: string): boolean {
  * Later requests keep it in history before the work that followed it. */
 function projectReorientation(messages: AgentMessage[], entries: SessionEntry[]): AgentMessage[] {
   const compaction = latestVerbatimCompaction(entries);
+  const anchor = latestFilterRevision(entries) ?? compaction;
   let selected = -1;
   for (let i = 0; i < messages.length; i++)
-    if (compaction && reorientationFor(messages[i], compaction.id)) selected = i;
+    if (compaction && reorientationFor(messages[i], compaction.id, anchor!.id)) selected = i;
   const result = messages.filter((m, i) => !isReorientation(m) || i === selected);
   if (selected < 0 || !compaction) return result;
-  const answered = entries.slice(entries.indexOf(compaction) + 1).some((e) =>
+  const answered = entries.slice(entries.indexOf(anchor!) + 1).some((e) =>
     e.type === "message" && e.message.role === "assistant" &&
     e.message.stopReason !== "aborted" && e.message.stopReason !== "error");
   if (!answered) {
@@ -1100,6 +1153,7 @@ async function buildMechanicalSummary(opts: {
   branchEntries: SessionEntry[];
   now: string;
   spanLines: string[]; // this compaction's own span, un-capped
+  revisedAt?: string; // rebuild existing spans only; no new compaction or boundary
   spanTools?: ToolLines; // versioned, bounded display records; no raw payloads
   spanTurnIds?: (string | null)[];
   filteredTurnIds?: string[];
@@ -1114,8 +1168,10 @@ async function buildMechanicalSummary(opts: {
   chooseCap: (size: { overhead: number; lineChars: number }) => Promise<number | undefined | null>;
 }): Promise<string | undefined> {
   const { base, spans } = collectBaseAndSpans(opts.branchEntries);
-  const allSpans = filterSpans([...spans, { at: opts.now, reason: opts.reason, from: opts.spanFrom, to: opts.spanTo,
-    lines: opts.spanLines, tools: opts.spanTools, turnIds: opts.spanTurnIds }], new Set(opts.filteredTurnIds));
+  const allSpans = filterSpans(opts.revisedAt ? spans : [...spans, {
+    at: opts.now, reason: opts.reason, from: opts.spanFrom, to: opts.spanTo,
+    lines: opts.spanLines, tools: opts.spanTools, turnIds: opts.spanTurnIds,
+  }], new Set(opts.filteredTurnIds));
   const coversOf = (s: { from?: string; to?: string }): string | undefined => (s.from && s.to ? `${s.from} → ${s.to}` : undefined);
 
   // Size guard: the budget covers the conversation section plus retained reads.
@@ -1164,7 +1220,7 @@ async function buildMechanicalSummary(opts: {
     ].join("\n"));
   });
 
-  const compactionCount = opts.branchEntries.filter((e) => e.type === "compaction").length + 1;
+  const compactionCount = opts.branchEntries.filter((e) => e.type === "compaction").length + (opts.revisedAt ? 0 : 1);
   const parts: string[] = [];
   parts.push(`## Verbatim compaction checkpoint (compaction ${compactionCount} on this branch)`);
   parts.push(CHECKPOINT_EXPLANATION);
@@ -1174,6 +1230,7 @@ async function buildMechanicalSummary(opts: {
     opts.notify(MIXED_CONTEXT_WARNING);
   }
   parts.push(`- Latest: ${opts.now} (trigger: ${opts.reason}, ~${opts.tokensBefore.toLocaleString()} tokens before compaction)`);
+  if (opts.revisedAt) parts.push(`- Turn filtering revised: ${opts.revisedAt}. No additional history was compacted; the verbatim boundary is unchanged.`);
   parts.push("- In the compacted spans, user and assistant prose is kept verbatim, subject to budget trimming. Retained prose is a record of what was said, not verification of its claims. Tool signatures are display notation, not replayable shell commands: paths under the working directory become relative (`.` in commands); read ranges are requested lines; write/edit payloads become sizes/counts. New bash previews keep the first 160 encoded characters, followed by … when truncated, with escaped newlines. Thinking and most output are removed; selected output observations remain after →.");
   parts.push("- [tool error] means the result was flagged as an error; [unknown] means no safely matched result/status. Unlabelled does NOT establish exit 0 or passing tests. → exit N is a reported shell status; output: quotes/extracts selected output, not an inferred verdict. Everything shown is historical. Legacy [ok] only means not flagged as a tool error; legacy calls without status are unknown.");
   parts.push("- Under size pressure, `tools-tightened` marks 120/80-character previews or grouped tool-only lines. Conversation prose and tool calls are retained unless `trimmed` is also marked. Tightening stops as soon as the budget fits; outcome observations and identifying file paths are not shortened by these stages.");
@@ -1768,9 +1825,13 @@ export default function (pi: ExtensionAPI) {
     const entries = ctx.sessionManager.getBranch();
     const compaction = latestVerbatimCompaction(entries);
     if (!compaction) return;
-    const found = entries.some((e) => e.type === "custom_message" && e.customType === REORIENT_MESSAGE &&
-      (e.details as { compactionId?: string } | undefined)?.compactionId === compaction.id);
-    if (!found) return { message: reorientationMessage(compaction.id, filteredTurns(entries).length > 0) };
+    const revisionId = latestFilterRevision(entries)?.id ?? compaction.id;
+    const found = entries.some((e) => {
+      if (e.type !== "custom_message" || e.customType !== REORIENT_MESSAGE) return false;
+      const details = e.details as { compactionId?: string; revisionId?: string } | undefined;
+      return details?.compactionId === compaction.id && (details.revisionId ?? details.compactionId) === revisionId;
+    });
+    if (!found) return { message: reorientationMessage(compaction.id, filteredTurns(entries).length > 0, revisionId) };
   });
 
   // Between-turn compaction and overflow continuation do not necessarily pass
@@ -1788,7 +1849,8 @@ export default function (pi: ExtensionAPI) {
   // non-managed messages, remove old checklists even if they survive in the tail,
   // and keep the current one active on subsequent requests (not just the first).
   pi.on("context_with_system", (event, ctx) => {
-    const messages = projectReorientation(event.messages, ctx.sessionManager.getBranch());
+    const entries = ctx.sessionManager.getBranch();
+    const messages = projectReorientation(projectCheckpoint(event.messages, entries), entries);
     if (messages.length !== event.messages.length || messages.some((m, i) => m !== event.messages[i]))
       return { messages };
   });
@@ -1892,6 +1954,66 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
+  pi.registerCommand("filter-turns", {
+    description: "Filter or restore existing checkpoint turns without compacting more history",
+    handler: async (args, ctx) => {
+      if (args.trim()) { ctx.ui.notify("Usage: /filter-turns", "error"); return; }
+      if (ctx.mode !== "tui" || !ctx.hasUI) {
+        ctx.ui.notify("/filter-turns requires the interactive terminal UI.", "error"); return;
+      }
+      if (!ctx.isIdle() || ctx.hasPendingMessages()) {
+        ctx.ui.notify("Wait until the agent is idle and queued messages have been handled before filtering turns.", "warning"); return;
+      }
+      const entries = ctx.sessionManager.getBranch();
+      const compaction = latestVerbatimCompaction(entries);
+      if (compactionMethod(entries) !== "verbatim" || !compaction) {
+        ctx.ui.notify("/filter-turns requires an existing verbatim checkpoint. Use /compact-filtered to create one.", "error"); return;
+      }
+      const canonical = compaction.details as { span: StoredSpan; startupReads: StartupReads; readFiles: string[]; modifiedFiles: string[] };
+      if (!canonical.span || !canonical.startupReads) {
+        ctx.ui.notify("This checkpoint has no editable canonical spans. Use /compact-filtered first.", "error"); return;
+      }
+      const sessionId = ctx.sessionManager.getSessionId();
+      const revisionId = latestFilterRevision(entries)?.id;
+      const signal = new AbortController().signal;
+      try {
+        const previousExcluded = filteredTurns(entries), previousKept = keptAsideTurns(entries);
+        const excluded = new Set(previousExcluded), keptAsides = new Set(previousKept);
+        const preflags = preflaggedTurns(entries);
+        const proposed = new Set([...excluded, ...[...preflags].filter((id) => !keptAsides.has(id))]);
+        const choices = filterChoices(entries, collectBaseAndSpans(entries).spans, excluded,
+          compaction.firstKeptEntryId, canonical.startupReads, proposed);
+        const result = await pickFilteredTurns(ctx, choices, signal, "update");
+        if (result === undefined) return;
+        applyTurnSelection(choices, new Set(result), preflags, excluded, keptAsides);
+        if (excluded.size === previousExcluded.length && previousExcluded.every((id) => excluded.has(id)) &&
+            keptAsides.size === previousKept.length && previousKept.every((id) => keptAsides.has(id))) {
+          ctx.ui.notify("No checkpoint filtering changes.", "info"); return;
+        }
+        const summary = await buildMechanicalSummary({
+          reason: canonical.span.reason, tokensBefore: compaction.tokensBefore, branchEntries: entries,
+          now: canonical.span.at, revisedAt: new Date().toISOString(), spanLines: [], filteredTurnIds: [...excluded],
+          firstKeptEntryId: compaction.firstKeptEntryId,
+          ...checkpointEvidence(entries, compaction.firstKeptEntryId, ctx.cwd,
+            canonical.startupReads, canonical.readFiles, canonical.modifiedFiles, excluded),
+          cwd: ctx.cwd, notify: (message) => ctx.ui.notify(message, "warning"),
+          chooseCap: (size) => chooseCapBudget(pi, ctx, signal, "manual", size, "checkpoint update"),
+        });
+        if (summary === undefined) return;
+        const current = ctx.sessionManager.getBranch();
+        if (ctx.sessionManager.getSessionId() !== sessionId || latestVerbatimCompaction(current)?.id !== compaction.id ||
+            latestFilterRevision(current)?.id !== revisionId) {
+          ctx.ui.notify("Session/checkpoint changed; filtering update cancelled.", "warning"); return;
+        }
+        pi.appendEntry(FILTER_REVISION_ENTRY, { compactionId: compaction.id, summary,
+          filteredTurnIds: [...excluded], keptAsideTurnIds: [...keptAsides] } satisfies FilterRevision);
+        ctx.ui.notify("Checkpoint filtering updated. No additional history compacted; recent messages and boundary unchanged.", "info");
+      } catch (error) {
+        ctx.ui.notify(`Checkpoint filtering cancelled: ${errMsg(error)}`, "error");
+      }
+    },
+  });
+
   pi.on("session_start", (_event, ctx) => {
     clearAsideSubmission();
     const entries = ctx.sessionManager.getBranch();
@@ -1935,6 +2057,33 @@ export default function (pi: ExtensionAPI) {
     if (signal?.aborted) return;
     if (preparation.messagesToSummarize.length === 0 && preparation.turnPrefixMessages.length === 0) return;
     if (compactionMethod(ctx.sessionManager.getBranch()) === "summary") {
+      const revision = latestFilterRevision(branchEntries);
+      if (revision) {
+        // Pi prepares from the saved compaction, not our request projection.
+        // Summary mode must consume the revised checkpoint too, rather than
+        // resurrecting filtered text or dropping standalone restorations.
+        preparation.previousSummary = revision.data.summary;
+        const canonical = latestVerbatimCompaction(branchEntries)!.details as {
+          startupReads: StartupReads; readFiles: string[]; modifiedFiles: string[];
+        };
+        const visible = checkpointEvidence(branchEntries, preparation.firstKeptEntryId, ctx.cwd,
+          canonical.startupReads, canonical.readFiles, canonical.modifiedFiles, new Set(revision.data.filteredTurnIds));
+        const ops = preparation.fileOps;
+        ops.read = new Set(visible.readFiles);
+        ops.edited = new Set(visible.modifiedFiles);
+        ops.written = new Set();
+        for (const message of [...preparation.messagesToSummarize, ...preparation.turnPrefixMessages]) {
+          const calls = message.role === "assistant" ? message.content.filter((block) => block.type === "toolCall")
+            : message.role === "toolResult" ? message.nestedCalls?.calls ?? [] : [];
+          for (const call of calls) {
+            const file = (call.arguments as { path?: unknown } | undefined)?.path;
+            if (typeof file !== "string" || !file) continue;
+            if (call.name === "read") ops.read.add(file);
+            else if (call.name === "write") ops.written.add(file);
+            else if (call.name === "edit") ops.edited.add(file);
+          }
+        }
+      }
       return; // No override: Pi runs its normal model-generated compaction.
     }
 
@@ -1961,7 +2110,6 @@ export default function (pi: ExtensionAPI) {
       const modified = new Set([...(fileOps?.edited ?? []), ...(fileOps?.written ?? [])]);
       const canonicalModifiedFiles = [...modified].sort();
       const canonicalReadFiles = [...(fileOps?.read ?? [])].filter((f) => !modified.has(f)).sort();
-      let modifiedFiles = canonicalModifiedFiles, readFiles = canonicalReadFiles;
 
       // 2) The new span. Pi's preparation span is [previous cut, current cut)
       //    — it includes the previous compaction's retained tail (verified
@@ -1987,40 +2135,25 @@ export default function (pi: ExtensionAPI) {
       // 3) Freeze startup references after the second user prompt, then carry
       // their original outputs forward outside the trimmable conversation spans.
       const canonicalRetained = startupReads(branchEntries, ctx);
-      let retained = canonicalRetained;
       const excluded = new Set(filteredTurns(branchEntries));
       const keptAsides = new Set(keptAsideTurns(branchEntries));
       if (filtering || automaticFiltering) {
         const preflags = preflaggedTurns(branchEntries);
         const proposed = new Set([...excluded, ...[...preflags].filter((id) => !keptAsides.has(id))]);
         const choices = filterChoices(branchEntries, [...collectBaseAndSpans(branchEntries).spans, span],
-          excluded, preparation.firstKeptEntryId, retained, proposed);
+          excluded, preparation.firstKeptEntryId, canonicalRetained, proposed);
         if (filtering) {
           const result = await pickFilteredTurns(ctx, choices, signal);
           if (result === undefined || signal.aborted) return { cancel: true };
-          const selected = new Set(result);
-          for (const turn of choices) {
-            if (turn.unavailable) continue;
-            if (!turn.deferred) {
-              if (selected.has(turn.id)) excluded.add(turn.id); else excluded.delete(turn.id);
-            }
-            if (preflags.has(turn.id)) {
-              if (selected.has(turn.id)) keptAsides.delete(turn.id); else keptAsides.add(turn.id);
-            }
-          }
+          applyTurnSelection(choices, new Set(result), preflags, excluded, keptAsides);
         } else {
           for (const turn of choices)
             if (!turn.unavailable && !turn.deferred && proposed.has(turn.id)) excluded.add(turn.id);
         }
       }
       const filteredTurnIds = [...excluded];
-      if (filteredTurnIds.length) {
-        const excluded = new Set(filteredTurnIds), owners = turnOwners(branchEntries);
-        retained = { ...retained, reads: retained.reads.filter((read) => !excluded.has(owners.get(read.entryId) ?? "")) };
-        const removedPaths = excludedFilePaths(branchEntries, excluded, preparation.firstKeptEntryId, ctx.cwd);
-        readFiles = readFiles.filter((file) => !removedPaths.has(fileEvidenceKey(file, ctx.cwd)));
-        modifiedFiles = modifiedFiles.filter((file) => !removedPaths.has(fileEvidenceKey(file, ctx.cwd)));
-      }
+      const evidence = checkpointEvidence(branchEntries, preparation.firstKeptEntryId, ctx.cwd,
+        canonicalRetained, canonicalReadFiles, canonicalModifiedFiles, excluded);
       const summary = await buildMechanicalSummary({
         reason, // pi's raw reason, passed through unchanged
         tokensBefore: preparation.tokensBefore,
@@ -2033,9 +2166,7 @@ export default function (pi: ExtensionAPI) {
         spanFrom,
         spanTo,
         firstKeptEntryId: preparation.firstKeptEntryId,
-        readFiles,
-        modifiedFiles,
-        startupReads: retained,
+        ...evidence,
         cwd: ctx.cwd,
         notify: (m) => ctx.ui?.notify?.(m, "warning"),
         chooseCap: (size) => chooseCapBudget(pi, ctx, signal, reason, size),

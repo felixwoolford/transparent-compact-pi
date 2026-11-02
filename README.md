@@ -91,13 +91,16 @@ Before replacing an existing file with `write`, the agent is told to reread it
 unless current contents are already visible, rather than reconstruct unchanged
 sections from memory. Small exact-match edits have no blanket reread requirement.
 
-### Manually filter low-value turns
+### Manually filter or restore checkpoint turns
 
 ```text
-/compact-filtered
+/filter-turns       # edit the existing checkpoint; no compaction
+/compact-filtered   # compact more history, then filter/restore
 ```
 
-In the interactive terminal, this opens a tree-like checklist of user turns.
+In the interactive terminal, this opens a framed checklist of user turns, with
+a highlighted cursor, action labels and a separate fixed controls area. The review
+step summarizes exclusions, restorations and pending flags above the content.
 Use **↑/↓** to navigate, **←/→** to collapse/expand agent/tool subentries, and
 **Space** to mark a whole user turn and everything after it until the next user
 turn. Unchecked turns stay. Previously filtered turns start checked: **uncheck one
@@ -108,10 +111,13 @@ Filtering requires verbatim mode and an idle agent. Turns overlapping Pi's retai
 recent tail cannot be removed yet: filtering never removes only half a turn or
 changes Pi's retention boundary. Pre-flagged recent turns can be unchecked to cancel
 their pending exclusion. Content inside an opaque inherited summary cannot be
-selected individually. Restoration generates a new checkpoint using the original
-canonical spans, startup reads and file operations; it restores the normal compacted
-representation, subject to the size cap, not full uncompacted context. Pi must have
-enough new context to run another normal compaction.
+selected individually. `/filter-turns` requires an existing verbatim checkpoint
+and works even when there is no new history to compact. It saves a reversible,
+branch-local checkpoint revision without moving the retained boundary or starting
+an agent turn. Restoration uses the original canonical spans, startup reads and
+file operations; it restores the normal compacted representation, subject to the
+size cap, not full uncompacted context. Before the first checkpoint, use
+`/compact-filtered`.
 
 Each excluded group becomes `[Turn manually filtered]`. Its retained startup reads
 and file-list paths used only in excluded turns are removed too. The checkpoint
@@ -124,7 +130,7 @@ picker. Automatic compactions apply new pre-flags only when explicitly enabled b
 ### Pre-flag an aside and optionally apply flags automatically
 
 ```text
-/filter-later <message>  # normal user turn, pre-checked at the next /compact-filtered
+/filter-later <message>  # normal user turn, pre-checked in either filtering command
 /fl <message>            # short alias for /filter-later
 /filter-auto             # report current policy (default off)
 /filter-auto on          # apply pre-flags during threshold/overflow compaction
@@ -133,8 +139,8 @@ picker. Automatic compactions apply new pre-flags only when explicitly enabled b
 
 `/filter-later` (or `/fl`) requires an idle agent in verbatim mode. The message and its following
 agent/tool activity remain in normal context until the entire group is eligible
-for filtering. It is not an isolated `/btw` conversation. In `/compact-filtered`,
-you can uncheck the aside before exclusion, or restore it afterward.
+for filtering. It is not an isolated `/btw` conversation. In `/filter-turns` or
+`/compact-filtered`, you can uncheck the aside before exclusion, or restore it afterward.
 
 Automatic filtering applies only user-authored pre-flags: no relevance judgments
 and no picker. Turning it off does not restore already filtered turns. Explicit

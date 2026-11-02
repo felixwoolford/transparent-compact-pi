@@ -62,7 +62,7 @@ module.exports = async function ({ factory, load, SessionManager, root, makeCont
   let screen = [], renders = 0;
   const interact = (actions, { abort } = {}) => (factory) => new Promise((resolve) => {
     let settled = false;
-    const component = factory({ terminal: { rows: 18 }, requestRender: () => { renders++; } }, { fg: (_color, s) => s }, kb,
+    const component = factory({ terminal: { rows: 18 }, requestRender: () => { renders++; } }, { fg: (_color, s) => s, bg: (_color, s) => s, bold: (s) => s }, kb,
       (value) => { settled = true; resolve(value); });
     const render = (width = 42) => {
       screen = component.render(width);
@@ -158,8 +158,98 @@ module.exports = async function ({ factory, load, SessionManager, root, makeCont
     assert(restored.summary.includes(value), `restored: ${value}`);
   assert(!restored.summary.includes(FILTER_MARKER) && !restored.summary.includes(FILTER_EXPLANATION));
   assert.equal(JSON.stringify(manager.getBranch()), beforeRestore);
-  persist(restored);
+  const standaloneBaseId = persist(restored);
   assert(!ext.handlers.before_agent_start({}, ctx).message.content.includes(FILTER_EXPLANATION));
+
+  console.log("== Standalone checkpoint filtering: no compaction, boundary changes, model calls or tail edits ==");
+  ctx.compact = () => { throw new Error("standalone filtering must not compact"); };
+  const standalone = ext.commands["filter-turns"];
+  const originalEntries = JSON.stringify(manager.getBranch());
+  const originalCompactions = manager.getBranch().filter((e) => e.type === "compaction").length;
+  const originalTail = manager.buildSessionContext().messages.filter((m) => m.role !== "compactionSummary");
+  for (const bad of [{ mode: "rpc" }, { mode: "json" }, { mode: "print" }, { hasUI: false },
+    { isIdle: () => false }, { hasPendingMessages: () => true }, { sessionManager: SessionManager.inMemory(cwd) }])
+    await standalone.handler("", { ...ctx, ...bad });
+  await standalone.handler("invalid", ctx);
+  assert.equal(JSON.stringify(manager.getBranch()), originalEntries);
+  ctx.ui.custom = interact(["esc"]);
+  await standalone.handler("", ctx);
+  assert.equal(JSON.stringify(manager.getBranch()), originalEntries);
+  ctx.ui.custom = interact(["enter", "enter"]);
+  await standalone.handler("", ctx);
+  assert.equal(JSON.stringify(manager.getBranch()), originalEntries, "no-op confirmation saves no revision");
+  ctx.ui.custom = interact([" ", "enter", "enter"]);
+  await standalone.handler("", ctx);
+  const filteredRevision = manager.getBranch().at(-1);
+  assert.equal(filteredRevision.type, "custom");
+  assert.equal(filteredRevision.data.compactionId, standaloneBaseId);
+  assert.deepEqual(filteredRevision.data.filteredTurnIds, [first]);
+  assert.equal(JSON.stringify(manager.getBranch().slice(0, -1)), originalEntries, "standalone update is append-only");
+  assert.equal(manager.getBranch().filter((e) => e.type === "compaction").length, originalCompactions);
+  assert.equal(manager.getEntry(standaloneBaseId).firstKeptEntryId, restoreTail);
+  const project = (extension = ext, session = manager) => {
+    const messages = session.buildSessionContext().messages;
+    return extension.handlers.context_with_system({ messages }, { ...ctx, sessionManager: session })?.messages ?? messages;
+  };
+  const projectedSummary = () => project().find((m) => m.role === "compactionSummary").summary;
+  assert(!projectedSummary().includes("LOW_VALUE_"));
+  assert(projectedSummary().includes("compaction " + originalCompactions + " on this branch"));
+  assert.equal((projectedSummary().match(/<compacted-span n=/g) ?? []).length, (restored.summary.match(/<compacted-span n=/g) ?? []).length);
+  assert.deepEqual(project().filter((m) => m.role !== "compactionSummary"), originalTail);
+  assert(manager.getEntry(standaloneBaseId).summary.includes("LOW_VALUE_STARTUP"), "original checkpoint remains unchanged");
+  const oldReminder = ext.handlers.before_agent_start({}, ctx).message;
+  assert.equal(oldReminder.details.compactionId, standaloneBaseId);
+  assert.equal(oldReminder.details.revisionId, filteredRevision.id);
+  manager.appendCustomMessageEntry(oldReminder.customType, oldReminder.content, oldReminder.display, oldReminder.details);
+  ctx.ui.custom = interact([" ", "enter", ({ render }) => assert(render(100).includes("Restore: turn")), "enter"]);
+  await standalone.handler("", ctx);
+  const restoredRevision = manager.getBranch().at(-1);
+  assert.deepEqual(restoredRevision.data.filteredTurnIds, []);
+  for (const value of ["LOW_VALUE_STARTUP_OUTPUT", "ASIDE.md", "aside-only.ts"]) assert(projectedSummary().includes(value));
+  assert(!project().some((m) => m.role === "custom" && m.content.includes(FILTER_EXPLANATION)), "stale reminder is suppressed");
+  const freshReminder = ext.handlers.before_agent_start({}, ctx).message;
+  assert.equal(freshReminder.details.revisionId, restoredRevision.id);
+  assert(!freshReminder.content.includes(FILTER_EXPLANATION));
+  manager.appendCustomMessageEntry(freshReminder.customType, freshReminder.content, freshReminder.display, freshReminder.details);
+  assert.equal(project().filter((m) => m.role === "custom" && m.customType === freshReminder.customType).length, 1);
+  assert.equal(project().at(-1).details.revisionId, restoredRevision.id, "first request after a revision ends with the refreshed reminder");
+  const standaloneFile = path.join(root, "standalone-filter-resume.jsonl");
+  saveSession(manager, standaloneFile);
+  const reopenedCheckpoint = SessionManager.open(standaloneFile);
+  const resumedCheckpoint = load(factory, { current: reopenedCheckpoint });
+  assert(project(resumedCheckpoint, reopenedCheckpoint).find((m) => m.role === "compactionSummary").summary.includes("LOW_VALUE_STARTUP_OUTPUT"));
+  manager.branch(standaloneBaseId);
+  assert.equal(projectedSummary(), restored.summary, "branching before revisions uses the original checkpoint");
+  manager.branch(filteredRevision.id);
+  assert(!projectedSummary().includes("LOW_VALUE_"));
+  manager.appendCustomEntry("transparent-compact:cap-compaction", { mode: "warn", budget: { unit: "chars", value: 500 } });
+  const beforeCapCancel = JSON.stringify(manager.getBranch());
+  ctx.ui.custom = interact([" ", "enter", "enter"]);
+  ctx.ui.select = async (_title, choices) => {
+    assert(choices.includes("Cancel checkpoint update"));
+    return "Cancel checkpoint update";
+  };
+  await standalone.handler("", ctx);
+  assert.equal(JSON.stringify(manager.getBranch()), beforeCapCancel, "cap cancellation does not save restoration state");
+  ctx.ui.custom = async () => { throw new Error("picker failed"); };
+  await standalone.handler("", ctx);
+  assert.equal(JSON.stringify(manager.getBranch()), beforeCapCancel, "failed standalone update saves nothing");
+  manager.appendCustomEntry("transparent-compact:compaction-method", { method: "summary" });
+  const summaryPreparation = { previousSummary: restored.summary, firstKeptEntryId: restoreTail,
+    messagesToSummarize: [assistant([toolCall("read", { path: "NEW_SUMMARY_READ.ts" }, "summary-read")])],
+    turnPrefixMessages: [], fileOps: { read: new Set(["ASIDE.md", "kept.ts"]), edited: new Set(["aside-only.ts"]), written: new Set() } };
+  assert.equal(await ext.handlers.session_before_compact({ preparation: summaryPreparation,
+    branchEntries: manager.getBranch(), reason: "manual", signal: new AbortController().signal }, ctx), undefined);
+  assert.equal(summaryPreparation.previousSummary, filteredRevision.data.summary, "summary compaction consumes the active revision, not the saved checkpoint");
+  assert.deepEqual([...summaryPreparation.fileOps.read].sort(), ["NEW_SUMMARY_READ.ts", "kept.ts"]);
+  assert.equal(summaryPreparation.fileOps.edited.size, 0, "summary compaction does not resurrect excluded file-list traces");
+  manager.branch(restoredRevision.id);
+  const afterRevisionTail = manager.appendMessage(user("AFTER_REVISION_TAIL"));
+  const inheritedRevision = (await run([restoreTail], afterRevisionTail, { reason: "threshold" })).compaction;
+  assert(inheritedRevision && !inheritedRevision.details.filteredTurnIds && inheritedRevision.summary.includes("LOW_VALUE_STARTUP_OUTPUT"));
+  persist(inheritedRevision);
+  assert.equal(projectedSummary(), inheritedRevision.summary, "a new compaction supersedes prior filtering revisions");
+  assert.equal((projectedSummary().match(/\[User\]: LOW_VALUE_STARTUP/g) ?? []).length, 1);
 
   console.log("== Aside pre-flags: real user boundaries, opt-in auto filtering, pending undo and restoration overrides ==");
   const asideManager = SessionManager.inMemory(cwd), asideRef = { current: asideManager };
@@ -216,6 +306,13 @@ module.exports = async function ({ factory, load, SessionManager, root, makeCont
   const splitAside = (await runAside([asideUser], asideAgent, "threshold")).compaction;
   assert(!splitAside.details.filteredTurnIds, "a pre-flag never strips half a turn from the recent tail");
   const splitAsideId = persistAside(splitAside);
+  asideCtx.ui.custom = interact([" ", "enter", "enter"]);
+  await asideExt.commands["filter-turns"].handler("", { ...asideCtx, mode: "tui", hasUI: true });
+  assert.deepEqual(asideManager.getBranch().at(-1).data.keptAsideTurnIds, [asideUser], "standalone filtering can cancel a pending recent-tail flag");
+  assert.equal(asideManager.getBranch().filter((entry) => entry.type === "compaction").length, 1);
+  assert.equal(asideManager.getEntry(splitAsideId).firstKeptEntryId, asideAgent);
+  asideManager.branch(splitAsideId);
+  asideCtx.ui.custom = () => { throw new Error("automatic filtering must never open a picker"); };
   for (const reason of ["threshold", "overflow"]) {
     const automaticallyFiltered = (await runAside([asideAgent, asideRead], asideTail, reason)).compaction;
     assert.deepEqual(automaticallyFiltered.details.filteredTurnIds, [asideUser], reason);
@@ -389,15 +486,32 @@ module.exports = async function ({ factory, load, SessionManager, root, makeCont
     assert.deepEqual(autoCheckpoint.details.filteredTurnIds, [asideId, runtimeAsideId]);
     assert(!JSON.stringify(requests.at(-1)).includes("RUNTIME_PREFLAGGED_TURN"));
     assert(JSON.stringify(requests.at(-1)).includes("KEEP_AFTER_ASIDE_23"));
-    await session.prompt("Advance the next normal compaction boundary.\n" + "Additional useful task context. ".repeat(500));
+    const compactionsBeforeRestore = runtimeManager.getBranch().filter((e) => e.type === "compaction").length;
+    const requestsBeforeRestore = requests.length;
     runtimeUi.custom = interact([" ", "down", "down", "down", " ", "enter", "enter"]);
-    await session.compact(FILTER_REQUEST);
-    const restoredCheckpoint = runtimeManager.getBranch().findLast((e) => e.type === "compaction");
-    assert(!restoredCheckpoint.details.filteredTurnIds);
-    assert.deepEqual(restoredCheckpoint.details.keptAsideTurnIds, [runtimeAsideId]);
+    await session.prompt("/filter-turns");
+    const standaloneRestore = runtimeManager.getBranch().at(-1);
+    assert.deepEqual(standaloneRestore.data.filteredTurnIds, []);
+    assert.deepEqual(standaloneRestore.data.keptAsideTurnIds, [runtimeAsideId]);
+    assert.equal(runtimeManager.getBranch().filter((e) => e.type === "compaction").length, compactionsBeforeRestore);
+    assert.equal(runtimeManager.getBranch().findLast((e) => e.type === "compaction").firstKeptEntryId, autoCheckpoint.firstKeptEntryId);
+    assert.equal(requests.length, requestsBeforeRestore, "standalone filtering never starts an agent turn");
     await session.prompt("CONTINUE_AFTER_RESTORATION");
     const restoredRequest = JSON.stringify(requests.at(-1));
     assert(restoredRequest.includes("RUNTIME_PREFLAGGED_TURN") && restoredRequest.includes("RUNTIME_LOW_VALUE"));
     assert(!restoredRequest.includes(FILTER_EXPLANATION), "stale filtered reorientation is removed on restoration");
+    runtimeUi.custom = interact([" ", "enter", "enter"]);
+    await session.prompt("/filter-turns");
+    await session.prompt("CONTINUE_AFTER_STANDALONE_FILTERING");
+    const refilteredRequest = JSON.stringify(requests.at(-1));
+    assert(!refilteredRequest.includes("RUNTIME_LOW_VALUE"));
+    assert(refilteredRequest.includes("RUNTIME_PREFLAGGED_TURN") && refilteredRequest.includes(FILTER_EXPLANATION));
+    await session.prompt("Advance the next normal compaction boundary.\n" + "Additional useful task context. ".repeat(500));
+    await session.compact();
+    const afterStandaloneCompaction = runtimeManager.getBranch().findLast((e) => e.type === "compaction");
+    assert.deepEqual(afterStandaloneCompaction.details.filteredTurnIds, [asideId]);
+    assert.deepEqual(afterStandaloneCompaction.details.keptAsideTurnIds, [runtimeAsideId]);
+    assert(!afterStandaloneCompaction.summary.includes("RUNTIME_LOW_VALUE"));
+    assert(afterStandaloneCompaction.summary.includes("RUNTIME_PREFLAGGED_TURN"));
   } finally { session.dispose(); }
 };
