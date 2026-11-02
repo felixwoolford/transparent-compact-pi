@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Add whole-turn context modes: `[X] PRUNED`, `[ ] PROSE`, `[○] PROSE+TOOLS`, and
+  `[■] FULL`; preserve `[-] LOCKED`. Space retains the prune/restore shortcut;
+  `f` cycles modes, including from agent/tool subentries. Preview native content,
+  explicit mode transitions and estimated token growth.
+- Reinsert selected original messages at their chronological positions without
+  compacted/startup-read duplicates. PROSE+TOOLS retains complete recorded tools
+  with thinking markers; FULL retains recorded thinking/signatures and images.
+  Persist reversible branch-local choices through reload and later compactions,
+  respect explicit context edits, protect native turns from trimming, and reject
+  oversized selections rather than silently losing fidelity. Normal provider
+  compatibility transformations still apply.
+
 - Clarify the filtering TUI with framed selection/review steps, a highlighted
   focused row, numbered turns, semantic action labels and fixed keyboard controls.
   Separate preview instructions from turn content and show a change summary.

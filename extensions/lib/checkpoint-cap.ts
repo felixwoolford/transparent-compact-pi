@@ -21,7 +21,7 @@ export interface ToolLine {
   mergeable: boolean;
 }
 export interface ToolLines { version: 2; lines: ToolLine[] }
-export interface SpanContent { lines: string[]; tools?: ToolLines }
+export interface SpanContent { lines: string[]; tools?: ToolLines; protectedLines?: number[] }
 export interface CappedSpans { lines: string[][]; tightened: boolean[]; trimmed: boolean[] }
 
 function headPrefix(text: string, max: number): string {
@@ -73,6 +73,7 @@ function toolRecords(span: SpanContent): Map<number, ToolLine> {
 
 interface Row {
   index: number;
+  protected: boolean;
   text: string;
   calls?: ToolStub[];
   mergeable: boolean;
@@ -93,7 +94,7 @@ export function capSpans(spans: SpanContent[], budget = Infinity): CappedSpans {
     const records = toolRecords(span);
     return span.lines.map((text, index): Row => {
       const record = records.get(index);
-      return { index, text, calls: record?.calls.slice(), mergeable: record?.mergeable ?? false,
+      return { index, protected: span.protectedLines?.includes(index) ?? false, text, calls: record?.calls.slice(), mergeable: record?.mergeable ?? false,
         preview: NORMAL_PREVIEW_CHARS, foldPrefix: false, tightened: false };
     });
   });
@@ -143,7 +144,7 @@ export function capSpans(spans: SpanContent[], budget = Infinity): CappedSpans {
     const rows = states[span];
     for (let i = 0; i < rows.length && size > budget;) {
       const row = rows[i];
-      if (row.text.startsWith("[User]:") || row.text === FILTER_MARKER) { i++; continue; }
+      if (row.protected || row.text.startsWith("[User]:") || row.text === FILTER_MARKER) { i++; continue; }
       if (row.calls && row.calls.length > 1) {
         row.calls.shift();
         row.text = render(row);
@@ -158,7 +159,7 @@ export function capSpans(spans: SpanContent[], budget = Infinity): CappedSpans {
     for (const row of states[span]) {
       if (size <= budget) break;
       const line = row.text;
-      if (!line.startsWith("[User]:") || line.length <= 120) continue;
+      if (row.protected || !line.startsWith("[User]:") || line.length <= 120) continue;
       let end = 120;
       if (/[\uD800-\uDBFF]/.test(line[end - 1])) end--;
       const stub = `${line.slice(0, end)}…[truncated +${line.length - end} chars — use context_lookup]`;
@@ -170,7 +171,7 @@ export function capSpans(spans: SpanContent[], budget = Infinity): CappedSpans {
   }
   for (let span = 0; span < states.length && size > budget; span++) {
     while (size > budget) {
-      const index = states[span].findIndex((row) => row.text !== FILTER_MARKER);
+      const index = states[span].findIndex((row) => !row.protected && row.text !== FILTER_MARKER);
       if (index < 0) break;
       states[span].splice(index, 1);
       trimmed[span] = true;

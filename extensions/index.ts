@@ -38,6 +38,9 @@ import type { ToolLines, ToolStub } from "./lib/checkpoint-cap.js";
 import { FILTER_REQUEST, FILTER_EXPLANATION, PREFLAG_ENTRY, AUTO_FILTER_ENTRY, FILTER_REVISION_ENTRY, autoFilterEnabled, preflaggedTurns,
   filterSpans, pickFilteredTurns, turnOwners } from "./lib/turn-filter.js";
 import type { FilterTurn, TurnSpan } from "./lib/turn-filter.js";
+import { FIDELITY_EXPLANATION, fidelityMessages, fidelitySpans, locateSlots, expandCheckpoint,
+  messageTokens, previewMessages, checkCheckpointBudget, checkContextBudget, isExpandedCheckpoint } from "./lib/turn-context.js";
+import type { TurnFidelities, TurnSelection, TurnSlot } from "./lib/turn-context.js";
 
 // ============================================================================
 // Configuration
@@ -966,6 +969,8 @@ interface FilterRevision {
   summary: string;
   filteredTurnIds: string[];
   keptAsideTurnIds: string[];
+  fidelity?: TurnFidelities;
+  slots?: TurnSlot[];
 }
 
 function latestFilterRevision(entries: SessionEntry[]) {
@@ -987,13 +992,23 @@ function keptAsideTurns(entries: SessionEntry[]): string[] {
     (latestVerbatimCompaction(entries)?.details as { keptAsideTurnIds?: string[] } | undefined)?.keptAsideTurnIds ?? [];
 }
 
-function projectCheckpoint(messages: AgentMessage[], entries: SessionEntry[]): AgentMessage[] {
+function turnFidelities(entries: SessionEntry[]): TurnFidelities {
   const revision = latestFilterRevision(entries);
-  if (!revision) return messages;
-  // Pi projects exactly one active compaction summary. Revise only that message,
-  // never the retained tail, source entries, or an opaque inherited base.
-  return messages.map((message) => message.role === "compactionSummary"
-    ? { ...message, summary: revision.data.summary } : message);
+  return revision ? revision.data.fidelity ?? {} :
+    (latestVerbatimCompaction(entries)?.details as { fidelity?: TurnFidelities } | undefined)?.fidelity ?? {};
+}
+
+function projectCheckpoint(messages: AgentMessage[], entries: SessionEntry[]): AgentMessage[] {
+  const compaction = latestVerbatimCompaction(entries), revision = latestFilterRevision(entries);
+  const fidelity = turnFidelities(entries);
+  if (!compaction || (!revision && !Object.keys(fidelity).length)) return messages;
+  const saved = revision?.data ?? compaction.details as { slots?: TurnSlot[] };
+  if (messages.some((message) => isExpandedCheckpoint(message, revision?.data.summary ?? compaction.summary))) return messages;
+  // Expand only the active checkpoint using generated offsets, not historical
+  // text patterns. Original records and the retained tail remain untouched.
+  return messages.flatMap((message) => message.role === "compactionSummary"
+    ? expandCheckpoint(message, revision?.data.summary ?? message.summary, saved.slots ?? [], fidelity, entries, compaction.firstKeptEntryId)
+    : [message]);
 }
 
 // Match Pi's prepared messages to their source entries, including explicit
@@ -1014,7 +1029,7 @@ function preparedTurnOwners(entries: SessionEntry[], messages: AgentMessage[]): 
 }
 
 function filterChoices(entries: SessionEntry[], spans: TurnSpan[], excluded: Set<string>, firstKeptEntryId: string,
-  retained: StartupReads, selected = excluded): FilterTurn[] {
+  retained: StartupReads, selected = excluded, fidelity: TurnFidelities = turnFidelities(entries)): FilterTurn[] {
   const owners = turnOwners(entries), flagged = preflaggedTurns(entries);
   const cut = entries.findIndex((entry) => entry.id === firstKeptEntryId);
   const tailOwners = new Set(entries.slice(cut).filter((entry) => entry.type === "message" || entry.type === "custom_message" || entry.type === "branch_summary")
@@ -1034,18 +1049,28 @@ function filterChoices(entries: SessionEntry[], spans: TurnSpan[], excluded: Set
     const deferred = tailOwners.has(entry.id);
     const unavailable = deferred ? (flagged.has(entry.id) ? undefined : "in retained recent tail")
       : content.length === 0 ? "not individually represented in checkpoint" : undefined;
-    return { id: entry.id, label: content[0] ?? `[User]: ${entry.type === "message" ? textOf((entry.message as any).content).text : ""}`,
+    const cache = new Map<string, { tokens: number; lines: string[] }>();
+    return { id: entry.id, fidelity: fidelity[entry.id], fidelityInfo: (mode) => {
+      if (!cache.has(mode)) {
+        const messages = fidelityMessages(entries, { [entry.id]: mode }, firstKeptEntryId).get(entry.id)!;
+        cache.set(mode, { tokens: messageTokens(messages), lines: previewMessages(messages) });
+      }
+      return cache.get(mode)!;
+    }, label: content[0] ?? `[User]: ${entry.type === "message" ? textOf((entry.message as any).content).text : ""}`,
       lines: content, selected: excluded.has(entry.id) || (!unavailable && selected.has(entry.id)),
       filtered: excluded.has(entry.id), deferred, unavailable };
   });
 }
 
-function applyTurnSelection(choices: FilterTurn[], selected: Set<string>, preflags: Set<string>,
-  excluded: Set<string>, keptAsides: Set<string>): void {
+function applyTurnSelection(choices: FilterTurn[], result: TurnSelection, preflags: Set<string>,
+  excluded: Set<string>, keptAsides: Set<string>, fidelity: TurnFidelities): void {
+  const selected = new Set(result.pruned);
   for (const turn of choices) {
     if (turn.unavailable) continue;
     if (!turn.deferred) {
       if (selected.has(turn.id)) excluded.add(turn.id); else excluded.delete(turn.id);
+      if (!selected.has(turn.id) && result.fidelity[turn.id]) fidelity[turn.id] = result.fidelity[turn.id];
+      else delete fidelity[turn.id];
     }
     if (preflags.has(turn.id)) {
       if (selected.has(turn.id)) keptAsides.delete(turn.id); else keptAsides.add(turn.id);
@@ -1072,12 +1097,15 @@ function excludedFilePaths(entries: SessionEntry[], excluded: Set<string>, first
 }
 
 function checkpointEvidence(entries: SessionEntry[], firstKeptEntryId: string, cwd: string,
-  startup: StartupReads, readFiles: string[], modifiedFiles: string[], excluded: Set<string>) {
-  if (!excluded.size) return { startupReads: startup, readFiles, modifiedFiles };
+  startup: StartupReads, readFiles: string[], modifiedFiles: string[], excluded: Set<string>, fidelity: TurnFidelities = {}) {
+  if (!excluded.size && !Object.keys(fidelity).length) return { startupReads: startup, readFiles, modifiedFiles };
   const owners = turnOwners(entries);
   const removedPaths = excludedFilePaths(entries, excluded, firstKeptEntryId, cwd);
   return {
-    startupReads: { ...startup, reads: startup.reads.filter((read) => !excluded.has(owners.get(read.entryId) ?? "")) },
+    startupReads: { ...startup, reads: startup.reads.filter((read) => {
+      const owner = owners.get(read.entryId) ?? "";
+      return !excluded.has(owner) && !fidelity[owner];
+    }) },
     readFiles: readFiles.filter((file) => !removedPaths.has(fileEvidenceKey(file, cwd))),
     modifiedFiles: modifiedFiles.filter((file) => !removedPaths.has(fileEvidenceKey(file, cwd))),
   };
@@ -1110,8 +1138,8 @@ function latestVerbatimCompaction(entries: SessionEntry[]) {
   }
 }
 
-function reorientationMessage(compactionId: string, filtered = false, revisionId = compactionId) {
-  return { customType: REORIENT_MESSAGE, content: `${REORIENT_BLOCK}${filtered ? `\n\n${FILTER_EXPLANATION}` : ""}\n\n${RECOVERY_RECAP}`,
+function reorientationMessage(compactionId: string, filtered = false, revisionId = compactionId, fidelity = false) {
+  return { customType: REORIENT_MESSAGE, content: `${REORIENT_BLOCK}${filtered ? `\n\n${FILTER_EXPLANATION}` : ""}${fidelity ? `\n\n${FIDELITY_EXPLANATION}` : ""}\n\n${RECOVERY_RECAP}`,
     display: false, details: { compactionId, ...(revisionId !== compactionId ? { revisionId } : {}) } };
 }
 
@@ -1157,6 +1185,8 @@ async function buildMechanicalSummary(opts: {
   spanTools?: ToolLines; // versioned, bounded display records; no raw payloads
   spanTurnIds?: (string | null)[];
   filteredTurnIds?: string[];
+  fidelity?: TurnFidelities;
+  slots?: TurnSlot[]; // generated output placements; no raw payloads
   spanFrom?: string; // ISO timestamp of the first summarised message
   spanTo?: string; // ISO timestamp of the last summarised message
   firstKeptEntryId?: string; // start of the verbatim (uncompacted) tail
@@ -1168,10 +1198,20 @@ async function buildMechanicalSummary(opts: {
   chooseCap: (size: { overhead: number; lineChars: number }) => Promise<number | undefined | null>;
 }): Promise<string | undefined> {
   const { base, spans } = collectBaseAndSpans(opts.branchEntries);
-  const allSpans = filterSpans(opts.revisedAt ? spans : [...spans, {
+  const fidelity = opts.fidelity ?? {};
+  const native = Object.keys(fidelity).length ? fidelityMessages(opts.branchEntries, fidelity, opts.firstKeptEntryId!) : new Map<string, AgentMessage[]>();
+  const nativeMessages = [...native.values()].flat();
+  const nativeChars = messageTokens(nativeMessages) * 4;
+  const nativeResults = pairedToolResults(nativeMessages), nativeReadPaths = new Set<string>();
+  for (const message of nativeMessages) if (message.role === "assistant") for (const block of message.content) {
+    if (block.type === "toolCall" && block.name === "read" && typeof block.arguments?.path === "string" && nativeResults.get(block)?.isError === false)
+      nativeReadPaths.add(fileEvidenceKey(block.arguments.path, opts.cwd));
+  }
+  const rendered = fidelitySpans(filterSpans(opts.revisedAt ? spans : [...spans, {
     at: opts.now, reason: opts.reason, from: opts.spanFrom, to: opts.spanTo,
     lines: opts.spanLines, tools: opts.spanTools, turnIds: opts.spanTurnIds,
-  }], new Set(opts.filteredTurnIds));
+  }], new Set(opts.filteredTurnIds)), fidelity);
+  const allSpans = rendered.spans;
   const coversOf = (s: { from?: string; to?: string }): string | undefined => (s.from && s.to ? `${s.from} → ${s.to}` : undefined);
 
   // Size guard: the budget covers the conversation section plus retained reads.
@@ -1179,7 +1219,7 @@ async function buildMechanicalSummary(opts: {
   // exceed the budget by itself; warn rather than silently dropping evidence.
   const baseOpen = base ? `<compacted-base kind="${base.kind}" compacted-at="${base.at}">` : "";
   const retainedReads = renderStartupReads(opts.startupReads, opts.branchEntries, opts.firstKeptEntryId);
-  let overhead = SECTION_HEADER.length + 2 + (retainedReads ? retainedReads.length + 2 : 0);
+  let overhead = nativeChars + SECTION_HEADER.length + 2 + (retainedReads ? retainedReads.length + 2 : 0);
   if (base) overhead += baseOpen.length + 1 + BASE_CLOSE.length + 2 + base.summary.length;
   overhead += allSpans.reduce(
     (a, s, i) => a + spanOpen(i + 1, s.at, s.reason, coversOf(s)).length + SPAN_TRIMMED_ATTR.length + TIGHTENED_ATTR.length + 2 + SPAN_TRIMMED_NOTE.length + 1 + SPAN_CLOSE.length + 2,
@@ -1203,6 +1243,8 @@ async function buildMechanicalSummary(opts: {
     opts.notify(`transparent-compact: the base block alone is ${base.summary.length.toLocaleString()} chars (budget ${maxChars.toLocaleString()}); it is kept un-capped`);
   if (maxChars !== undefined && retainedReads.length > maxChars)
     opts.notify(`transparent-compact: retained startup reads alone are ${retainedReads.length.toLocaleString()} chars (budget ${maxChars.toLocaleString()}); they are kept un-capped`);
+  if (maxChars !== undefined && nativeChars > maxChars)
+    opts.notify(`transparent-compact: full-fidelity turns alone are ~${nativeChars.toLocaleString()} estimated chars (budget ${maxChars.toLocaleString()}); they are kept un-capped. Only PROSE can be trimmed.`);
   const capped = capSpans(allSpans, maxChars === undefined ? undefined : Math.max(500, maxChars - overhead));
 
   const blocks: string[] = [];
@@ -1225,12 +1267,13 @@ async function buildMechanicalSummary(opts: {
   parts.push(`## Verbatim compaction checkpoint (compaction ${compactionCount} on this branch)`);
   parts.push(CHECKPOINT_EXPLANATION);
   if (opts.filteredTurnIds?.length) parts.push(FILTER_EXPLANATION);
+  if (native.size) parts.push(FIDELITY_EXPLANATION);
   if (base?.kind === "model-summary") {
     parts.push(MIXED_CONTEXT_WARNING);
     opts.notify(MIXED_CONTEXT_WARNING);
   }
   parts.push(`- Latest: ${opts.now} (trigger: ${opts.reason}, ~${opts.tokensBefore.toLocaleString()} tokens before compaction)`);
-  if (opts.revisedAt) parts.push(`- Turn filtering revised: ${opts.revisedAt}. No additional history was compacted; the verbatim boundary is unchanged.`);
+  if (opts.revisedAt) parts.push(`- Turn context revised: ${opts.revisedAt}. No additional history was compacted; the verbatim boundary is unchanged.`);
   parts.push("- In the compacted spans, user and assistant prose is kept verbatim, subject to budget trimming. Retained prose is a record of what was said, not verification of its claims. Tool signatures are display notation, not replayable shell commands: paths under the working directory become relative (`.` in commands); read ranges are requested lines; write/edit payloads become sizes/counts. New bash previews keep the first 160 encoded characters, followed by … when truncated, with escaped newlines. Thinking and most output are removed; selected output observations remain after →.");
   parts.push("- [tool error] means the result was flagged as an error; [unknown] means no safely matched result/status. Unlabelled does NOT establish exit 0 or passing tests. → exit N is a reported shell status; output: quotes/extracts selected output, not an inferred verdict. Everything shown is historical. Legacy [ok] only means not flagged as a tool error; legacy calls without status are unknown.");
   parts.push("- Under size pressure, `tools-tightened` marks 120/80-character previews or grouped tool-only lines. Conversation prose and tool calls are retained unless `trimmed` is also marked. Tightening stops as soon as the budget fits; outcome observations and identifying file paths are not shortened by these stages.");
@@ -1258,6 +1301,7 @@ async function buildMechanicalSummary(opts: {
       const key = fileEvidenceKey(file, opts.cwd);
       const label = fileEvidenceLabel(evidence.get(key)) ?? (retainedPaths.has(key)
         ? "startup read output retained in checkpoint or tail; may be partial"
+        : nativeReadPaths.has(key) ? "historical read output retained in a full-fidelity turn; re-read for current contents"
         : modified && knownTail ? "no read-tool output in tail" : undefined);
       return `${checkpointPath(file, opts.cwd)}${label ? ` (${label})` : ""}`;
     };
@@ -1272,7 +1316,10 @@ async function buildMechanicalSummary(opts: {
   parts.push("");
   parts.push(closingLine);
 
-  return parts.join("\n");
+  const summary = parts.join("\n");
+  if (native.size && !opts.slots) throw new Error("Missing full-fidelity placement output.");
+  opts.slots?.push(...locateSlots(summary, rendered.markers, fidelity));
+  return summary;
 }
 
 // ============================================================================
@@ -1831,7 +1878,7 @@ export default function (pi: ExtensionAPI) {
       const details = e.details as { compactionId?: string; revisionId?: string } | undefined;
       return details?.compactionId === compaction.id && (details.revisionId ?? details.compactionId) === revisionId;
     });
-    if (!found) return { message: reorientationMessage(compaction.id, filteredTurns(entries).length > 0, revisionId) };
+    if (!found) return { message: reorientationMessage(compaction.id, filteredTurns(entries).length > 0, revisionId, Object.keys(turnFidelities(entries)).length > 0) };
   });
 
   // Between-turn compaction and overflow continuation do not necessarily pass
@@ -1842,7 +1889,8 @@ export default function (pi: ExtensionAPI) {
     if ((event.compactionEntry.details as { kind?: string } | undefined)?.kind !== MECH_KIND) return;
     if (event.willRetry || ctx.signal)
       pi.sendMessage(reorientationMessage(event.compactionEntry.id,
-        ((event.compactionEntry.details as { filteredTurnIds?: string[] }).filteredTurnIds?.length ?? 0) > 0), { deliverAs: "steer" });
+        ((event.compactionEntry.details as { filteredTurnIds?: string[] }).filteredTurnIds?.length ?? 0) > 0, event.compactionEntry.id,
+        Object.keys((event.compactionEntry.details as { fidelity?: TurnFidelities }).fidelity ?? {}).length > 0), { deliverAs: "steer" });
   });
 
   // Run after ordinary transforms and system/tool restoration. Preserve all
@@ -1850,9 +1898,15 @@ export default function (pi: ExtensionAPI) {
   // and keep the current one active on subsequent requests (not just the first).
   pi.on("context_with_system", (event, ctx) => {
     const entries = ctx.sessionManager.getBranch();
-    const messages = projectReorientation(projectCheckpoint(event.messages, entries), entries);
-    if (messages.length !== event.messages.length || messages.some((m, i) => m !== event.messages[i]))
-      return { messages };
+    try {
+      const messages = projectReorientation(projectCheckpoint(event.messages, entries), entries);
+      if (Object.keys(turnFidelities(entries)).length) checkContextBudget(messages, ctx);
+      if (messages.length !== event.messages.length || messages.some((m, i) => m !== event.messages[i])) return { messages };
+    } catch (error) {
+      ctx.ui.notify(`Full-fidelity context blocked: ${errMsg(error)}`, "error");
+      ctx.abort(); // Hook errors alone do not cancel Pi requests. Abort explicitly.
+      throw error;
+    }
   });
 
   // Method selection never changes Pi's auto-compaction enabled setting.
@@ -1955,7 +2009,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerCommand("filter-turns", {
-    description: "Filter or restore existing checkpoint turns without compacting more history",
+    description: "Choose checkpoint turn modes: pruned, prose, prose+tools or full; no compaction",
     handler: async (args, ctx) => {
       if (args.trim()) { ctx.ui.notify("Usage: /filter-turns", "error"); return; }
       if (ctx.mode !== "tui" || !ctx.hasUI) {
@@ -1979,37 +2033,41 @@ export default function (pi: ExtensionAPI) {
       try {
         const previousExcluded = filteredTurns(entries), previousKept = keptAsideTurns(entries);
         const excluded = new Set(previousExcluded), keptAsides = new Set(previousKept);
+        const previousFidelity = turnFidelities(entries), fidelity = { ...previousFidelity }, slots: TurnSlot[] = [];
         const preflags = preflaggedTurns(entries);
         const proposed = new Set([...excluded, ...[...preflags].filter((id) => !keptAsides.has(id))]);
         const choices = filterChoices(entries, collectBaseAndSpans(entries).spans, excluded,
           compaction.firstKeptEntryId, canonical.startupReads, proposed);
         const result = await pickFilteredTurns(ctx, choices, signal, "update");
         if (result === undefined) return;
-        applyTurnSelection(choices, new Set(result), preflags, excluded, keptAsides);
+        applyTurnSelection(choices, result, preflags, excluded, keptAsides, fidelity);
         if (excluded.size === previousExcluded.length && previousExcluded.every((id) => excluded.has(id)) &&
-            keptAsides.size === previousKept.length && previousKept.every((id) => keptAsides.has(id))) {
-          ctx.ui.notify("No checkpoint filtering changes.", "info"); return;
+            keptAsides.size === previousKept.length && previousKept.every((id) => keptAsides.has(id)) &&
+            JSON.stringify(Object.entries(fidelity).sort()) === JSON.stringify(Object.entries(previousFidelity).sort())) {
+          ctx.ui.notify("No checkpoint turn-mode changes.", "info"); return;
         }
         const summary = await buildMechanicalSummary({
           reason: canonical.span.reason, tokensBefore: compaction.tokensBefore, branchEntries: entries,
-          now: canonical.span.at, revisedAt: new Date().toISOString(), spanLines: [], filteredTurnIds: [...excluded],
+          now: canonical.span.at, revisedAt: new Date().toISOString(), spanLines: [], filteredTurnIds: [...excluded], fidelity, slots,
           firstKeptEntryId: compaction.firstKeptEntryId,
           ...checkpointEvidence(entries, compaction.firstKeptEntryId, ctx.cwd,
-            canonical.startupReads, canonical.readFiles, canonical.modifiedFiles, excluded),
+            canonical.startupReads, canonical.readFiles, canonical.modifiedFiles, excluded, fidelity),
           cwd: ctx.cwd, notify: (message) => ctx.ui.notify(message, "warning"),
           chooseCap: (size) => chooseCapBudget(pi, ctx, signal, "manual", size, "checkpoint update"),
         });
         if (summary === undefined) return;
+        checkCheckpointBudget(summary, slots, fidelity, entries, compaction.firstKeptEntryId, ctx);
         const current = ctx.sessionManager.getBranch();
         if (ctx.sessionManager.getSessionId() !== sessionId || latestVerbatimCompaction(current)?.id !== compaction.id ||
             latestFilterRevision(current)?.id !== revisionId) {
           ctx.ui.notify("Session/checkpoint changed; filtering update cancelled.", "warning"); return;
         }
         pi.appendEntry(FILTER_REVISION_ENTRY, { compactionId: compaction.id, summary,
-          filteredTurnIds: [...excluded], keptAsideTurnIds: [...keptAsides] } satisfies FilterRevision);
-        ctx.ui.notify("Checkpoint filtering updated. No additional history compacted; recent messages and boundary unchanged.", "info");
+          filteredTurnIds: [...excluded], keptAsideTurnIds: [...keptAsides],
+          ...(Object.keys(fidelity).length ? { fidelity, slots } : {}) } satisfies FilterRevision);
+        ctx.ui.notify("Checkpoint turn modes updated. No additional history compacted; recent messages and boundary unchanged.", "info");
       } catch (error) {
-        ctx.ui.notify(`Checkpoint filtering cancelled: ${errMsg(error)}`, "error");
+        ctx.ui.notify(`Checkpoint turn update cancelled: ${errMsg(error)}`, "error");
       }
     },
   });
@@ -2058,16 +2116,18 @@ export default function (pi: ExtensionAPI) {
     if (preparation.messagesToSummarize.length === 0 && preparation.turnPrefixMessages.length === 0) return;
     if (compactionMethod(ctx.sessionManager.getBranch()) === "summary") {
       const revision = latestFilterRevision(branchEntries);
-      if (revision) {
+      if (revision || Object.keys(turnFidelities(branchEntries)).length) {
         // Pi prepares from the saved compaction, not our request projection.
         // Summary mode must consume the revised checkpoint too, rather than
         // resurrecting filtered text or dropping standalone restorations.
-        preparation.previousSummary = revision.data.summary;
+        const active = latestVerbatimCompaction(branchEntries)!;
+        preparation.previousSummary = projectCheckpoint([{ role: "compactionSummary", summary: active.summary, tokensBefore: active.tokensBefore, timestamp: 0 }], branchEntries)
+          .map((message) => message.role === "compactionSummary" ? message.summary : previewMessages([message]).join("\n")).join("\n\n");
         const canonical = latestVerbatimCompaction(branchEntries)!.details as {
           startupReads: StartupReads; readFiles: string[]; modifiedFiles: string[];
         };
         const visible = checkpointEvidence(branchEntries, preparation.firstKeptEntryId, ctx.cwd,
-          canonical.startupReads, canonical.readFiles, canonical.modifiedFiles, new Set(revision.data.filteredTurnIds));
+          canonical.startupReads, canonical.readFiles, canonical.modifiedFiles, new Set(filteredTurns(branchEntries)));
         const ops = preparation.fileOps;
         ops.read = new Set(visible.readFiles);
         ops.edited = new Set(visible.modifiedFiles);
@@ -2137,6 +2197,7 @@ export default function (pi: ExtensionAPI) {
       const canonicalRetained = startupReads(branchEntries, ctx);
       const excluded = new Set(filteredTurns(branchEntries));
       const keptAsides = new Set(keptAsideTurns(branchEntries));
+      const fidelity = { ...turnFidelities(branchEntries) }, slots: TurnSlot[] = [];
       if (filtering || automaticFiltering) {
         const preflags = preflaggedTurns(branchEntries);
         const proposed = new Set([...excluded, ...[...preflags].filter((id) => !keptAsides.has(id))]);
@@ -2145,7 +2206,7 @@ export default function (pi: ExtensionAPI) {
         if (filtering) {
           const result = await pickFilteredTurns(ctx, choices, signal);
           if (result === undefined || signal.aborted) return { cancel: true };
-          applyTurnSelection(choices, new Set(result), preflags, excluded, keptAsides);
+          applyTurnSelection(choices, result, preflags, excluded, keptAsides, fidelity);
         } else {
           for (const turn of choices)
             if (!turn.unavailable && !turn.deferred && proposed.has(turn.id)) excluded.add(turn.id);
@@ -2153,7 +2214,7 @@ export default function (pi: ExtensionAPI) {
       }
       const filteredTurnIds = [...excluded];
       const evidence = checkpointEvidence(branchEntries, preparation.firstKeptEntryId, ctx.cwd,
-        canonicalRetained, canonicalReadFiles, canonicalModifiedFiles, excluded);
+        canonicalRetained, canonicalReadFiles, canonicalModifiedFiles, excluded, fidelity);
       const summary = await buildMechanicalSummary({
         reason, // pi's raw reason, passed through unchanged
         tokensBefore: preparation.tokensBefore,
@@ -2162,7 +2223,7 @@ export default function (pi: ExtensionAPI) {
         spanLines,
         spanTools: span.tools,
         spanTurnIds: span.turnIds,
-        filteredTurnIds,
+        filteredTurnIds, fidelity, slots,
         spanFrom,
         spanTo,
         firstKeptEntryId: preparation.firstKeptEntryId,
@@ -2172,6 +2233,7 @@ export default function (pi: ExtensionAPI) {
         chooseCap: (size) => chooseCapBudget(pi, ctx, signal, reason, size),
       });
       if (summary === undefined || signal?.aborted) return { cancel: true };
+      checkCheckpointBudget(summary, slots, fidelity, branchEntries, preparation.firstKeptEntryId, ctx);
 
       ctx.ui?.notify?.(
         `transparent-compact: ~${preparation.tokensBefore.toLocaleString()} tokens -> verbatim checkpoint; full transcript kept in the session`,
@@ -2192,6 +2254,7 @@ export default function (pi: ExtensionAPI) {
             startupReads: canonicalRetained,
             ...(filteredTurnIds.length ? { filteredTurnIds } : {}),
             ...(keptAsides.size ? { keptAsideTurnIds: [...keptAsides] } : {}),
+            ...(Object.keys(fidelity).length ? { fidelity, slots } : {}),
             // Only this compaction's own span (un-capped lines). Earlier spans
             // are re-rendered from the earlier entries' details — no nesting.
             span: { at: nowIso, from: spanFrom, to: spanTo, reason, tokensBefore: preparation.tokensBefore,
@@ -2201,7 +2264,7 @@ export default function (pi: ExtensionAPI) {
       };
     } catch (err) {
       // Never replace a filtered checkpoint with an unfiltered model summary.
-      const preserveFiltering = filtering || automaticFiltering || filteredTurns(branchEntries).length > 0;
+      const preserveFiltering = filtering || automaticFiltering || filteredTurns(branchEntries).length > 0 || Object.keys(turnFidelities(branchEntries)).length > 0;
       ctx.ui?.notify?.(`transparent-compact: failed to build checkpoint (${errMsg(err)}); ${preserveFiltering ? "compaction cancelled" : "falling back to Pi's summary compaction"}`, "error");
       return preserveFiltering ? { cancel: true } : undefined;
     }

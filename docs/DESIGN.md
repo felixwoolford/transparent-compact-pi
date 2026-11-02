@@ -121,8 +121,9 @@ summary during filtered compaction.
 Standalone updates append a non-context `transparent-compact:filter-revision`
 entry containing the source compaction ID, rendered checkpoint, exclusions and
 keep overrides. The latest revision for the active compaction wins. At request
-time, `context_with_system` replaces only Pi's projected `compactionSummary` and
-refreshes the managed reminder for that revision. Original compaction entries and
+time, `context_with_system` replaces Pi's projected `compactionSummary` with the
+revised text and any selected native turn segments, and refreshes the managed
+reminder for that revision. Original compaction entries and
 the raw recent tail are never edited. Host views/estimates based solely on Pi's
 saved projection can still reflect the original summary; actual provider requests
 receive the revision. The checkpoint size guard applies before a revision is saved.
@@ -149,6 +150,54 @@ The compaction's `keptAsideTurnIds` snapshot records explicit manual keep/restor
 overrides, so future auto compactions do not re-exclude those asides. Turning off
 auto filtering affects new applications, not existing exclusions. No automatic
 relevance judgment, model call or filesystem mutation is introduced.
+
+### Selective full-fidelity turns
+
+The same picker has four modes: `[X] PRUNED`, `[ ] PROSE`, `[○] PROSE+TOOLS`, and
+`[■] FULL`. `[-] LOCKED` is an independent availability state and remains unchanged.
+Space switches any kept mode to PRUNED, or PRUNED to PROSE. `f` cycles all four modes;
+for pending recent-tail pre-flags it only toggles PRUNED/PROSE. Both controls always
+act on the whole owning user turn. Expansion and confirmation preview show the
+chosen representation; preview also estimates token growth.
+
+The compaction/revision stores a `fidelity` map of raw user IDs to `tools`/`full`
+and generated `slots`, never another copy of raw payloads. PRUNED continues to use
+`filteredTurnIds`; absent fidelity means PROSE. Before capping, every compacted copy
+of a selected native turn is replaced by a single generated slot, even across
+multiple canonical spans. Slots are structurally protected from trimming. Generated
+random markers are resolved to checked UTF-16 offsets in the final checkpoint;
+request projection never interprets historical text as a managed placeholder.
+
+At request time, the checkpoint is split at those offsets into chronological
+compacted segments interleaved with original user/assistant/tool messages. The raw
+projection disables compaction while preserving branch topology and Pi's explicit
+context edits and custom-message conversion. Historical system configuration and
+obsolete managed reorientation messages are not replayed. Tool-call/result groups
+must be complete and unambiguous. PROSE+TOOLS replaces each thinking block with a
+text marker in place; FULL retains stored blocks/signatures/images. Request-local
+copies prevent later transforms from mutating canonical session records. Provider
+compatibility transformations still apply, including cross-model reasoning and
+non-vision image handling; no unavailable reasoning or nested outputs are invented.
+
+Native turns replace their compacted prose and startup-read duplicates, not the
+canonical source data. File paths remain listed and successful read outputs in
+native turns get a conservative historical-evidence annotation. PROSE restoration
+can recover its canonical retained reads again. Mode choices inherit through
+reload/resume, tree navigation and later verbatim compactions; explicit fidelity
+choices also override aside pre-flags. An empty revision clears old fidelity rather
+than falling back to the source checkpoint's map. Explicit summary compaction gets
+expanded historical text as its previous summary and may summarize it normally.
+
+Native message token estimates count as fixed overhead in the character cap; only
+PROSE is trimmable. Independent context-window checks run before saving and after
+system restoration on each actual request, with output/framing headroom. They use
+Pi's token estimates, not a provider tokenizer. Oversized updates save no revision;
+subsequent budget/projection failures explicitly abort the active operation (a hook
+exception alone is not a cancellation gate). Existing full-fidelity content is never
+silently dropped or downgraded to make room. The user can remove/downgrade a pin,
+even if later context edits made its original tool group unreplayable. Host views
+and compaction-boundary selection still use Pi's saved checkpoint; provider requests
+include native expansions and are checked separately.
 
 ### File-list evidence annotations
 

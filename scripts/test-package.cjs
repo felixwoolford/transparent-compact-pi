@@ -70,7 +70,7 @@ async function main() {
     assert.equal(skills.skills[0].name, "context-retrieval");
     assert.deepEqual(skills.diagnostics, []);
     assert.deepEqual([...packedPaths].filter((p) => p.startsWith("extensions/")).sort(),
-      ["extensions/index.ts", "extensions/lib/checkpoint-cap.ts", "extensions/lib/turn-filter.ts"], "package ships one extension entry and its helper modules, with no wrapper");
+      ["extensions/index.ts", "extensions/lib/checkpoint-cap.ts", "extensions/lib/turn-context.ts", "extensions/lib/turn-filter.ts"], "package ships one extension entry and its helper modules, with no wrapper");
     assert(![...packedPaths].some((p) => p.startsWith("source/")), "package has no obsolete source tree");
     console.log("PACKAGE TEST OK — manifest, packed resources, package-only label, real Pi loader, session lookup, and bundled skill");
   } finally {

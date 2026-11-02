@@ -91,33 +91,63 @@ Before replacing an existing file with `write`, the agent is told to reread it
 unless current contents are already visible, rather than reconstruct unchanged
 sections from memory. Small exact-match edits have no blanket reread requirement.
 
-### Manually filter or restore checkpoint turns
+### Choose checkpoint turn fidelity
 
 ```text
 /filter-turns       # edit the existing checkpoint; no compaction
-/compact-filtered   # compact more history, then filter/restore
+/compact-filtered   # compact more history, choosing turn modes
 ```
 
 In the interactive terminal, this opens a framed checklist of user turns, with
 a highlighted cursor, action labels and a separate fixed controls area. The review
-step summarizes exclusions, restorations and pending flags above the content.
-Use **↑/↓** to navigate, **←/→** to collapse/expand agent/tool subentries, and
-**Space** to mark a whole user turn and everything after it until the next user
-turn. Unchecked turns stay. Previously filtered turns start checked: **uncheck one
-to restore it**. **Enter** opens a scrollable preview of exclusions, restorations,
-and pending-flag changes; **Enter** again confirms, **Esc** goes back or cancels.
+step summarizes mode changes and estimated token growth above the content.
+Each choice applies to a user message and everything following it until the next
+user message, including turns spanning multiple compactions.
+
+| Symbol | Mode | Active context |
+| --- | --- | --- |
+| `[X]` | **PRUNED** | A positioned filtering marker only |
+| `[ ]` | **PROSE** | Our standard mechanical compaction, including compact tool stubs |
+| `[○]` | **PROSE+TOOLS** | Original conversation text and complete recorded tool arguments/results; thinking markers only |
+| `[■]` | **FULL** | Original conversation content, including all recorded thinking and image attachments |
+| `[-]` | **LOCKED** | Unavailable; not a fifth fidelity mode |
+
+Use **↑/↓** to navigate and **←/→** to collapse/expand details for the selected
+mode. **Space** prunes any kept mode, or restores a pruned turn as PROSE. **f** cycles
+PRUNED → PROSE → PROSE+TOOLS → FULL → PRUNED. Both keys act on the owning whole turn
+when an agent/tool subentry is focused. **Enter** opens a complete, scrollable
+change preview; **Enter** again confirms, **Esc** goes back or cancels.
 
 Filtering requires verbatim mode and an idle agent. Turns overlapping Pi's retained
 recent tail cannot be removed yet: filtering never removes only half a turn or
 changes Pi's retention boundary. Pre-flagged recent turns can be unchecked to cancel
-their pending exclusion. Content inside an opaque inherited summary cannot be
+their pending exclusion; for those pending turns, **f** only toggles the flag,
+not fidelity. Content inside an opaque inherited summary cannot be
 selected individually. `/filter-turns` requires an existing verbatim checkpoint
 and works even when there is no new history to compact. It saves a reversible,
 branch-local checkpoint revision without moving the retained boundary or starting
-an agent turn. Restoration uses the original canonical spans, startup reads and
-file operations; it restores the normal compacted representation, subject to the
-size cap, not full uncompacted context. Before the first checkpoint, use
-`/compact-filtered`.
+an agent turn. PROSE restoration uses the canonical spans, startup reads and file
+operations and remains subject to the size cap. PROSE+TOOLS/FULL instead reinsert
+original messages at their chronological positions, replacing their compacted
+copies and any duplicate startup-read copies. Explicit context omissions and
+replacements remain respected. Complete tool-call/result groups are required.
+Before the first checkpoint, use `/compact-filtered`.
+
+Full-fidelity choices persist through later verbatim compactions and reload/resume.
+Their content is **never silently shortened by the prose cap**. Estimated native
+message cost is treated as fixed overhead; only PROSE can be trimmed. The extension
+checks the model context budget before saving and on actual requests, reserving
+output/framing headroom. Oversized selections are rejected; if later context growth
+or a model change makes existing choices too large, the request is aborted with
+instructions to downgrade turns through `/filter-turns`. Large full-fidelity turns
+can therefore prevent automatic compaction from freeing enough space. Token counts
+are estimates, not provider tokenization guarantees.
+
+FULL means all content actually recorded, not unavailable internal reasoning or
+unrecorded nested-tool outputs. Pi's normal model/provider transformations still
+apply: changing models can convert/drop signed or encrypted thinking, and non-vision
+models cannot receive images. Switching to summary compaction still weakens the
+verbatim guarantee; its summarizer receives the expanded recorded text.
 
 Each excluded group becomes `[Turn manually filtered]`. Its retained startup reads
 and file-list paths used only in excluded turns are removed too. The checkpoint
@@ -144,7 +174,7 @@ for filtering. It is not an isolated `/btw` conversation. In `/filter-turns` or
 
 Automatic filtering applies only user-authored pre-flags: no relevance judgments
 and no picker. Turning it off does not restore already filtered turns. Explicit
-keep/restore choices override an aside's original pre-flag, including on future
+keep/restore or PROSE+TOOLS/FULL choices override an aside's original pre-flag, including on future
 automatic compactions. Flags, policy and keep decisions follow the active branch
 through reload/resume. Summary compaction is unchanged.
 

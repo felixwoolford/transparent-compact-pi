@@ -42,12 +42,12 @@ module.exports = async function ({ jiti, piRoot }) {
     selection = render();
     const selectedText = selection.map(plain).join("\n");
     assert(selectedText.includes("1/2 Select"));
-    assert(selectedText.includes("[x] Exclude") && selectedText.includes("[ ] Keep / restore") && selectedText.includes("[-] Locked"));
+    assert(selectedText.includes("[X] Pruned") && selectedText.includes("[ ] Prose") && selectedText.includes("[○] Prose+tools") && selectedText.includes("[■] Full") && selectedText.includes("[-] Locked"));
     const rowsStart = selection.findIndex((line) => plain(line).includes("User turns"));
     const instructionsStart = selection.findIndex((line) => plain(line).includes("Controls"));
     assert(rowsStart > 1 && instructionsStart > rowsStart + 1);
-    assert(selectedText.includes("FILTERED") && selectedText.includes("PENDING") && selectedText.includes("LOCKED"));
-    assert(selectedText.includes("Enter Review changes") && selectedText.includes("Space Toggle"));
+    assert(selectedText.includes("PRUNED") && selectedText.includes("PENDING") && selectedText.includes("LOCKED"));
+    assert(selectedText.includes("Enter Review changes") && selectedText.includes("Space Prune"));
     const focus = selection.filter((line) => line.includes(dark.getBgAnsi("selectedBg")));
     assert.equal(focus.length, 1, "one clearly highlighted focused row");
     assert(plain(focus[0]).includes("Keep this task"));
@@ -59,7 +59,7 @@ module.exports = async function ({ jiti, piRoot }) {
     }
     tui.terminal.rows = 26;
     const narrowControls = render(42).map(plain).join("\n");
-    assert(narrowControls.includes("Space Toggle") && narrowControls.includes("←/→ Details") && narrowControls.includes("Esc Cancel"), "core controls fit a narrow split terminal");
+    assert(narrowControls.includes("Space Prune") && narrowControls.includes("f Mode") && narrowControls.includes("←/→ Fold") && narrowControls.includes("Esc Cancel"), "core controls fit a narrow split terminal");
     const beforeTheme = render();
     activeTheme = light;
     component.invalidate();
@@ -71,7 +71,7 @@ module.exports = async function ({ jiti, piRoot }) {
     press("right");
     const details = press("down").map(plain).join("\n");
     assert(details.includes("└ Assistant  First agent detail"));
-    assert(details.includes("Agent detail — Space toggles its whole user turn"));
+    assert(details.includes("Agent detail — Space/f changes its whole user turn"));
     press(" "); // Select the parent via its inspection-only child.
     press("left");
     press("down");
@@ -79,14 +79,15 @@ module.exports = async function ({ jiti, piRoot }) {
     press("down");
     press(" "); // Cancel a pre-flag.
     press("down");
+    press("f"); press("f"); // Pending recent-tail flags cannot become native modes.
     press("down"); // Locked turn.
     assert(press(" ").map(plain).join("\n").includes("Locked — in retained recent tail"));
     review = press("enter");
     const previewText = review.map(plain).join("\n");
     assert(previewText.includes("2/2 Review"));
-    assert(previewText.includes("1 exclude · 1 restore · 1 keep · 1 pending"));
+    assert(previewText.includes("1 pruned · 1 restored · 1 keep · 1 pending"));
     assert(previewText.includes("Change preview"));
-    assert(previewText.includes("Exclude: turn keep") && previewText.includes("Restore: turn restore"));
+    assert(previewText.includes("Prune: turn keep") && previewText.includes("Restore: turn restore"));
     assert(previewText.includes("Enter Confirm & save") && previewText.includes("Esc Back"));
     const narrowPreview = render(42).map(plain).join("\n");
     assert(narrowPreview.includes("PgUp/PgDn") && narrowPreview.includes("Home/End") && narrowPreview.includes("Esc Back"));
@@ -121,7 +122,7 @@ module.exports = async function ({ jiti, piRoot }) {
     return result;
   } } };
   await pickFilteredTurns(ctx, turns, new AbortController().signal, "update");
-  assert.deepEqual(result, ["pending", "keep"], "visual changes preserve whole-turn selection semantics");
+  assert.deepEqual(result, { pruned: ["keep", "pending"], fidelity: {} }, "visual changes preserve whole-turn selection semantics");
   assert.equal(JSON.stringify(turns), original, "rendering never mutates input turns");
   return { selection: selection.map(plain).join("\n"), review: review.map(plain).join("\n") };
 };
