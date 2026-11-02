@@ -31,6 +31,8 @@ function load(factory, sessionRef) {
     on: (name, handler) => { handlers[name] = handler; },
     registerTool: (tool) => { tools[tool.name] = tool; },
     registerCommand: (name, command) => { commands[name] = command; },
+    getActiveTools: () => Object.keys(tools),
+    getAllTools: () => Object.values(tools),
     appendEntry: (type, data) => {
       assert(sessionRef?.current, "state writes must target the bound session");
       sessionRef.current.appendCustomEntry(type, data);
@@ -59,7 +61,7 @@ function fixture(SessionManager, cwd) {
   return { manager, u, a, t, kept };
 }
 function makeContext(manager, cwd) {
-  return { cwd, sessionManager: manager, model, modelRegistry: {}, ui: { notify: () => {} }, mode: "json", hasUI: false };
+  return { cwd, sessionManager: manager, model, modelRegistry: {}, ui: { notify: () => {} }, mode: "json", hasUI: false, getSystemPrompt: () => "" };
 }
 async function compact(ext, ctx, ids, kept, reason = "manual", fileOps) {
   const entries = ctx.sessionManager.getBranch();
@@ -464,6 +466,7 @@ async function main() {
     await require("./scripts/turn-filter-ui-tests.cjs")({ jiti, piRoot });
     await require("./scripts/turn-filter-tests.cjs")({ ...hybridHelpers, factory, load, jiti, piRoot });
     await require("./scripts/turn-fidelity-tests.cjs")({ ...hybridHelpers, factory, load, jiti, piRoot });
+    await require("./scripts/context-readout-tests.cjs")({ ...hybridHelpers, factory, load, jiti, piRoot });
     await methodTests(factory, SessionManager, root);
     await require("./scripts/checkpoint-evidence-tests.cjs")({ ...hybridHelpers, compact });
     await require("./scripts/file-evidence-tests.cjs")({ ...hybridHelpers, factory, load, compact, jiti, piRoot });

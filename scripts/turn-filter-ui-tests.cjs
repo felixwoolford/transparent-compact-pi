@@ -39,6 +39,7 @@ module.exports = async function ({ jiti, piRoot }) {
       return lines;
     };
     const press = (name) => { component.handleInput(key[name] ?? name); return render(); };
+    render(); await new Promise((resolve) => setImmediate(resolve));
     selection = render();
     const selectedText = selection.map(plain).join("\n");
     assert(selectedText.includes("1/2 Select"));
@@ -82,7 +83,8 @@ module.exports = async function ({ jiti, piRoot }) {
     press("f"); press("f"); // Pending recent-tail flags cannot become native modes.
     press("down"); // Locked turn.
     assert(press(" ").map(plain).join("\n").includes("Locked — in retained recent tail"));
-    review = press("enter");
+    press("enter"); await new Promise((resolve) => setImmediate(resolve));
+    review = render();
     const previewText = review.map(plain).join("\n");
     assert(previewText.includes("2/2 Review"));
     assert(previewText.includes("1 pruned · 1 restored · 1 keep · 1 pending"));
@@ -121,7 +123,8 @@ module.exports = async function ({ jiti, piRoot }) {
     component.dispose();
     return result;
   } } };
-  await pickFilteredTurns(ctx, turns, new AbortController().signal);
+  await pickFilteredTurns(ctx, turns, new AbortController().signal, async () => ({ tokens: 42600, contextWindow: 200000,
+    delta: -8300, reserve: 8192, headroom: 149208, tailTokens: 19730 }));
   assert.deepEqual(result, { pruned: ["keep", "pending"], fidelity: {} }, "visual changes preserve whole-turn selection semantics");
   assert.equal(JSON.stringify(turns), original, "rendering never mutates input turns");
   return { selection: selection.map(plain).join("\n"), review: review.map(plain).join("\n") };

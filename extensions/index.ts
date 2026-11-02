@@ -39,8 +39,8 @@ import { FILTER_EXPLANATION, PREFLAG_ENTRY, AUTO_FILTER_ENTRY, FILTER_REVISION_E
   filterSpans, pickFilteredTurns, turnOwners } from "./lib/turn-filter.js";
 import type { FilterTurn, TurnSpan } from "./lib/turn-filter.js";
 import { FIDELITY_EXPLANATION, fidelityMessages, fidelitySpans, locateSlots, expandCheckpoint,
-  messageTokens, previewMessages, checkCheckpointBudget, checkContextBudget, isExpandedCheckpoint } from "./lib/turn-context.js";
-import type { TurnFidelities, TurnSelection, TurnSlot } from "./lib/turn-context.js";
+  messageTokens, previewMessages, checkCheckpointBudget, checkContextBudget, isExpandedCheckpoint, checkpointContextMessages, retainedTailMessages, estimateContext } from "./lib/turn-context.js";
+import type { ContextEstimate, NoticeTokens, TurnFidelities, TurnSelection, TurnSlot } from "./lib/turn-context.js";
 
 // ============================================================================
 // Configuration
@@ -1121,6 +1121,7 @@ const REORIENT_BLOCK = `**Post-compaction re-orientation.** ${RECOVERY_HISTORY_N
 2. If this is a Git repository, run \`git status\` and review uncommitted work. Re-verify build/test state if you are about to rely on it.
 3. **Distinguish earlier claims from supporting evidence.** Retained assistant prose records what was said, not independent verification. If a task-relevant claim has uncertain provenance or conflicts with new evidence, check its supporting output (using \`context_lookup\` if hidden) or the current source before treating it as established; label unresolved claims unverified. Retrieved reasoning remains a historical hypothesis, and historical outputs do not establish current file or build/test state.`;
 
+const REVISION_NOTE_PREFIX = "- Turn context revised: ";
 const CHECKPOINT_EXPLANATION = `**Compacted conversation follows.** The earlier part of this conversation has been compacted into the checkpoint below. This is not the full transcript. ${RECOVERY_HISTORY_NOTE}`;
 
 const RECOVERY_INSTRUCTIONS = `**Recovering hidden details.** Prefer \`context_lookup\` with a specific historical question: a subagent searches this conversation's full raw active branch in its own context and returns relevant findings. ${RECOVERY_SCOPE_RULE} If its findings are incomplete, use the bounded fallback tools \`context_list_entries\`, \`context_grep\`, and \`context_show_entry\`; follow their pagination instructions for more detail. ${RECOVERY_FILESYSTEM_RULE}`;
@@ -1175,6 +1176,31 @@ function projectReorientation(messages: AgentMessage[], entries: SessionEntry[])
   return result;
 }
 
+/** Attribute generated notice costs without touching quoted historical text.
+ * Notices occur only in the generated prefix, before SECTION_HEADER. Using the
+ * real estimator on counterfactual messages keeps counts tied to current text.
+ */
+function contextNoticeTokens(messages: AgentMessage[], reminder: AgentMessage): NoticeTokens {
+  const first = messages.find((message) => message.role === "compactionSummary");
+  if (!first || first.role !== "compactionSummary" || reminder.role !== "custom" || typeof reminder.content !== "string")
+    throw new Error("Cannot identify generated context notices.");
+  const end = first.summary.indexOf(SECTION_HEADER);
+  if (end < 0) throw new Error("Cannot identify the checkpoint introduction.");
+  let header = first.summary.slice(0, end), content = reminder.content;
+  const body = first.summary.slice(end);
+  const revision = header.split("\n").find((line) => line.startsWith(REVISION_NOTE_PREFIX)) ?? "";
+  const notes: NoticeTokens = { pruning: 0, revision: 0, fidelity: 0 };
+  const parts: [keyof NoticeTokens, string][] = [["pruning", FILTER_EXPLANATION], ["revision", revision], ["fidelity", FIDELITY_EXPLANATION]];
+  for (const [kind, text] of parts) {
+    if (!text) continue;
+    const before = messageTokens([{ ...first, summary: header + body }, { ...reminder, content }]);
+    header = header.replace(`${text}\n`, "");
+    if (kind !== "revision") content = content.replace(`\n\n${text}`, "");
+    notes[kind] = before - messageTokens([{ ...first, summary: header + body }, { ...reminder, content }]);
+  }
+  return notes;
+}
+
 async function buildMechanicalSummary(opts: {
   reason: string; // pi's raw reason: "manual" | "threshold" | "overflow"
   tokensBefore: number;
@@ -1187,6 +1213,7 @@ async function buildMechanicalSummary(opts: {
   filteredTurnIds?: string[];
   fidelity?: TurnFidelities;
   slots?: TurnSlot[]; // generated output placements; no raw payloads
+  presentation?: { shortened: boolean }; // optional presentation-accounting output
   spanFrom?: string; // ISO timestamp of the first summarised message
   spanTo?: string; // ISO timestamp of the last summarised message
   firstKeptEntryId?: string; // start of the verbatim (uncompacted) tail
@@ -1246,6 +1273,7 @@ async function buildMechanicalSummary(opts: {
   if (maxChars !== undefined && nativeChars > maxChars)
     opts.notify(`transparent-compact: full-fidelity turns alone are ~${nativeChars.toLocaleString()} estimated chars (budget ${maxChars.toLocaleString()}); they are kept un-capped. Only PROSE can be trimmed.`);
   const capped = capSpans(allSpans, maxChars === undefined ? undefined : Math.max(500, maxChars - overhead));
+  if (opts.presentation) opts.presentation.shortened = capped.trimmed.some(Boolean) || capped.tightened.some(Boolean);
 
   const blocks: string[] = [];
   if (base) blocks.push(`${baseOpen}\n${base.summary.replace(/\n+$/, "")}\n${BASE_CLOSE}`);
@@ -1273,7 +1301,7 @@ async function buildMechanicalSummary(opts: {
     opts.notify(MIXED_CONTEXT_WARNING);
   }
   parts.push(`- Latest: ${opts.now} (trigger: ${opts.reason}, ~${opts.tokensBefore.toLocaleString()} tokens before compaction)`);
-  if (opts.revisedAt) parts.push(`- Turn context revised: ${opts.revisedAt}. No additional history was compacted; the verbatim boundary is unchanged.`);
+  if (opts.revisedAt) parts.push(`${REVISION_NOTE_PREFIX}${opts.revisedAt}. No additional history was compacted; the verbatim boundary is unchanged.`);
   parts.push("- In the compacted spans, user and assistant prose is kept verbatim, subject to budget trimming. Retained prose is a record of what was said, not verification of its claims. Tool signatures are display notation, not replayable shell commands: paths under the working directory become relative (`.` in commands); read ranges are requested lines; write/edit payloads become sizes/counts. New bash previews keep the first 160 encoded characters, followed by … when truncated, with escaped newlines. Thinking and most output are removed; selected output observations remain after →.");
   parts.push("- [tool error] means the result was flagged as an error; [unknown] means no safely matched result/status. Unlabelled does NOT establish exit 0 or passing tests. → exit N is a reported shell status; output: quotes/extracts selected output, not an inferred verdict. Everything shown is historical. Legacy [ok] only means not flagged as a tool error; legacy calls without status are unknown.");
   parts.push("- Under size pressure, `tools-tightened` marks 120/80-character previews or grouped tool-only lines. Conversation prose and tool calls are retained unless `trimmed` is also marked. Tightening stops as soon as the budget fits; outcome observations and identifying file paths are not shortened by these stages.");
@@ -2020,23 +2048,65 @@ export default function (pi: ExtensionAPI) {
         const proposed = new Set([...excluded, ...[...preflags].filter((id) => !keptAsides.has(id))]);
         const choices = filterChoices(entries, collectBaseAndSpans(entries).spans, excluded,
           compaction.firstKeptEntryId, canonical.startupReads, proposed);
-        const result = await pickFilteredTurns(ctx, choices, signal);
-        if (result === undefined) return;
-        applyTurnSelection(choices, result, preflags, excluded, keptAsides, fidelity);
-        if (excluded.size === previousExcluded.length && previousExcluded.every((id) => excluded.has(id)) &&
-            keptAsides.size === previousKept.length && previousKept.every((id) => keptAsides.has(id)) &&
-            JSON.stringify(Object.entries(fidelity).sort()) === JSON.stringify(Object.entries(previousFidelity).sort())) {
-          ctx.ui.notify("No checkpoint turn-mode changes.", "info"); return;
-        }
-        const summary = await buildMechanicalSummary({
+        const unchanged = (pruned: Set<string>, kept: Set<string>, modes: TurnFidelities) =>
+          pruned.size === previousExcluded.length && previousExcluded.every((id) => pruned.has(id)) &&
+          kept.size === previousKept.length && previousKept.every((id) => kept.has(id)) &&
+          JSON.stringify(Object.entries(modes).sort()) === JSON.stringify(Object.entries(previousFidelity).sort());
+        const cap = capSettings(entries);
+        const renderCheckpoint = (pruned: Set<string>, modes: TurnFidelities, placements: TurnSlot[], preview: boolean, presentation?: { shortened: boolean }) => buildMechanicalSummary({
           reason: canonical.span.reason, tokensBefore: compaction.tokensBefore, branchEntries: entries,
-          now: canonical.span.at, revisedAt: new Date().toISOString(), spanLines: [], filteredTurnIds: [...excluded], fidelity, slots,
+          now: canonical.span.at, revisedAt: new Date().toISOString(), spanLines: [], filteredTurnIds: [...pruned], fidelity: modes, slots: placements, presentation,
           firstKeptEntryId: compaction.firstKeptEntryId,
           ...checkpointEvidence(entries, compaction.firstKeptEntryId, ctx.cwd,
-            canonical.startupReads, canonical.readFiles, canonical.modifiedFiles, excluded, fidelity),
-          cwd: ctx.cwd, notify: (message) => ctx.ui.notify(message, "warning"),
-          chooseCap: (size) => chooseCapBudget(pi, ctx, signal, "manual", size, "checkpoint update"),
+            canonical.startupReads, canonical.readFiles, canonical.modifiedFiles, pruned, modes),
+          cwd: ctx.cwd, notify: preview ? () => {} : (message) => ctx.ui.notify(message, "warning"),
+          chooseCap: preview ? async () => {
+            if (cap.mode === "off") return undefined;
+            const limit = capBudgetChars(cap.budget, ctx.model?.contextWindow);
+            if (limit === undefined) throw new Error("Cannot preview a percentage cap without the model's context window.");
+            return limit; // Warn-mode previews assume applying the current cap; never open a dialog or persist policy here.
+          } : (size) => chooseCapBudget(pi, ctx, signal, "manual", size, "checkpoint update"),
         });
+        const activeTools = new Set(pi.getActiveTools());
+        const system: AgentMessage = { role: "system", content: ctx.getSystemPrompt(), timestamp: 0,
+          toolsAdded: pi.getAllTools().filter((tool) => activeTools.has(tool.name))
+            .map(({ name, description, parameters }) => ({ name, description, parameters })) };
+        const tailTokens = messageTokens(retainedTailMessages(entries, compaction.firstKeptEntryId));
+        const measure = (summary: string, placements: TurnSlot[], modes: TurnFidelities, pruned: Set<string>, shortening?: ContextEstimate["shortening"]): ContextEstimate => {
+          const reminder: AgentMessage = { ...reorientationMessage(compaction.id, pruned.size > 0,
+            revisionId ?? compaction.id, Object.keys(modes).length > 0), role: "custom", timestamp: 0 };
+          const messages = checkpointContextMessages(summary, placements, modes, entries, compaction.firstKeptEntryId);
+          return { ...estimateContext([system, ...messages, reminder], ctx), tailTokens,
+            noticeTokens: contextNoticeTokens(messages, reminder), shortening };
+        };
+        const saved = latestFilterRevision(entries)?.data ?? { summary: compaction.summary,
+          slots: (compaction.details as { slots?: TurnSlot[] }).slots };
+        let baseline: Promise<ContextEstimate | undefined> | undefined;
+        const estimateSelection = async (selection: TurnSelection): Promise<ContextEstimate> => {
+          baseline ??= Promise.resolve().then(() => measure(saved.summary, saved.slots ?? [], previousFidelity, new Set(previousExcluded))).catch(() => undefined);
+          const pruned = new Set(previousExcluded), kept = new Set(previousKept), modes = { ...previousFidelity }, placements: TurnSlot[] = [];
+          applyTurnSelection(choices, selection, preflags, pruned, kept, modes);
+          const original = await baseline;
+          if (unchanged(pruned, kept, modes)) return { ...(original ?? measure(saved.summary, saved.slots ?? [], previousFidelity, pruned)), delta: original ? 0 : undefined };
+          const presentation = { shortened: false };
+          const summary = await renderCheckpoint(pruned, modes, placements, true, presentation);
+          if (summary === undefined) throw new Error("Checkpoint preview cancelled.");
+          const estimated = measure(summary, placements, modes, pruned,
+            presentation.shortened ? cap.mode === "warn" ? "confirmation" : "automatic" : undefined);
+          return { ...estimated, delta: original ? estimated.tokens - original.tokens : undefined,
+            noticeDelta: original?.noticeTokens && estimated.noticeTokens ? {
+              pruning: (previousExcluded.length > 0) === (pruned.size > 0) ? 0 : estimated.noticeTokens.pruning - original.noticeTokens.pruning,
+              revision: revisionId ? 0 : estimated.noticeTokens.revision - original.noticeTokens.revision,
+              fidelity: Boolean(Object.keys(previousFidelity).length) === Boolean(Object.keys(modes).length) ? 0 : estimated.noticeTokens.fidelity - original.noticeTokens.fidelity,
+            } : undefined };
+        };
+        const result = await pickFilteredTurns(ctx, choices, signal, estimateSelection);
+        if (result === undefined) return;
+        applyTurnSelection(choices, result, preflags, excluded, keptAsides, fidelity);
+        if (unchanged(excluded, keptAsides, fidelity)) {
+          ctx.ui.notify("No checkpoint turn-mode changes.", "info"); return;
+        }
+        const summary = await renderCheckpoint(excluded, fidelity, slots, false);
         if (summary === undefined) return;
         checkCheckpointBudget(summary, slots, fidelity, entries, compaction.firstKeptEntryId, ctx);
         const current = ctx.sessionManager.getBranch();

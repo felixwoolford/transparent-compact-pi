@@ -1,7 +1,7 @@
 # transparent-compact
 
 Deterministic context compaction for [Pi](https://pi.dev/), with session-backed
-recovery. By default, replaces Pi's model-generated compaction summary with a verbatim
+recovery. Replaces Pi's model-generated compaction summary with a verbatim
 compaction, with a checkpoint built mechanically from conversation text. Thinking and most tool outputs are removed
 from the active model context, while user inputs, assistant text and selected startup reads are retained verbatim.
 Tool calls and custom messages are reduced to short stubs; custom-message bodies remain recoverable from the session.
@@ -9,8 +9,9 @@ Verbatim compaction itself makes no model call. When a missing detail is needed,
 full raw branch and returns only relevant findings.
 The goal is to let the agent withstand many (but finite) rounds of compaction without the copy-of-a-copy degradation of model-summary compaction, which is exacerbated in sub-frontier models.
 
-The method is functionally similar to pi-vcc, but is specifically aimed at lighter weight models
-such as **Qwen 3.8 27B** or **GPT-6 Luna**. The design principle is that:
+Additionally, a manual filtering tool is provided to allow the user to selectively include or exclude full turns in the context checkpoint, at varying degrees of fidelity. 
+
+The design principle is that:
 
 - All algorithmic or model-based manipulation of prose has the potential to confound the model later, and should be avoided for as long as possible.
 - History retrieval should be parsimonious, explicitly clear to the agent, and agnostic to the task and session structure. 
@@ -19,8 +20,8 @@ such as **Qwen 3.8 27B** or **GPT-6 Luna**. The design principle is that:
 this outperforms more complicated techniques with lightweight models, and is at least as effective with frontier models too. 
 It helps weaker models to avoid confabulating the historical context and to more carefully verify what it does and does not know.
 
-The primary intended use case is on a strong local LLM with a reasonably large context window (>128k) : for example, through
-**Qwen 3.8 27B llama.cpp on an RTX 5090**.
+The advantages over other methods are most apparent in a strong local LLM with a reasonably large context window (>128k) : for example, through **Qwen 3.8 27B llama.cpp on an RTX 5090**. 
+However it is also very practical for use with stronger models and larger context windows.
 
 ## Install
 
@@ -60,36 +61,12 @@ To compact manually:
 The checkpoint begins with an explanation and full recovery instructions, and
 ends with an evidence-boundary warning. Task-relevant recovery reminders and a
 brief recovery recap follow **the retained recent history and any pending new
-user input**. They are saved in the session and remain available on later turns.
-After another compaction, only the current checklist is presented: older generated
-checklists are excluded from compacted spans and the retained tail. This is
-instruction delivery, not a guarantee of model compliance.
+user input**. This is instruction delivery, not a guarantee of model compliance.
 
 Compaction hides earlier details from the model's view; recorded history remains
 retrievable. Recovery guidance explicitly names uncertain provenance (where a
 finding came from or why a conclusion was reached) and contradictions between
-earlier notes and new evidence. Prefer lookup for historical observations or to
-avoid repeating costly research; inspect project files for current contents.
-Cheap local rereads and recomputations remain reasonable.
-
-Tool lines use compact signatures and head-only bash previews: the first 160
-encoded characters, followed by an ellipsis when truncated. Selected historical
-output observations (such as failing-test counts) replace misleading `[ok]` labels;
-an unlabelled call is not proof of success. Most output and detailed payloads are
-omitted. When you need details hidden by compaction, ask `context_lookup` a specific
-historical question. Recovery results supply ENTRY ids for targeted follow-up;
-`context_show_entry` can read a specific passage at a known ENTRY id. Start small
-and continue only if the detail is missing, incomplete, or needs more context to
-resolve ambiguity; stop once the question is answered. Do not expand surrounding
-history by default. See [the rendering contract](docs/DESIGN.md#deterministic-checkpoint).
-
-File lists now distinguish source output retained in the recent tail, partial
-reads, and reads followed by tracked changes. Modified paths without retained
-read/write evidence are marked `no read-tool output in tail`; these annotations
-are checkpoint-time evidence, not guarantees of current filesystem state.
-Before replacing an existing file with `write`, the agent is told to reread it
-unless current contents are already visible, rather than reconstruct unchanged
-sections from memory. Small exact-match edits have no blanket reread requirement.
+earlier notes and new evidence. 
 
 ### Choose checkpoint turn fidelity
 
@@ -107,7 +84,8 @@ filtering step runs inside the compaction hook.
 
 In the interactive terminal, the editor opens a framed checklist of user turns, with
 a highlighted cursor, action labels and a separate fixed controls area. The review
-step summarizes mode changes and estimated token growth above the content.
+step summarizes mode changes; a live estimated context readout stays visible on
+both selection and review screens.
 Each choice applies to a user message and everything following it until the next
 user message, including turns spanning multiple compactions.
 
@@ -119,6 +97,16 @@ user message, including turns spanning multiple compactions.
 | `[■]` | **FULL** | Original conversation content, including all recorded thinking and image attachments |
 | `[-]` | **LOCKED** | Unavailable; not a fifth fidelity mode |
 
+The readout updates as you change modes, for example:
+
+```text
+Estimated context: ~29,365 / 272,000 tokens (10.8%) · incl. ~20,000 tail · +~160 scaffolding
+Net Δ −20 · free 222,155 · reserve 20,480
+```
+
+Counts use Pi's rough characters/4 heuristic plus message-framing allowances, not
+provider tokenization. 
+
 Use **↑/↓** to navigate and **←/→** to collapse/expand details for the selected
 mode. **Space** prunes any kept mode, or restores a pruned turn as PROSE. **f** cycles
 PRUNED → PROSE → PROSE+TOOLS → FULL → PRUNED. Both keys act on the owning whole turn
@@ -127,10 +115,11 @@ change preview; **Enter** again confirms, **Esc** goes back or cancels.
 
 Filtering requires verbatim mode and an idle agent. Turns overlapping Pi's retained
 recent tail cannot be removed yet: filtering never removes only half a turn or
-changes Pi's retention boundary. Pre-flagged recent turns can be unchecked to cancel
-their pending exclusion; for those pending turns, **f** only toggles the flag,
-not fidelity. Content inside an opaque inherited summary cannot be
-selected individually. `/filter-turns` requires an existing verbatim checkpoint
+changes Pi's retention boundary. Content inside an opaque inherited summary cannot be
+selected individually. 
+
+
+`/filter-turns` requires an existing verbatim checkpoint
 and works even when there is no new history to compact. It saves a reversible,
 branch-local checkpoint revision without moving the retained boundary or starting
 an agent turn. PROSE restoration uses the canonical spans, startup reads and file
@@ -179,11 +168,6 @@ agent/tool activity remain in normal context until the entire group is eligible
 for filtering. It is not an isolated `/btw` conversation. In `/filter-turns` or
 `/compact-filtered`, you can uncheck the aside before exclusion, or restore it afterward.
 
-Automatic filtering applies only user-authored pre-flags: no relevance judgments
-and no picker. Turning it off does not restore already filtered turns. Explicit
-keep/restore or PROSE+TOOLS/FULL choices override an aside's original pre-flag, including on future
-automatic compactions. Flags, policy and keep decisions follow the active branch
-through reload/resume. Summary compaction is unchanged.
 
 ### Automatic startup-read retention
 
@@ -197,25 +181,6 @@ continues until that prompt arrives.
 
 This is a literal filename-matching heuristic, not an interpretation of required
 reading. It does not capture every possible reference or fill in incomplete reads.
-The agent is no longer given a required-document reread checklist; recovery is for
-missing task-relevant evidence. See [selection details](docs/DESIGN.md#retained-startup-reads).
-
-### Select the compaction method
-
-```text
-/compaction-method
-/compaction-method verbatim
-/compaction-method summary
-```
-
-`/compaction-method` is available to opt-in to Pi's builtin summary compaction for the current session.
-
-The choice applies to manual `/compact`, automatic threshold compaction, and context-overflow recovery.
-With no argument, the command reports the current method. 
-
-The choice persists in the existing session, follows branch history through
-reload, resume, fork, and tree navigation, and needs no extra configuration file.
-New sessions default to verbatim. 
 
 ### Control the compaction cap
 
@@ -269,7 +234,6 @@ for unattended operation. If a percentage cannot be resolved because the model's
 context window is unavailable, compaction is cancelled: choose a character/token
 budget or turn the cap off.
 
-
 ## Configuration
 
 No separate configuration file is required. Set environment variables before
@@ -315,6 +279,24 @@ The character budget is not a token limit or a hard cap on the whole checkpoint.
 Instructions and file lists sit outside the budget; an inherited base and retained
 startup reads are uncapped, and the line budget has a 500-character minimum. Tune it
 alongside the model's context window and Pi's `compaction.keepRecentTokens`.
+
+### Select the compaction method
+
+```text
+/compaction-method
+/compaction-method verbatim
+/compaction-method summary
+```
+
+`/compaction-method` is available to opt-in to Pi's builtin summary compaction for the current session.
+
+The choice applies to manual `/compact`, automatic threshold compaction, and context-overflow recovery.
+With no argument, the command reports the current method. 
+
+The choice persists in the existing session, follows branch history through
+reload, resume, fork, and tree navigation, and needs no extra configuration file.
+New sessions default to verbatim. 
+
 
 ### Local inference engines
 

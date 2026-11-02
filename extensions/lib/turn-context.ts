@@ -134,6 +134,25 @@ export function expandCheckpoint(message: Extract<AgentMessage, { role: "compact
   return output;
 }
 
+export interface NoticeTokens { pruning: number; revision: number; fidelity: number }
+export interface ContextEstimate {
+  tokens: number;
+  contextWindow?: number;
+  reserve: number;
+  headroom?: number;
+  delta?: number;
+  tailTokens?: number;
+  noticeTokens?: NoticeTokens;
+  noticeDelta?: NoticeTokens;
+  shortening?: "automatic" | "confirmation";
+}
+export type ContextEstimator = (selection: TurnSelection) => Promise<ContextEstimate>;
+export const contextReserve = (ctx: ExtensionContext) => Math.min(ctx.model?.maxTokens || 16384, 16384) + 4096;
+export function estimateContext(messages: AgentMessage[], ctx: ExtensionContext): ContextEstimate {
+  const tokens = messageTokens(messages), contextWindow = ctx.model?.contextWindow, reserve = contextReserve(ctx);
+  return { tokens, contextWindow, reserve, headroom: contextWindow ? contextWindow - tokens - reserve : undefined };
+}
+
 export const messageTokens = (messages: AgentMessage[]) => messages.reduce((sum, m) => sum + (m.role === "bashExecution" && m.excludeFromContext ? 0 : estimateTokens(m) + 8), 0);
 
 /** Estimates, not a provider tokenizer. Keep output/framing headroom and check
@@ -143,19 +162,29 @@ export function checkContextBudget(messages: AgentMessage[], ctx: ExtensionConte
   const window = ctx.model?.contextWindow;
   if (!window) throw new Error("Cannot budget full-fidelity turns without the model's context window.");
   const tokens = messageTokens(messages) + (includeSystem ? Math.ceil((ctx.getSystemPrompt?.() ?? "").length / 4) : 0);
-  const reserve = Math.min(ctx.model?.maxTokens || 16384, 16384) + 4096;
+  const reserve = contextReserve(ctx);
   if (tokens + reserve > window) throw new Error(`Full-fidelity context needs ~${tokens.toLocaleString()} input tokens plus ${reserve.toLocaleString()} reserved tokens (window ${window.toLocaleString()}). Change PROSE+TOOLS/FULL turns to PROSE or PRUNED with /filter-turns. Nothing was silently shortened.`);
   return tokens;
 }
 
+export function retainedTailMessages(entries: SessionEntry[], boundary: string): AgentMessage[] {
+  const cut = entries.findIndex((e) => e.id === boundary);
+  if (cut < 0) throw new Error("Cannot locate the retained context boundary.");
+  const tailIds = new Set(entries.slice(cut).map((entry) => entry.id));
+  return originalProjection(entries).filter(({ sourceEntry }) => tailIds.has(sourceEntry.id))
+    .flatMap(({ messages }) => messages).filter((m) => m.role !== "system" && !managed(m));
+}
+
+export function checkpointContextMessages(summary: string, slots: TurnSlot[], fidelity: TurnFidelities,
+  entries: SessionEntry[], boundary: string): AgentMessage[] {
+  const summaryMessage = { role: "compactionSummary" as const, summary, tokensBefore: 0, timestamp: 0 };
+  const tail = retainedTailMessages(entries, boundary);
+  return [...expandCheckpoint(summaryMessage, summary, slots, fidelity, entries, boundary), ...tail];
+}
+
 export function checkCheckpointBudget(summary: string, slots: TurnSlot[], fidelity: TurnFidelities,
   entries: SessionEntry[], boundary: string, ctx: ExtensionContext): void {
-  if (!Object.keys(fidelity).length) return;
-  const summaryMessage = { role: "compactionSummary" as const, summary, tokensBefore: 0, timestamp: 0 };
-  const cut = entries.findIndex((e) => e.id === boundary);
-  const tail = originalProjection(entries).filter(({ sourceEntry }) => entries.indexOf(sourceEntry) >= cut)
-    .flatMap(({ messages }) => messages).filter((m) => m.role !== "system" && !managed(m));
-  checkContextBudget([...expandCheckpoint(summaryMessage, summary, slots, fidelity, entries, boundary), ...tail], ctx, true);
+  if (Object.keys(fidelity).length) checkContextBudget(checkpointContextMessages(summary, slots, fidelity, entries, boundary), ctx, true);
 }
 
 /** UI-only, complete text/arguments/output preview; image bytes are identified,

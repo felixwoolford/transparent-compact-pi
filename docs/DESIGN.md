@@ -210,6 +210,54 @@ even if later context edits made its original tool group unreplayable. Host view
 and compaction-boundary selection still use Pi's saved checkpoint; provider requests
 include native expansions and are checked separately.
 
+### Live context size preview
+
+Selection and review share a live whole-context estimate: input tokens/context
+window, percentage, net delta from saved input, and headroom after the same output
+and framing reserve used by the context guard. The total explicitly includes the
+measured tail size, not the configured retention target. Short terminals show the
+total only.
+The editor supplies a read-only estimator to the picker. It renders proposed
+selections through the same checkpoint builder as saving, with passive cap
+resolution and no notifications/dialogs/persistence. Warn assumes applying the
+current budget on changes; unchanged selections use the actual saved checkpoint,
+not a hypothetical rebuild under a newly changed cap policy. A presentation result
+from the real cap renderer records actual trimming/tightening; only then does the UI
+mention the size limit, in plain language, including whether saving asks first.
+Raw `cap warn` policy/debug labels are not shown.
+
+Notice accounting separately measures generated pruning guidance, checkpoint
+revision notices and full-fidelity guidance using counterfactual messages through
+the real estimator. Only the generated introduction before `SECTION_HEADER` and
+the generated reminder are edited in these counterfactuals; quoted historical text
+is untouched. Costs therefore follow the actual text/estimator, with no fixed token
+allowance. Activation/removal changes are summed into one inline `+~N scaffolding`
+(or `−~N scaffolding`) indicator after the tail on the estimated-context row,
+already included in the total and net delta.
+No notice breakdown or extra notice row is shown; unchanged context has no added
+scaffolding indicator. Existing notice rounding is not presented as fresh overhead
+on every checkbox.
+The first prune and first checkpoint update can therefore add noticeable one-time
+cost even when little prose is removed. The delta still includes marker replacements
+and size-limit effects; it is not a raw selected-text token count.
+
+The estimator expands generated native slots, removes retained-read duplicates,
+and respects explicit context edits. It counts the untouched live tail (excluding
+old system configuration, obsolete managed checklists and context-excluded bash
+output), plus the current prompt/active tool schemas and one current reminder.
+These are Pi estimates before provider-specific transformations; future input and
+other extensions' future request transformations cannot be predicted. A failed
+baseline leaves delta unknown, while repaired proposed context can still get an
+honest total. Failed estimates are shown as unavailable, never zero.
+
+Estimation is asynchronous and coalesced per mode change; navigation, resize and
+theme changes reuse the last result. Pending recalculations retain the completed
+readout, its styling and row count, replacing values only when a new estimate is
+ready. Loading text appears only before any successful estimate (or when retrying
+a failed estimate), not on every toggle. Generation checks reject stale results, and
+closing/disposing the dialog invalidates pending work. No estimated sizes are
+persisted in checkpoint metadata, and no model calls are introduced.
+
 ### File-list evidence annotations
 
 The lists record reads and modifications in compacted history, not an exhaustive

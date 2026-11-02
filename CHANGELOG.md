@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- Clarify the context readout: label delta as net, show measured tail inclusion,
+  and show combined notice-cost changes after the tail as `+~N scaffolding`,
+  without a separate row or breakdown. Keep the last completed readout visible
+  during recalculation to avoid loading/color flashes on each selection.
+  Remove the `reply/framing` label.
+  Replace `cap warn` labels with plain-language size-limit information only when
+  the preview was actually shortened. Add small-turn/adjacent-user regressions
+  reconciling content savings with generated-notice overhead.
+
+- Add a live whole-context size readout to turn selection and review: estimated
+  input tokens/window usage, delta from saved context, and reserve-aware headroom.
+  Preview the actual capped checkpoint and native expansions with current
+  system/tool overhead, without dialogs, writes or model calls. Discard stale
+  estimates and label unavailable sizes rather than inventing zero-token counts.
+
 - Simplify `/compact-filtered` to ordinary compaction followed by the shared
   `/filter-turns` editor. The checkpoint is committed before selection; cancelling
   the picker leaves that compaction intact. With nothing new to compact, edit the

@@ -6,7 +6,7 @@ import type { SpanContent, ToolLines } from "./checkpoint-cap.js";
 export { FILTER_MARKER } from "./checkpoint-cap.js";
 export { turnOwners } from "./turn-context.js";
 import { MODE_LABELS, MODE_SYMBOLS } from "./turn-context.js";
-import type { Fidelity, TurnFidelities, TurnMode, TurnSelection } from "./turn-context.js";
+import type { ContextEstimate, ContextEstimator, Fidelity, TurnFidelities, TurnMode, TurnSelection } from "./turn-context.js";
 
 export const PREFLAG_ENTRY = "transparent-compact:aside-turn";
 export const AUTO_FILTER_ENTRY = "transparent-compact:auto-filter";
@@ -83,7 +83,8 @@ const displayText = (text: string) => stripVTControlCharacters(text).replace(/[\
 /** Tree-like whole-turn selection followed by a scrollable, complete preview.
  * Subentries are inspection-only: space always toggles their owning user turn.
  */
-export async function pickFilteredTurns(ctx: ExtensionContext, turns: FilterTurn[], signal: AbortSignal): Promise<TurnSelection | undefined> {
+export async function pickFilteredTurns(ctx: ExtensionContext, turns: FilterTurn[], signal: AbortSignal,
+  estimate?: ContextEstimator): Promise<TurnSelection | undefined> {
   return ctx.ui.custom<TurnSelection | undefined>((tui, theme, kb, done) => {
     const selected = new Set(turns.filter((turn) => turn.selected).map((turn) => turn.id));
     const fidelity: TurnFidelities = Object.fromEntries(turns.filter((turn) => turn.fidelity && !selected.has(turn.id)).map((turn) => [turn.id, turn.fidelity!]));
@@ -92,15 +93,56 @@ export async function pickFilteredTurns(ctx: ExtensionContext, turns: FilterTurn
     const setMode = (turn: FilterTurn, mode: TurnMode) => {
       if (mode === "pruned") selected.add(turn.id); else selected.delete(turn.id);
       if (mode === "tools" || mode === "full") fidelity[turn.id] = mode; else delete fidelity[turn.id];
+      refreshEstimate();
     };
     const selection = (): TurnSelection => ({ pruned: [...selected], fidelity: { ...fidelity } });
     let notice: string | undefined;
-    const cost = (turn: FilterTurn, mode: TurnMode) => {
-      try { return mode === "pruned" ? 6 : mode === "prose" ? Math.ceil(turn.lines.join("\n").length / 4) : turn.fidelityInfo?.(mode).tokens ?? 0; }
-      catch { return 0; } // An invalid old pin must still be removable.
+    let disposed = false, generation = 0, queued = false, estimating = false;
+    let estimated: ContextEstimate | undefined, estimateError = estimate ? "" : "Context estimator unavailable";
+    const refreshEstimate = () => {
+      if (!estimate || disposed) return;
+      generation++; estimating = true; estimateError = "";
+      if (queued) return;
+      queued = true;
+      queueMicrotask(() => {
+        queued = false;
+        if (disposed) return;
+        const request = generation, proposed = selection();
+        Promise.resolve().then(() => disposed || request !== generation ? undefined : estimate(proposed)).then((value) => {
+          if (disposed || request !== generation || !value) return;
+          estimated = value; estimating = false; tui.requestRender();
+        }).catch((error) => {
+          if (disposed || request !== generation) return;
+          estimated = undefined; estimating = false;
+          estimateError = displayText(error instanceof Error ? error.message : String(error)).replace(/\s+/g, " ");
+          tui.requestRender();
+        });
+      });
     };
-    const tokenDelta = () => turns.filter((turn) => !turn.unavailable && !turn.deferred)
-      .reduce((sum, turn) => sum + cost(turn, modeOf(turn)) - cost(turn, originalMode(turn)), 0);
+    const sizeReadout = (width: number): { lines: string[]; color: "accent" | "warning" | "error" | "muted" } => {
+      if (estimating && !estimated) return { lines: ["Estimated context: calculating tokens…", "Includes checkpoint, native turns, tail and system/tools."], color: "muted" };
+      if (!estimated) return { lines: ["Estimated context: unavailable", estimateError], color: "warning" };
+      const { tokens, contextWindow, reserve, headroom, delta, tailTokens, noticeDelta, shortening } = estimated;
+      const overhead = noticeDelta ? noticeDelta.pruning + noticeDelta.revision + noticeDelta.fidelity : 0;
+      const scaffolding = (format: (n: number) => string) => overhead
+        ? ` · ${overhead < 0 ? "−" : "+"}~${format(Math.abs(overhead))} scaffolding` : "";
+      const longTotal = `Estimated context: ~${tokens.toLocaleString()}${contextWindow ? ` / ${contextWindow.toLocaleString()}` : ""} tokens` +
+        `${contextWindow ? ` (${(100 * tokens / contextWindow).toFixed(1)}%)` : ""} · incl. ${tailTokens === undefined ? "tail" : `~${tailTokens.toLocaleString()} tail`}` +
+        scaffolding((n) => n.toLocaleString());
+      const short = width < 70 || visibleWidth(longTotal) > width;
+      const number = (n: number) => !short ? n.toLocaleString() : n >= 1e6 ? `${(n / 1e6).toFixed(1).replace(/\.0$/, "")}m`
+        : n >= 1e3 ? `${(n / 1e3).toFixed(1).replace(/\.0$/, "")}k` : n.toLocaleString();
+      const total = short ? `Est. ~${number(tokens)}${contextWindow ? `/${number(contextWindow)} ${(100 * tokens / contextWindow).toFixed(0)}%` : " tokens"}` +
+        ` incl. ${tailTokens === undefined ? "tail" : `~${number(tailTokens)} tail`}${scaffolding(number)}` : longTotal;
+      const signed = (n: number) => `${n < 0 ? "−" : "+"}${number(Math.abs(n))}`;
+      const change = delta === undefined ? "Net Δ unknown" : `Net Δ ${signed(delta)}`;
+      const room = headroom === undefined ? "window unknown" : headroom < 0 ? `OVER ${number(-headroom)}` : `free ${number(headroom)}`;
+      const lines = [total, `${change} · ${room} · ${short ? "rsv" : "reserve"} ${number(reserve)}`];
+      if (shortening) lines.push(shortening === "confirmation"
+        ? "Size limit shortened this preview; saving asks for confirmation."
+        : "Size limit shortened this preview.");
+      return { lines, color: headroom !== undefined && headroom < 0 ? "error" : "accent" };
+    };
     const expanded = new Set<string>();
     type PreviewLine = { text: string; kind: "heading" | "content" | "note" };
     let cursor = 0, top = 0, review: PreviewLine[] | undefined, scroll = 0;
@@ -118,7 +160,7 @@ export async function pickFilteredTurns(ctx: ExtensionContext, turns: FilterTurn
       return [{ turn, number: index + 1, child: false, text: turn.label },
         ...details.map((text) => ({ turn, number: index + 1, child: true, text }))];
     });
-    const pageSize = () => Math.max(1, tui.terminal.rows - (tui.terminal.rows >= 16 ? 10 : 9));
+    const pageSize = () => Math.max(1, tui.terminal.rows - (tui.terminal.rows >= 16 ? 10 + sizeReadout(100).lines.length : 9));
     const stateOf = (turn: FilterTurn): { label: string; color: "dim" | "warning" | "success" | "text" | "accent"; hint: string } => {
       const checked = selected.has(turn.id);
       if (turn.unavailable) return { label: "Locked", color: "dim", hint: `Locked — ${turn.unavailable}` };
@@ -147,10 +189,11 @@ export async function pickFilteredTurns(ctx: ExtensionContext, turns: FilterTurn
       }
       return `${exclude} pruned · ${restore} restored · ${keep} keep · ${pending} pending · ${tools} tools · ${full} full`;
     };
-    const finish = (value: TurnSelection | undefined) => { signal.removeEventListener("abort", abort); done(value); };
+    const finish = (value: TurnSelection | undefined) => { disposed = true; generation++; signal.removeEventListener("abort", abort); done(value); };
     const abort = () => finish(undefined);
     signal.addEventListener("abort", abort, { once: true });
     if (signal.aborted) queueMicrotask(abort);
+    refreshEstimate();
     return {
       render(width: number): string[] {
         const height = pageSize(), roomy = tui.terminal.rows >= 16, framed = width >= 8;
@@ -173,12 +216,18 @@ export async function pickFilteredTurns(ctx: ExtensionContext, turns: FilterTurn
         const key = (name: string, action: string) => theme.fg("accent", theme.bold(name)) + theme.fg("muted", ` ${action}`);
         const title = review ? "Turn context · 2/2 Review" : "Turn context · 1/2 Select";
         const out = [rule(theme.fg("accent", theme.bold(title)), "top")];
-        out.push(line(theme.fg("muted", review
+        if (roomy) out.push(line(theme.fg("muted", review
           ? "PROSE is size-capped. PROSE+TOOLS/FULL are never silently shortened."
           : "Choose each whole turn's context mode. Nothing changes until you confirm.")));
         if (roomy) out.push(line(review ? theme.fg("accent", changeSummary())
           : theme.fg("warning", "[X] Pruned") + theme.fg("muted", "  [ ] Prose  ") + theme.fg("accent", "[○] Prose+tools  [■] Full") +
             theme.fg("dim", "  [-] Locked")));
+        const readout = sizeReadout(innerWidth);
+        out.push(line(theme.fg(readout.color, readout.lines[0])));
+        if (roomy) {
+          out.push(line(theme.fg(readout.color, readout.lines[1])));
+          for (const text of readout.lines.slice(2)) out.push(line(theme.fg(text.startsWith("Size limit") ? "warning" : "muted", text)));
+        }
         let footer: string;
         if (review) {
           if (wrappedReview?.width !== innerWidth || wrappedReview.source !== review)
@@ -186,7 +235,7 @@ export async function pickFilteredTurns(ctx: ExtensionContext, turns: FilterTurn
               wrapTextWithAnsi(displayText(item.text), innerWidth).map((text) => ({ ...item, text }))) };
           const wrapped = wrappedReview.lines;
           scroll = Math.max(0, Math.min(scroll, wrapped.length - height));
-          out.push(rule(theme.fg("muted", `Change preview · ${scroll + 1}–${Math.min(scroll + height, wrapped.length)} / ${wrapped.length} lines · ~${tokenDelta() >= 0 ? "+" : ""}${tokenDelta().toLocaleString()} tokens`)));
+          out.push(rule(theme.fg("muted", `Change preview · ${scroll + 1}–${Math.min(scroll + height, wrapped.length)} / ${wrapped.length} lines`)));
           for (const item of wrapped.slice(scroll, scroll + height))
             out.push(line(theme.fg(item.kind === "heading" ? "accent" : item.kind === "note" ? "muted" : "text",
               item.kind === "heading" ? theme.bold(item.text) : item.text)));
@@ -291,7 +340,7 @@ export async function pickFilteredTurns(ctx: ExtensionContext, turns: FilterTurn
         tui.requestRender();
       },
       invalidate() { wrappedReview = undefined; },
-      dispose() { signal.removeEventListener("abort", abort); },
+      dispose() { disposed = true; generation++; signal.removeEventListener("abort", abort); },
     };
   });
 }
