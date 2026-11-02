@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.10.0
 
 - Clarify the context readout: label delta as net, show measured tail inclusion,
   and show combined notice-cost changes after the tail as `+~N scaffolding`,
