@@ -78,16 +78,26 @@ saved canonical spans are not rewritten; older custom-message bodies may remain 
 
 ### User-controlled turn filtering
 
-`/compact-filtered` requests verbatim manual compaction with a tree-like whole-turn
-checklist and a complete, scrollable confirmation preview. The picker runs after
-Pi has prepared its boundary. Only turns wholly before that boundary can be
-excluded; pre-flagged turns overlapping the retained tail remain pending and their
-flags can be cancelled in the picker. Other recent turns are locked. Agent/tool
-subentries are for inspection, not independent deletion. Previously filtered turns
-start checked; unchecking restores their compacted representation. The confirmation
-preview distinguishes exclusions, restorations and pending-flag changes. Escape goes
-back from confirmation, or cancels without saving a compaction. No filtering UI runs
-for ordinary manual, threshold or overflow compaction.
+`/compact-filtered` sequences ordinary verbatim manual compaction and the shared
+`/filter-turns` editor. It waits for Pi's completion callback, so the new checkpoint
+is already saved and the host is idle before the picker opens. There is no special
+custom-instruction sentinel or interactive filtering path in `session_before_compact`.
+The first phase inherits all existing choices like ordinary `/compact`; the second
+phase proposes a separate reversible revision. Escape in the picker leaves the
+completed compaction intact. A failed or cancelled first phase never opens it.
+Pi's current no-op outcomes (`Already compacted` and `Nothing to compact (session too
+small)`) open an existing checkpoint only if the session/branch is unchanged. A
+session/branch change or unexpected checkpoint result cancels the workflow; the
+shared editor rechecks idle/UI/method state before opening.
+
+Only turns wholly before the saved boundary can be excluded; pre-flagged turns
+still overlapping the retained tail remain pending and their flags can be cancelled
+in the picker. Other recent turns stay locked. Agent/tool subentries are inspection
+views of their owning user turn. Previously pruned turns start checked; unchecking
+restores their compacted representation. Confirmation distinguishes pruning,
+restoration, fidelity and pending-flag changes. Escape goes back from confirmation,
+or cancels only the proposed revision. No filtering UI runs in ordinary manual,
+threshold or overflow compaction itself.
 
 `/filter-turns` uses the same selection/confirmation UI against the existing
 checkpoint only. It does not invoke Pi's compaction preparation, append a compaction,
@@ -115,8 +125,9 @@ by the group are excluded; file-list paths used only by excluded turns are remov
 Filtering does not undo filesystem mutations. The checkpoint introduction and
 persistent reorientation conditionally explain that the user excluded low-value
 context, which remains retrievable from the full raw history. Recovery tools are
-unchanged. Cancellation or build failure never falls through to an unfiltered model
-summary during filtered compaction.
+unchanged. Cancelling or failing a turn edit saves no revision. Mechanical compaction
+with existing pruning or fidelity choices cancels on build failure rather than
+falling through to a model summary that would lose those choices.
 
 Standalone updates append a non-context `transparent-compact:filter-revision`
 entry containing the source compaction ID, rendered checkpoint, exclusions and

@@ -35,7 +35,7 @@ import { buildSessionProjection, SessionManager } from "@earendil-works/pi-codin
 import type { ExtensionAPI, ExtensionContext, ModelRegistry, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { capSpans, commandPreview, renderToolLine, renderToolStub, NORMAL_PREVIEW_CHARS, TIGHTENED_ATTR } from "./lib/checkpoint-cap.js";
 import type { ToolLines, ToolStub } from "./lib/checkpoint-cap.js";
-import { FILTER_REQUEST, FILTER_EXPLANATION, PREFLAG_ENTRY, AUTO_FILTER_ENTRY, FILTER_REVISION_ENTRY, autoFilterEnabled, preflaggedTurns,
+import { FILTER_EXPLANATION, PREFLAG_ENTRY, AUTO_FILTER_ENTRY, FILTER_REVISION_ENTRY, autoFilterEnabled, preflaggedTurns,
   filterSpans, pickFilteredTurns, turnOwners } from "./lib/turn-filter.js";
 import type { FilterTurn, TurnSpan } from "./lib/turn-filter.js";
 import { FIDELITY_EXPLANATION, fidelityMessages, fidelitySpans, locateSlots, expandCheckpoint,
@@ -1990,27 +1990,9 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  pi.registerCommand("compact-filtered", {
-    description: "Manually filter or restore whole turns with a confirmation preview",
-    handler: async (args, ctx) => {
-      if (args.trim()) { ctx.ui.notify("Usage: /compact-filtered", "error"); return; }
-      if (ctx.mode !== "tui" || !ctx.hasUI) {
-        ctx.ui.notify("/compact-filtered requires the interactive terminal UI.", "error"); return;
-      }
-      if (!ctx.isIdle() || ctx.hasPendingMessages()) {
-        ctx.ui.notify("Wait until the agent is idle and queued messages have been handled before filtering turns.", "warning"); return;
-      }
-      if (compactionMethod(ctx.sessionManager.getBranch()) !== "verbatim") {
-        ctx.ui.notify("/compact-filtered requires verbatim compaction. Use /compaction-method verbatim first.", "error"); return;
-      }
-      ctx.compact({ customInstructions: FILTER_REQUEST,
-        onError: (error) => ctx.ui.notify(`Filtered compaction: ${errMsg(error)}`, "error") });
-    },
-  });
-
-  pi.registerCommand("filter-turns", {
+  const filterTurns = {
     description: "Choose checkpoint turn modes: pruned, prose, prose+tools or full; no compaction",
-    handler: async (args, ctx) => {
+    handler: async (args: string, ctx: ExtensionContext) => {
       if (args.trim()) { ctx.ui.notify("Usage: /filter-turns", "error"); return; }
       if (ctx.mode !== "tui" || !ctx.hasUI) {
         ctx.ui.notify("/filter-turns requires the interactive terminal UI.", "error"); return;
@@ -2038,7 +2020,7 @@ export default function (pi: ExtensionAPI) {
         const proposed = new Set([...excluded, ...[...preflags].filter((id) => !keptAsides.has(id))]);
         const choices = filterChoices(entries, collectBaseAndSpans(entries).spans, excluded,
           compaction.firstKeptEntryId, canonical.startupReads, proposed);
-        const result = await pickFilteredTurns(ctx, choices, signal, "update");
+        const result = await pickFilteredTurns(ctx, choices, signal);
         if (result === undefined) return;
         applyTurnSelection(choices, result, preflags, excluded, keptAsides, fidelity);
         if (excluded.size === previousExcluded.length && previousExcluded.every((id) => excluded.has(id)) &&
@@ -2070,7 +2052,48 @@ export default function (pi: ExtensionAPI) {
         ctx.ui.notify(`Checkpoint turn update cancelled: ${errMsg(error)}`, "error");
       }
     },
+  };
+
+  pi.registerCommand("compact-filtered", {
+    description: "Run ordinary compaction, then open checkpoint turn controls",
+    handler: async (args, ctx) => {
+      if (args.trim()) { ctx.ui.notify("Usage: /compact-filtered", "error"); return; }
+      if (ctx.mode !== "tui" || !ctx.hasUI) {
+        ctx.ui.notify("/compact-filtered requires the interactive terminal UI.", "error"); return;
+      }
+      if (!ctx.isIdle() || ctx.hasPendingMessages()) {
+        ctx.ui.notify("Wait until the agent is idle and queued messages have been handled before filtering turns.", "warning"); return;
+      }
+      if (compactionMethod(ctx.sessionManager.getBranch()) !== "verbatim") {
+        ctx.ui.notify("/compact-filtered requires verbatim compaction. Use /compaction-method verbatim first.", "error"); return;
+      }
+      const sessionId = ctx.sessionManager.getSessionId(), leafId = ctx.sessionManager.getLeafId();
+      try {
+        // compact() is callback-based. Wait for completion, not merely dispatch,
+        // so the editor sees the saved checkpoint and the host is idle again.
+        const result = await new Promise<{ summary: string; firstKeptEntryId: string }>((resolve, reject) => {
+          ctx.compact({ onComplete: resolve, onError: reject });
+        });
+        const entries = ctx.sessionManager.getBranch(), current = latestVerbatimCompaction(entries);
+        if (ctx.sessionManager.getSessionId() !== sessionId || !current || current.summary !== result.summary ||
+            current.firstKeptEntryId !== result.firstKeptEntryId || (leafId && !entries.some((entry) => entry.id === leafId))) {
+          ctx.ui.notify("Session/checkpoint changed; turn controls not opened.", "warning"); return;
+        }
+      } catch (error) {
+        // These are Pi's current no-op outcomes, not general compaction failures.
+        // Only an unchanged session with an existing checkpoint can be edited.
+        const noOp = error instanceof Error && (error.message === "Already compacted" || error.message === "Nothing to compact (session too small)");
+        if (!noOp || ctx.sessionManager.getSessionId() !== sessionId || ctx.sessionManager.getLeafId() !== leafId ||
+            !latestVerbatimCompaction(ctx.sessionManager.getBranch())) {
+          ctx.ui.notify(`Compaction before turn editing failed: ${errMsg(error)}`, "error"); return;
+        }
+      }
+      // The common editor rechecks idle/UI/method state. Escape here leaves the
+      // already completed compaction intact; only the proposed revision is lost.
+      await filterTurns.handler("", ctx);
+    },
   });
+  pi.registerCommand("filter-turns", filterTurns);
 
   pi.on("session_start", (_event, ctx) => {
     clearAsideSubmission();
@@ -2107,10 +2130,7 @@ export default function (pi: ExtensionAPI) {
   // --------------------------------------------------------------------------
   pi.on("session_before_compact", async (event, ctx) => {
     const { preparation, branchEntries, reason, signal } = event;
-    const filtering = reason === "manual" && event.customInstructions === FILTER_REQUEST;
     const automaticFiltering = reason !== "manual" && autoFilterEnabled(branchEntries);
-    if (filtering && (ctx.mode !== "tui" || !ctx.hasUI || compactionMethod(branchEntries) !== "verbatim"))
-      return { cancel: true };
     if (!preparation) return;
     if (signal?.aborted) return;
     if (preparation.messagesToSummarize.length === 0 && preparation.turnPrefixMessages.length === 0) return;
@@ -2198,19 +2218,13 @@ export default function (pi: ExtensionAPI) {
       const excluded = new Set(filteredTurns(branchEntries));
       const keptAsides = new Set(keptAsideTurns(branchEntries));
       const fidelity = { ...turnFidelities(branchEntries) }, slots: TurnSlot[] = [];
-      if (filtering || automaticFiltering) {
+      if (automaticFiltering) {
         const preflags = preflaggedTurns(branchEntries);
         const proposed = new Set([...excluded, ...[...preflags].filter((id) => !keptAsides.has(id))]);
         const choices = filterChoices(branchEntries, [...collectBaseAndSpans(branchEntries).spans, span],
           excluded, preparation.firstKeptEntryId, canonicalRetained, proposed);
-        if (filtering) {
-          const result = await pickFilteredTurns(ctx, choices, signal);
-          if (result === undefined || signal.aborted) return { cancel: true };
-          applyTurnSelection(choices, result, preflags, excluded, keptAsides, fidelity);
-        } else {
-          for (const turn of choices)
-            if (!turn.unavailable && !turn.deferred && proposed.has(turn.id)) excluded.add(turn.id);
-        }
+        for (const turn of choices)
+          if (!turn.unavailable && !turn.deferred && proposed.has(turn.id)) excluded.add(turn.id);
       }
       const filteredTurnIds = [...excluded];
       const evidence = checkpointEvidence(branchEntries, preparation.firstKeptEntryId, ctx.cwd,
@@ -2264,7 +2278,7 @@ export default function (pi: ExtensionAPI) {
       };
     } catch (err) {
       // Never replace a filtered checkpoint with an unfiltered model summary.
-      const preserveFiltering = filtering || automaticFiltering || filteredTurns(branchEntries).length > 0 || Object.keys(turnFidelities(branchEntries)).length > 0;
+      const preserveFiltering = automaticFiltering || filteredTurns(branchEntries).length > 0 || Object.keys(turnFidelities(branchEntries)).length > 0;
       ctx.ui?.notify?.(`transparent-compact: failed to build checkpoint (${errMsg(err)}); ${preserveFiltering ? "compaction cancelled" : "falling back to Pi's summary compaction"}`, "error");
       return preserveFiltering ? { cancel: true } : undefined;
     }

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Simplify `/compact-filtered` to ordinary compaction followed by the shared
+  `/filter-turns` editor. The checkpoint is committed before selection; cancelling
+  the picker leaves that compaction intact. With nothing new to compact, edit the
+  existing checkpoint instead. Failed/cancelled compactions never open controls.
+  Remove the special interactive compaction-hook path and its request sentinel.
+
 - Add whole-turn context modes: `[X] PRUNED`, `[ ] PROSE`, `[○] PROSE+TOOLS`, and
   `[■] FULL`; preserve `[-] LOCKED`. Space retains the prune/restore shortcut;
   `f` cycles modes, including from agent/tool subentries. Preview native content,
@@ -33,8 +39,8 @@
   Explicit keep/restore decisions prevent automatic re-filtering of the same aside.
 
 - Add `/compact-filtered` for optional manual whole-turn filtering in the terminal:
-  tree-like selection, scrollable confirmation, and cancellation without history
-  edits. Replace excluded groups with `[Turn manually filtered]`, remove their
+  ordinary compaction followed by tree-like selection and scrollable confirmation.
+  Cancelling turn edits leaves the completed compaction and original history intact. Replace excluded groups with `[Turn manually filtered]`, remove their
   retained startup-read copies and exclusive file-list paths, and explain the
   marker conditionally in the checkpoint and reorientation. Exclusions persist
   through later verbatim compactions and follow the active branch; original

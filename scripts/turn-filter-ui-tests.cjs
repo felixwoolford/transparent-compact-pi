@@ -121,7 +121,7 @@ module.exports = async function ({ jiti, piRoot }) {
     component.dispose();
     return result;
   } } };
-  await pickFilteredTurns(ctx, turns, new AbortController().signal, "update");
+  await pickFilteredTurns(ctx, turns, new AbortController().signal);
   assert.deepEqual(result, { pruned: ["keep", "pending"], fidelity: {} }, "visual changes preserve whole-turn selection semantics");
   assert.equal(JSON.stringify(turns), original, "rendering never mutates input turns");
   return { selection: selection.map(plain).join("\n"), review: review.map(plain).join("\n") };

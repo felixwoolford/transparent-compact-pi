@@ -8,7 +8,6 @@ export { turnOwners } from "./turn-context.js";
 import { MODE_LABELS, MODE_SYMBOLS } from "./turn-context.js";
 import type { Fidelity, TurnFidelities, TurnMode, TurnSelection } from "./turn-context.js";
 
-export const FILTER_REQUEST = "transparent-compact:filter-turns";
 export const PREFLAG_ENTRY = "transparent-compact:aside-turn";
 export const AUTO_FILTER_ENTRY = "transparent-compact:auto-filter";
 export const FILTER_REVISION_ENTRY = "transparent-compact:filter-revision";
@@ -84,8 +83,7 @@ const displayText = (text: string) => stripVTControlCharacters(text).replace(/[\
 /** Tree-like whole-turn selection followed by a scrollable, complete preview.
  * Subentries are inspection-only: space always toggles their owning user turn.
  */
-export async function pickFilteredTurns(ctx: ExtensionContext, turns: FilterTurn[], signal: AbortSignal,
-  operation: "compact" | "update" = "compact"): Promise<TurnSelection | undefined> {
+export async function pickFilteredTurns(ctx: ExtensionContext, turns: FilterTurn[], signal: AbortSignal): Promise<TurnSelection | undefined> {
   return ctx.ui.custom<TurnSelection | undefined>((tui, theme, kb, done) => {
     const selected = new Set(turns.filter((turn) => turn.selected).map((turn) => turn.id));
     const fidelity: TurnFidelities = Object.fromEntries(turns.filter((turn) => turn.fidelity && !selected.has(turn.id)).map((turn) => [turn.id, turn.fidelity!]));
@@ -223,7 +221,7 @@ export async function pickFilteredTurns(ctx: ExtensionContext, turns: FilterTurn
           ? `${key("↑/↓", "Scroll")}  ${theme.fg("accent", theme.bold("PgUp/PgDn"))}  ${theme.fg("accent", theme.bold("Home/End"))}`
           : `${key("↑/↓", "Move")} ${key("Space", "Prune")} ${key("f", "Mode")} ${key("←/→", "Fold")}`));
         out.push(line(review
-          ? `${key("Enter", operation === "compact" ? "Confirm & compact" : "Confirm & save")}   ${key("Esc", "Back")}`
+          ? `${key("Enter", "Confirm & save")}   ${key("Esc", "Back")}`
           : `${key("Enter", "Review changes")}   ${key("Esc", "Cancel")}`));
         out.push(rule(theme.fg("dim", footer), "bottom"));
         return out.map((text) => truncateToWidth(text, width));
@@ -286,7 +284,7 @@ export async function pickFilteredTurns(ctx: ExtensionContext, turns: FilterTurn
                   ...content, { text: "", kind: "content" }];
               }),
               ...(changes.length ? [] : [{ kind: "note" as const, text: selected.size ? "No changes; previously filtered turns remain excluded."
-                : operation === "compact" ? "No turns selected. Proceed with ordinary verbatim compaction." : "No filtering changes. Keep the current checkpoint." }])];
+                : "No filtering changes. Keep the current checkpoint." }])];
             scroll = 0;
           }
         }

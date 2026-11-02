@@ -95,10 +95,17 @@ sections from memory. Small exact-match edits have no blanket reread requirement
 
 ```text
 /filter-turns       # edit the existing checkpoint; no compaction
-/compact-filtered   # compact more history, choosing turn modes
+/compact-filtered   # ordinary compaction first, then open the same editor
 ```
 
-In the interactive terminal, this opens a framed checklist of user turns, with
+`/compact-filtered` completes an ordinary verbatim compaction, preserving existing
+turn settings, **before** opening the `/filter-turns` editor. Cancelling that editor
+leaves the completed compaction intact. If Pi has nothing new to compact, the command
+opens the existing checkpoint instead. Cancelling compaction itself (including its
+size-cap dialog), or a compaction failure, does not open the editor. No special
+filtering step runs inside the compaction hook.
+
+In the interactive terminal, the editor opens a framed checklist of user turns, with
 a highlighted cursor, action labels and a separate fixed controls area. The review
 step summarizes mode changes and estimated token growth above the content.
 Each choice applies to a user message and everything following it until the next
