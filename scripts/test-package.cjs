@@ -50,6 +50,8 @@ async function main() {
     const extensionPaths = resources.extensions.filter((r) => r.enabled).map((r) => r.path);
     const skillPaths = resources.skills.filter((r) => r.enabled).map((r) => r.path);
     assert.deepEqual(extensionPaths, [path.join(root, "extensions", "index.ts")], "Pi discovers exactly the intended extension");
+    assert.equal(resources.extensions.find((r) => r.enabled).metadata.changelogPath, undefined,
+      "Pi does not register the package changelog for update notices");
     // Exercise Pi's real formatter without starting a TUI or model session.
     const display = Object.create(InteractiveMode.prototype);
     assert.equal(display.getCompactExtensionLabel(extensionPaths[0], {

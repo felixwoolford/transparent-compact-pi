@@ -55,6 +55,7 @@
     "node": ">=22.19.0"
   },
   "pi": {
+    "changelogPath": "",
     "extensions": [
       "./extensions/index.ts"
     ],
