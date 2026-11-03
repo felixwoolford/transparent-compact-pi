@@ -39,8 +39,7 @@
     "test:caphang": "node test.cjs caphang",
     "test:capspans": "node test.cjs capspans",
     "test:package": "node scripts/test-package.cjs",
-    "test:tool-stubs": "node --test experiments/tool-stubs/tests.mjs",
-    "compare:tool-stubs": "node experiments/tool-stubs/compare.mjs"
+    "test:tool-stubs": "node --test scripts/tool-renderer-tests.mjs"
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "1.1.0"

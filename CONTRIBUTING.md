@@ -38,10 +38,11 @@ checks local dependencies and global npm installations.
   visible write payloads, later mutations, context edits, startup reads, and repeated
   compaction. Actual SDK requests cover both retained-source and plan-only tails.
 - Skill validation and agreement with the question-only lookup contract.
-- Compact stub rendering without inline entry locators, head-only command previews,
-  lookup-first framing, and conservative historical output labels. Synthetic
-  regressions cover tiny outputs versus truncated/media results, read/search false positives, deleted
-  scratch payload recovery, repeated compaction, related-entry pagination, reverse
+- Compact stub rendering with shared location IDs, AST-based bash skeletons,
+  short literal previews, positive payload selection, and conservative historical
+  output labels. Synthetic regressions cover tiny outputs versus truncated/media
+  results, read/search false positives, deleted scratch payload recovery, repeated
+  compaction, related-entry pagination, reverse
   results, reused/ambiguous IDs, and branch scoping. These test mechanics, not
   live-model recovery quality.
 - Header/section spoofing resistance and internal lookup tool dispatch.
@@ -67,71 +68,17 @@ runner clears configuration variables in child processes so personal settings
 cannot redirect lookups to real session files.
 
 Individual scripts are `test:integration`, `test:cap`, `test:caphang`,
-`test:capspans`, and `test:package`.
+`test:capspans`, `test:package`, `test:tool-stubs`, and `test:shell-parser`.
+Tool-renderer tests import the production modules directly; no Git history or
+alternate implementation is required. Parser tests verify the bundled build's
+provenance, syntax handling, and isolation from Pi's globals.
 
-### Optional local session-audit replay
+### Rebuilding the bundled parser
 
-To measure file-list footprint on explicitly supplied session history:
-
-```bash
-node scripts/file-evidence-replay.cjs /path/to/session.jsonl
-```
-
-This is a read-only audit, not the agent's compaction-recovery workflow or part of
-`npm test`. It rebuilds both versions at the recorded cut points, with a
-131072-token model window and a default 25% cap; recorded session cap settings
-still apply. All spans are re-rendered, rather than inheriting old tool signatures.
-The default baseline is the 0.8.7 commit; set `TC_BASELINE_REF` to override it.
-Inputs are not modified or copied into fixtures. Results measure deterministic
-formatting and evidence labels, not live-model behaviour. Do not commit private
-sessions or sensitive audit output.
-
-For tool-stub comparisons, use the separate read-only replay:
-
-```bash
-TC_BASELINE_REF=81aa585e node scripts/tool-stub-replay.cjs /path/to/session.jsonl
-```
-
-Choose the pre-change baseline commit (`HEAD` by default). This rebuilds both
-renderers at recorded active-branch cut points with capping disabled, checks prose
-and line preservation plus tool-call coverage, and writes before/after checkpoints
-and a JSON report into a private temporary directory
-(or `--out DIR`). Artifacts contain session content: do not commit or share them
-without approval. Measurements are characters, not tokens or live-model outcomes;
-recorded tool commands are never executed and input files remain byte-identical.
-
-For compaction/cap timing, including valid doubled history:
-
-```bash
-node scripts/compaction-benchmark.cjs --runs 7 /path/to/session.jsonl
-```
-
-This optional benchmark rebuilds recorded active-branch cuts cap-off, independently
-for `HEAD` and the worktree, so earlier spans have the respective renderer's
-canonical data. It then times one additional compaction with the cap off, at
-131072 characters (25% of a simulated 131072-token context), and at 8000 characters.
-The pure progressive cap is timed separately, including a mild 5% reduction case.
-Reported hook times exclude runtime import, file loading, history reconstruction,
-projection/preparation, and persistence; reconstruction/preparation times are
-reported separately. Each case has two warmups and the requested measured runs.
-
-The 2× case links two in-memory copies with unique entry and tool-call IDs and
-remapped cut/context-edit targets, rather than naively appending duplicate-ID
-JSONL. Assertions check identical uncapped conversation prose and line counts
-across renderers (tool previews may differ), twice the emitted tool calls,
-immutable canonical metadata, and unchanged source files. Set `TC_BASELINE_REF`
-to compare a specific commit; the default is `HEAD`. The report
-includes source hashes, environment, raw timing samples, sizes, and flags, but no
-checkpoint contents. It is written to a private temporary directory (or `--out DIR`).
-No sessions are opened through SessionManager and no recorded tools/models run.
-Process peak RSS reflects the entire audit harness, not incremental cap memory.
-
-Add `--headroom` to evaluate the same 131072-character cap at every recorded cut.
-The report then records the first presentation tightening, first destructive cap,
-and extra recorded rounds before destruction for each renderer. These are replayed
-cut intervals, not a prediction of live trigger times: tighter checkpoints could
-also change when Pi next needs to compact. The extra audit is excluded from timed
-hook samples and reported separately within setup time.
+Ordinary extension development and tests need no Go installation. Only changes
+to the parser bridge or its pinned upstream/toolchain versions require rebuilding
+WASM. See [the parser build contract](docs/DESIGN.md#deterministic-checkpoint) for
+`npm run build:shell-parser` and the required Go version.
 
 ## Manual check
 
@@ -154,5 +101,5 @@ limits. Put evaluation results in `docs/` and distinguish integration tests from
 model-quality experiments. Historical pilot figures must remain labeled with the
 implementation actually evaluated.
 
-The source is loaded as TypeScript by Pi; no build step is required. Contributions
-are distributed under the project's MIT license.
+The extension source is loaded as TypeScript by Pi; the parser assets are already
+bundled. Contributions are distributed under the project's MIT license.

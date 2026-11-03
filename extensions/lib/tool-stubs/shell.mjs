@@ -14,7 +14,9 @@ const SCRIPT_FLAGS = new Set(['-c', '-e', '--eval']);
 const GIT_PATH_COMMANDS = new Set(['add', 'diff', 'status', 'restore', 'rm', 'mv', 'ls-files', 'checkout']);
 const DATA_FLAGS = new Set(['-d', '--data', '--data-binary', '--data-raw', '--data-urlencode']);
 const INTERPRETER = /^(?:python[\d.]*|node|ruby|perl|bash|sh)$/;
-export const looksLikeLocation = value => !!value && !/[\n\r\x00]/.test(value) &&
+const MAX_AST_NODES = 2048;
+const MAX_BODY_MENTIONS = 8;
+const looksLikeLocation = value => !!value && !/[\n\r\x00]/.test(value) &&
   (/^[a-z][a-z\d+.-]*:\/\//i.test(value) ||
     (!/[;|<>()=:]/.test(value) && (/^(?:\.{1,2}(?:\/|$)|\/|~\/)/.test(value) ||
       /\//.test(value) || /\.[a-z][a-z\d_-]{0,12}$/i.test(value))));
@@ -44,21 +46,17 @@ function literal(word) {
 }
 
 /** Pure static description: never runs commands, opens paths, or expands globs. */
-export async function shellSkeleton(command, locations, options = {}) {
-  const { maxBytes = 262144, maxNodes = 2048, maxMentions = 8, parseShell = parse } = options;
-  const ast = await parseShell(command, { maxBytes });
+export async function shellSkeleton(command, locations) {
+  const ast = await parse(command);
   const source = Buffer.from(command);
-  const cues = [], refs = new Set();
+  const refs = new Set();
   let visited = 0;
-  const tick = () => { if (++visited > maxNodes) throw new Error('AST node budget exceeded'); };
-  const cue = (kind, value) => { cues.push({ kind, value }); return value; };
+  const tick = () => { if (++visited > MAX_AST_NODES) throw new Error('AST node budget exceeded'); };
   const location = (value, state, kind = 'path') => {
     const entry = locations.ref(value, state.cwd, kind);
     refs.add(entry.id);
-    cues.push({ kind: entry.kind, value, display: entry.display, id: entry.id });
     return entry.id;
   };
-  const operator = value => cue('operator', value);
   const join = statements => statements.filter(Boolean).join('; ');
   const copy = state => ({ ...state });
 
@@ -68,10 +66,10 @@ export async function shellSkeleton(command, locations, options = {}) {
     for (const match of body.slice(0, 65536).matchAll(/(["'])([^"'\\\n]*(?:\\.[^"'\\\n]*)*)\1/g)) {
       const value = match[2];
       if (looksLikeLocation(value)) found.add(value);
-      if (found.size > maxMentions) break;
+      if (found.size > MAX_BODY_MENTIONS) break;
     }
-    const selected = [...found].slice(0, maxMentions).map(value => location(value, state));
-    return selected.length ? ` mentions ${selected.join(',')}${found.size > maxMentions ? ',…' : ''}` : '';
+    const selected = [...found].slice(0, MAX_BODY_MENTIONS).map(value => location(value, state));
+    return selected.length ? ` mentions ${selected.join(',')}${found.size > MAX_BODY_MENTIONS ? ',…' : ''}` : '';
   }
 
   function nested(node, state) {
@@ -91,12 +89,12 @@ export async function shellSkeleton(command, locations, options = {}) {
     const values = words.map(literal);
     const name = values[0] === null ? '[dynamic command]' : path.posix.basename(values[0] ?? '[assign]');
     if (name.length > 160) throw new Error('command name exceeds display budget');
-    let text = cue('command', name);
+    let text = name;
     if (values[0]?.includes('/')) text += `[${location(values[0], state)}]`;
     if (name === 'timeout' && /^\d+(?:\.\d+)?[smhd]?$/.test(values[1] ?? '') && words.length > 2)
       return `${text} ${call({ ...node, Args: words.slice(2) }, state)}`;
     if (name === 'uv' && values[1] === 'run' && values[2] && !values[2].startsWith('-'))
-      return `${text} ${cue('subcommand', 'run')} ${call({ ...node, Args: words.slice(2) }, state)}`;
+      return `${text} run ${call({ ...node, Args: words.slice(2) }, state)}`;
     if (name === 'env' && values[1] && !values[1].startsWith('-')) {
       const start = values.findIndex((value, index) => index > 0 && value && !value.includes('='));
       if (start > 0) return `${text} ${call({ ...node, Args: words.slice(start) }, state)}`;
@@ -136,7 +134,7 @@ export async function shellSkeleton(command, locations, options = {}) {
         continue;
       }
       if (needsSubcommand && value && /^[\w-]+$/.test(value)) {
-        text += ` ${cue('subcommand', value)}`;
+        text += ` ${value}`;
         needsSubcommand = false;
         verb = value;
       } else if (pattern) pattern = false;
@@ -183,16 +181,16 @@ export async function shellSkeleton(command, locations, options = {}) {
         const expansions = nested(redirect.Word, initial);
         const fd = redirect.N?.Value ?? '';
         if (redirect.Op === '<<<') {
-          text += ` ${operator('<<<')}[stdin${mentions(value ?? raw, initial)}]`;
+          text += ` <<<[stdin${mentions(value ?? raw, initial)}]`;
         } else {
           const destination = /[<>]&/.test(redirect.Op) && /^\d+-?$|^-$/.test(value ?? '')
             ? value : value === null && expansions.length ? '[dynamic]' : location(value ?? raw, initial);
-          text += ` ${operator(fd + redirect.Op)}${destination}`;
+          text += ` ${fd}${redirect.Op}${destination}`;
         }
         for (const expansion of expansions) text += ` ${expansion}`;
       }
     }
-    if (node.Background) text += ` ${operator('&')}`;
+    if (node.Background) text += ' &';
     return text;
   }
 
@@ -211,7 +209,7 @@ export async function shellSkeleton(command, locations, options = {}) {
         // Track that lexical success-path cwd; no claim about observed execution.
         state.cwd = node.Op === '&&' ? rightState.cwd : leftState.cwd === rightState.cwd ? leftState.cwd : null;
         if (node.Op === '|' || node.Op === '|&') state.cwd = before.cwd;
-        return `${left} ${operator(node.Op)} ${right}`;
+        return `${left} ${node.Op} ${right}`;
       }
       case 'Subshell': return `(${list(node.Stmts, copy(state))})`;
       case 'Block': return `{${list(node.Stmts, state)}}`;
@@ -249,5 +247,5 @@ export async function shellSkeleton(command, locations, options = {}) {
   }
 
   const text = list(ast.Stmts, { cwd: locations.cwd });
-  return { text, cues, refs: [...refs], nodes: visited };
+  return { text, refs: [...refs] };
 }

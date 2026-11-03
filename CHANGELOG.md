@@ -11,6 +11,8 @@
 - Bundle the official mvdan/sh parser and typed-JSON encoder as WebAssembly,
   using a small in-package bridge. No third-party npm parser wrapper, runtime
   downloads, Go installation, or external shfmt executable is required.
+- Remove version-comparison harnesses and comparison-only runtime diagnostics;
+  test tool rendering directly against production modules.
 
 ## 0.10.0
 

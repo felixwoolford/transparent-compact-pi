@@ -78,11 +78,11 @@ async function main() {
         ...['LICENSE.Go', 'LICENSE.mvdan-sh', 'NOTICE.md', 'PATENTS.Go', 'build.json', 'go.mod', 'go.sum', 'main.go', 'shell.wasm', 'wasm_exec.js']
           .map(file => `extensions/lib/tool-stubs/parser/${file}`),
         'extensions/lib/turn-context.ts', 'extensions/lib/turn-filter.ts'].sort(), 'package ships the live renderer, parser, source, and licenses');
-    assert(![...packedPaths].some((p) => p.startsWith("source/")), "package has no obsolete source tree");
-    assert(![...packedPaths].some((p) => p.startsWith('experiments/')), 'live compaction does not depend on experimental files');
+    assert.deepEqual([...packedPaths].filter(p => /^(?:source|experiments|scripts|stub-overhaul|node_modules)\//.test(p) || p === 'test.cjs'), [],
+      'package excludes development harnesses, tests, dependencies, and obsolete source');
 
     // Materialize exactly the npm file list: no node_modules, separate parser
-    // package, Go toolchain, or experiment tree. Exercise the real Pi
+    // package, Go toolchain, or development tooling. Exercise the real Pi
     // loader AND an actual AST compaction from that isolated package root.
     const isolated = path.join(temp, 'packed');
     for (const file of packedPaths) {
