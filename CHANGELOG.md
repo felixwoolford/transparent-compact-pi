@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.11.0
+
+- Use shared location IDs and AST-based skeletons for long bash tool calls.
+  Keep short commands literal and unknown tools generic; remove non-payload
+  arguments from known tools. Preserve historical outcome observations.
+- Keep the location dictionary near the checkpoint end, with stable branch-local
+  IDs across compaction, resume, fork and turn-mode changes. Count dictionary
+  cost under the cap and omit unused definitions after filtering or trimming.
+- Include the shell parser as a runtime dependency and retain a pinned-baseline
+  offline comparison harness for further evaluation.
+
 ## 0.10.0
 
 - Clarify the context readout: label delta as net, show measured tail inclusion,

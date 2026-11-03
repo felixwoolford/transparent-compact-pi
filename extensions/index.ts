@@ -33,7 +33,10 @@ import type { Message as AiMessage, Model, Tool as AiTool } from "@earendil-work
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { buildSessionProjection, SessionManager } from "@earendil-works/pi-coding-agent";
 import type { ExtensionAPI, ExtensionContext, ModelRegistry, SessionEntry } from "@earendil-works/pi-coding-agent";
-import { capSpans, commandPreview, renderToolLine, renderToolStub, NORMAL_PREVIEW_CHARS, TIGHTENED_ATTR } from "./lib/checkpoint-cap.js";
+import { capSpans, renderToolLine, renderToolStub, NORMAL_PREVIEW_CHARS, TIGHTENED_ATTR } from "./lib/checkpoint-cap.js";
+import { ToolRenderer, TOOL_DISPLAY_EXPLANATION } from "./lib/tool-stubs/renderer.mjs";
+import { checkpointPath } from "./lib/tool-stubs/display.mjs";
+import { Locations } from "./lib/tool-stubs/locations.mjs";
 import type { ToolLines, ToolStub } from "./lib/checkpoint-cap.js";
 import { FILTER_EXPLANATION, PREFLAG_ENTRY, AUTO_FILTER_ENTRY, FILTER_REVISION_ENTRY, autoFilterEnabled, preflaggedTurns,
   filterSpans, pickFilteredTurns, turnOwners } from "./lib/turn-filter.js";
@@ -472,67 +475,6 @@ function branchToTranscript(entries: SessionEntry[]): { lines: string[]; index: 
 // Mechanical summary (what replaces the model summary in the session)
 // ============================================================================
 
-// Display-only shortening: never change raw arguments or resolve symlinks.
-function checkpointPath(value: string, cwd: string): string {
-  const prefix = cwd.endsWith(path.sep) ? cwd : cwd + path.sep;
-  if (value === cwd) return ".";
-  return value.startsWith(prefix) ? value.slice(prefix.length) : value;
-}
-
-function checkpointCommand(command: string, cwd: string): string {
-  const escaped = cwd.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  // Match complete path prefixes, not sibling directories or URL fragments.
-  return command.replace(new RegExp(`(^|[\\s"'=<>|;&(])${escaped}(?=$|[/\\s"'<>|;&)])`, "g"), "$1.");
-}
-
-function argumentSnippet(value: unknown): string {
-  let s: string;
-  try {
-    s = JSON.stringify(value) ?? String(value);
-  } catch {
-    s = String(value);
-  }
-  return s.length > cfg.argSnippetChars ? `${s.slice(0, cfg.argSnippetChars)}…` : s;
-}
-
-function toolSignature(name: string, args: Record<string, unknown> | undefined, cwd: string): ToolStub {
-  const a = args ?? {};
-  if (!["read", "write", "edit", "bash"].includes(name))
-    return { prefix: `${name}(${Object.entries(a).map(([k, v]) => `${k}=${argumentSnippet(v)}`).join(", ")})`, suffix: "" };
-  const parts: string[] = [];
-  let command: ToolStub["command"];
-  const fileTool = ["read", "write", "edit"].includes(name) && typeof a.path === "string";
-  let base = fileTool ? `${name} ${JSON.stringify(checkpointPath(a.path as string, cwd))}` : name;
-  const range = name === "read" && fileTool &&
-    (a.offset === undefined || (Number.isSafeInteger(a.offset) && (a.offset as number) > 0)) &&
-    (a.limit === undefined || (Number.isSafeInteger(a.limit) && (a.limit as number) > 0));
-  if (range && (a.offset !== undefined || a.limit !== undefined)) {
-    const start = (a.offset as number | undefined) ?? 1;
-    const end = a.limit === undefined ? "" : start + (a.limit as number) - 1;
-    base += `:${start}-${end}`; // Requested range, not a claim about returned lines.
-  }
-  for (const [k, v] of Object.entries(a)) {
-    if (fileTool && k === "path") continue;
-    if (range && (k === "offset" || k === "limit")) continue;
-    if (name === "bash" && k === "timeout") continue;
-    if (name === "bash" && k === "command" && typeof v === "string")
-      command = commandPreview(JSON.stringify(checkpointCommand(v, cwd)));
-    else if (name === "write" && k === "content" && typeof v === "string")
-      parts.push(`(${v.length} chars)`);
-    else if (name === "edit" && k === "edits" && Array.isArray(v))
-      parts.push(`×${v.length}`);
-    else if (name === "edit" && (k === "oldText" || k === "newText") && typeof v === "string")
-      parts.push(`${k}=<${v.length} chars>`);
-    else parts.push(`${k}=${argumentSnippet(v)}`);
-  }
-  return command ? { prefix: `${base} `, command, suffix: parts.length ? ` ${parts.join(" ")}` : "" }
-    : { prefix: [base, ...parts].join(" "), suffix: "" };
-}
-
-function toolCallSignature(name: string, args: Record<string, unknown> | undefined, cwd: string): string {
-  return renderToolStub(toolSignature(name, args, cwd));
-}
-
 // Conservative lexical categories for selected output observations. These do
 // not parse shell syntax or establish whether a command succeeded.
 function commandHints(command: string): { tests: boolean; network: boolean; historical: boolean } {
@@ -613,7 +555,7 @@ function bashOutputLabel(command: string, result: Record<string, any>): string {
   return labels.join("; ");
 }
 
-function summarizeMessages(messages: AgentMessage[], cwd: string, owners?: (string | null)[]): TurnSpan {
+async function summarizeMessages(messages: AgentMessage[], renderer: ToolRenderer, owners?: (string | null)[]): Promise<TurnSpan> {
   const results = pairedToolResults(messages);
   const lines: string[] = [], turnIds: (string | null)[] = [];
   const tools: ToolLines = { version: 2, lines: [] };
@@ -637,9 +579,7 @@ function summarizeMessages(messages: AgentMessage[], cwd: string, owners?: (stri
             const status = typeof result?.isError !== "boolean" ? " [unknown]" : result.isError ? " [tool error]" : "";
             const command = name === "bash" && typeof args.command === "string" ? args.command : undefined;
             const label = result && command !== undefined ? bashOutputLabel(command, result) : "";
-            const stub = toolSignature(name, args, cwd);
-            stub.suffix += status + (label ? ` → ${label}` : "");
-            calls.push(stub);
+            calls.push(await renderer.render(name, args, status + (label ? ` → ${label}` : "")));
           }
           // thinking blocks: removed by design (kept in the session)
         }
@@ -653,14 +593,18 @@ function summarizeMessages(messages: AgentMessage[], cwd: string, owners?: (stri
       case "toolResult":
         // removed by design (kept in the session)
         break;
-      case "bashExecution":
-        lines.push(`[BashExecution]: ${toolCallSignature("bash", { command: String(m.command ?? "") }, cwd)} [output removed]`);
+      case "bashExecution": {
+        const calls = [await renderer.render("bash", { command: String(m.command ?? "") }, " [output removed]")];
+        const prefix = "[BashExecution]: ";
+        tools.lines.push({ index: lines.length, calls, mergeable: false, prefix });
+        lines.push(renderToolLine(calls, NORMAL_PREVIEW_CHARS, prefix));
         break;
+      }
       case "custom":
         // Our instruction envelope is regenerated, not conversation prose.
         // Keep originals in raw history, but never carry old checklists into spans.
         if (m.customType !== REORIENT_MESSAGE)
-          lines.push(`[Custom message]: ${toolCallSignature("custom", { type: m.customType }, cwd)} [content removed — use context_lookup]`);
+          lines.push(`[Custom message]: ${renderToolStub(await renderer.render("custom", { type: m.customType }))} [content removed — use context_lookup]`);
         break;
       case "branchSummary":
       case "compactionSummary":
@@ -915,6 +859,7 @@ function spanOpen(n: number, compactedAt: string, reason: string, covers?: strin
  * base, oldest first. Spans before the base are deliberately NOT re-rendered
  * (the base is opaque; the session holds the raw history).
  */
+interface LocationEntry { id: string; key: string; kind: string; value: string; display: string }
 type StoredSpan = TurnSpan & { at: string; reason: string; from?: string; to?: string };
 
 function collectBaseAndSpans(branchEntries: SessionEntry[]): {
@@ -971,6 +916,10 @@ interface FilterRevision {
   keptAsideTurnIds: string[];
   fidelity?: TurnFidelities;
   slots?: TurnSlot[];
+}
+
+function checkpointLocations(entries: SessionEntry[]): LocationEntry[] {
+  return (latestVerbatimCompaction(entries)?.details as { locations?: LocationEntry[] } | undefined)?.locations ?? [];
 }
 
 function latestFilterRevision(entries: SessionEntry[]) {
@@ -1208,7 +1157,8 @@ async function buildMechanicalSummary(opts: {
   now: string;
   spanLines: string[]; // this compaction's own span, un-capped
   revisedAt?: string; // rebuild existing spans only; no new compaction or boundary
-  spanTools?: ToolLines; // versioned, bounded display records; no raw payloads
+  spanTools?: ToolLines; // display records; no raw command/program payloads
+  locations?: LocationEntry[];
   spanTurnIds?: (string | null)[];
   filteredTurnIds?: string[];
   fidelity?: TurnFidelities;
@@ -1239,6 +1189,11 @@ async function buildMechanicalSummary(opts: {
     lines: opts.spanLines, tools: opts.spanTools, turnIds: opts.spanTurnIds,
   }], new Set(opts.filteredTurnIds)), fidelity);
   const allSpans = rendered.spans;
+  const locations = new Locations(opts.cwd, opts.locations ?? checkpointLocations(opts.branchEntries));
+  const fileIds = [...opts.readFiles, ...opts.modifiedFiles].map((file) => locations.ref(file, opts.cwd, 'path', true).id);
+  const dictionary = (ids: string[]) => locations.render(new Set([...fileIds, ...ids]));
+  const dictionaryCost = (ids: string[]) => { const text = dictionary(ids); return text ? text.length + 2 : 0; };
+  const allLocationIds = allSpans.flatMap((span) => span.tools?.lines.flatMap((line) => line.calls.flatMap((call) => call.locations ?? [])) ?? []);
   const coversOf = (s: { from?: string; to?: string }): string | undefined => (s.from && s.to ? `${s.from} → ${s.to}` : undefined);
 
   // Size guard: the budget covers the conversation section plus retained reads.
@@ -1264,15 +1219,17 @@ async function buildMechanicalSummary(opts: {
   overhead += closingLine.length + 2;
   const lines = allSpans.map((s) => s.lines);
   const lineChars = lines.reduce((total, span) => total + span.reduce((n, line) => n + line.length + 1, 0), 0);
-  const maxChars = await opts.chooseCap({ overhead, lineChars });
+  const maxChars = await opts.chooseCap({ overhead: overhead + dictionaryCost(allLocationIds), lineChars });
   if (maxChars === null) return undefined;
   if (maxChars !== undefined && base && base.summary.length > maxChars)
     opts.notify(`transparent-compact: the base block alone is ${base.summary.length.toLocaleString()} chars (budget ${maxChars.toLocaleString()}); it is kept un-capped`);
   if (maxChars !== undefined && retainedReads.length > maxChars)
     opts.notify(`transparent-compact: retained startup reads alone are ${retainedReads.length.toLocaleString()} chars (budget ${maxChars.toLocaleString()}); they are kept un-capped`);
+  if (maxChars !== undefined && dictionaryCost([]) > maxChars)
+    opts.notify(`transparent-compact: location definitions required by file lists exceed the budget; they are kept to avoid dangling references`);
   if (maxChars !== undefined && nativeChars > maxChars)
     opts.notify(`transparent-compact: full-fidelity turns alone are ~${nativeChars.toLocaleString()} estimated chars (budget ${maxChars.toLocaleString()}); they are kept un-capped. Only PROSE can be trimmed.`);
-  const capped = capSpans(allSpans, maxChars === undefined ? undefined : Math.max(500, maxChars - overhead));
+  const capped = capSpans(allSpans, maxChars === undefined ? undefined : Math.max(500, maxChars - overhead), dictionaryCost);
   if (opts.presentation) opts.presentation.shortened = capped.trimmed.some(Boolean) || capped.tightened.some(Boolean);
 
   const blocks: string[] = [];
@@ -1302,7 +1259,7 @@ async function buildMechanicalSummary(opts: {
   }
   parts.push(`- Latest: ${opts.now} (trigger: ${opts.reason}, ~${opts.tokensBefore.toLocaleString()} tokens before compaction)`);
   if (opts.revisedAt) parts.push(`${REVISION_NOTE_PREFIX}${opts.revisedAt}. No additional history was compacted; the verbatim boundary is unchanged.`);
-  parts.push("- In the compacted spans, user and assistant prose is kept verbatim, subject to budget trimming. Retained prose is a record of what was said, not verification of its claims. Tool signatures are display notation, not replayable shell commands: paths under the working directory become relative (`.` in commands); read ranges are requested lines; write/edit payloads become sizes/counts. New bash previews keep the first 160 encoded characters, followed by … when truncated, with escaped newlines. Thinking and most output are removed; selected output observations remain after →.");
+  parts.push(TOOL_DISPLAY_EXPLANATION);
   parts.push("- [tool error] means the result was flagged as an error; [unknown] means no safely matched result/status. Unlabelled does NOT establish exit 0 or passing tests. → exit N is a reported shell status; output: quotes/extracts selected output, not an inferred verdict. Everything shown is historical. Legacy [ok] only means not flagged as a tool error; legacy calls without status are unknown.");
   parts.push("- Newly compacted custom messages are kept only as type stubs (long types abbreviated); their content is removed and remains recoverable in the session through context_lookup. Stored canonical spans are unchanged; their presentation may tighten under the cap.");
   parts.push(
@@ -1330,7 +1287,7 @@ async function buildMechanicalSummary(opts: {
         ? "startup read output retained in checkpoint or tail; may be partial"
         : nativeReadPaths.has(key) ? "historical read output retained in a full-fidelity turn; re-read for current contents"
         : modified && knownTail ? "no read-tool output in tail" : undefined);
-      return `${checkpointPath(file, opts.cwd)}${label ? ` (${label})` : ""}`;
+      return `${locations.ref(file, opts.cwd, 'path', true).id}${label ? ` (${label})` : ""}`;
     };
     parts.push("", FILE_LIST_EXPLANATION);
     if (opts.readFiles.length > 0)
@@ -1338,6 +1295,8 @@ async function buildMechanicalSummary(opts: {
     if (opts.modifiedFiles.length > 0)
       parts.push(`<modified-files note="modified in compacted history">\n${opts.modifiedFiles.map((file) => fileLine(file, true)).join("\n")}\n</modified-files>`);
   }
+  const locationTable = dictionary(capped.locationIds);
+  if (locationTable) parts.push("", locationTable);
   parts.push("");
   parts.push(EVIDENCE_BOUNDARY_RULE);
   parts.push("");
@@ -2278,7 +2237,9 @@ export default function (pi: ExtensionAPI) {
       const msgTs = (m: AgentMessage): unknown => (m as unknown as { timestamp?: unknown }).timestamp;
       const spanFrom = toIso(msgTs(allMessages[0]));
       const spanTo = toIso(msgTs(allMessages[allMessages.length - 1]));
-      const span = summarizeMessages(allMessages, ctx.cwd, preparedTurnOwners(branchEntries, allMessages));
+      const renderer = new ToolRenderer(ctx.cwd, { entries: checkpointLocations(branchEntries) });
+      for (const file of [...canonicalReadFiles, ...canonicalModifiedFiles]) renderer.locations.ref(file, ctx.cwd, 'path', true);
+      const span = await summarizeMessages(allMessages, renderer, preparedTurnOwners(branchEntries, allMessages));
       const spanLines = span.lines;
 
       // 3) Freeze startup references after the second user prompt, then carry
@@ -2305,6 +2266,7 @@ export default function (pi: ExtensionAPI) {
         now: nowIso,
         spanLines,
         spanTools: span.tools,
+        locations: renderer.locations.entries,
         spanTurnIds: span.turnIds,
         filteredTurnIds, fidelity, slots,
         spanFrom,
@@ -2335,6 +2297,7 @@ export default function (pi: ExtensionAPI) {
             readFiles: canonicalReadFiles,
             modifiedFiles: canonicalModifiedFiles,
             startupReads: canonicalRetained,
+            locations: renderer.locations.entries,
             ...(filteredTurnIds.length ? { filteredTurnIds } : {}),
             ...(keptAsides.size ? { keptAsideTurnIds: [...keptAsides] } : {}),
             ...(Object.keys(fidelity).length ? { fidelity, slots } : {}),

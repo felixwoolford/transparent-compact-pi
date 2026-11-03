@@ -16,7 +16,8 @@ async function main() {
   assert(manifest.keywords.includes("pi-package"));
   assert.deepEqual(manifest.pi.extensions, ["./extensions/index.ts"]);
   assert.deepEqual(manifest.pi.skills, ["./skills/context-retrieval"]);
-  assert(!manifest.dependencies, "host-provided runtime packages must not be bundled");
+  assert.deepEqual(manifest.dependencies, { '@questi0nm4rk/shell-ast': '0.8.0' }, 'only the shell parser is a runtime dependency');
+  for (const host of Object.keys(manifest.peerDependencies)) assert(!manifest.dependencies[host], 'host runtime packages stay peer dependencies');
 
   const packResult = JSON.parse(execFileSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], {
     cwd: root,
@@ -70,8 +71,43 @@ async function main() {
     assert.equal(skills.skills[0].name, "context-retrieval");
     assert.deepEqual(skills.diagnostics, []);
     assert.deepEqual([...packedPaths].filter((p) => p.startsWith("extensions/")).sort(),
-      ["extensions/index.ts", "extensions/lib/checkpoint-cap.ts", "extensions/lib/turn-context.ts", "extensions/lib/turn-filter.ts"], "package ships one extension entry and its helper modules, with no wrapper");
+      ['extensions/index.ts', 'extensions/lib/checkpoint-cap.ts',
+        'extensions/lib/tool-stubs/display.mjs', 'extensions/lib/tool-stubs/inputs.mjs',
+        'extensions/lib/tool-stubs/locations.mjs', 'extensions/lib/tool-stubs/renderer.mjs', 'extensions/lib/tool-stubs/shell.mjs',
+        'extensions/lib/turn-context.ts', 'extensions/lib/turn-filter.ts'], 'package ships the live renderer and all its helpers');
     assert(![...packedPaths].some((p) => p.startsWith("source/")), "package has no obsolete source tree");
+    assert(![...packedPaths].some((p) => p.startsWith('experiments/')), 'live compaction does not depend on experimental files');
+
+    // Materialize exactly the npm file list plus the published runtime parser,
+    // with no project devDependencies or experiment tree. Exercise the real Pi
+    // loader AND an actual AST compaction from that isolated package root.
+    const isolated = path.join(temp, 'packed');
+    for (const file of packedPaths) {
+      const target = path.join(isolated, file);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.copyFileSync(path.join(root, file), target);
+    }
+    const parserDir = 'node_modules/@questi0nm4rk/shell-ast';
+    fs.cpSync(path.join(root, parserDir), path.join(isolated, parserDir), { recursive: true });
+    assert(fs.existsSync(path.join(isolated, parserDir, 'dist/shell-ast.wasm')));
+    assert(!fs.existsSync(path.join(isolated, 'node_modules/@earendil-works/pi-coding-agent')));
+    const isolatedLoad = await loadExtensions([path.join(isolated, 'extensions/index.ts')], isolated);
+    assert.deepEqual(isolatedLoad.errors, []);
+    const message = (id, value, parentId = null) => ({ type: 'message', id, parentId, timestamp: '2026-01-01T00:00:00.000Z', message: { timestamp: 0, ...value } });
+    const branch = [message('u', { role: 'user', content: 'Inspect files' }),
+      message('a', { role: 'assistant', content: [{ type: 'toolCall', id: 'bash', name: 'bash', arguments: {
+        command: 'cd src && cat config.json | grep needle; ' + 'cat other/file.txt; '.repeat(15), background: true,
+      } }] }, 'u'), message('tail', { role: 'user', content: 'Retained tail' }, 'a'),
+      { type: 'custom', id: 'cap', parentId: 'tail', customType: 'transparent-compact:cap-compaction', data: { mode: 'off', budget: { unit: 'chars', value: 80000 } } }];
+    const packedHandler = isolatedLoad.extensions[0].handlers.get('session_before_compact')[0];
+    const packedResult = await packedHandler({ branchEntries: branch, reason: 'manual', signal: new AbortController().signal,
+      preparation: { messagesToSummarize: branch.slice(0, 2).map(entry => entry.message), turnPrefixMessages: [], firstKeptEntryId: 'tail', tokensBefore: 1000,
+        fileOps: { read: new Set(), written: new Set(), edited: new Set() } } },
+      { cwd: '/sandbox', sessionManager: { getBranch: () => branch }, model: { contextWindow: 131072 }, hasUI: false, ui: { notify() {} } });
+    assert(packedResult?.compaction?.summary.includes('bash{'), 'packed install can load WASM and generate skeletons');
+    assert(packedResult.compaction.details.locations.some(entry => entry.display === 'src/config.json'));
+    assert(!packedResult.compaction.summary.includes('background='));
+    assert(packedResult.compaction.summary.includes('</locations>'));
     console.log("PACKAGE TEST OK — manifest, packed resources, package-only label, real Pi loader, session lookup, and bundled skill");
   } finally {
     fs.rmSync(temp, { recursive: true, force: true });

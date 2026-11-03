@@ -18,6 +18,10 @@ module.exports = function snapshotExtension(repo, ref, destination) {
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.writeFileSync(target, git(["show", `${commit}:${file}`]));
   }
+  // Runtime parser imports in ESM helpers resolve relative to the snapshot.
+  // Reuse installed dependencies without copying them into versioned source.
+  const modules = path.join(repo, 'node_modules');
+  if (fs.existsSync(modules)) fs.symlinkSync(modules, path.join(destination, 'node_modules'), 'junction');
   const entryPath = path.join(destination, "extensions", "index.ts");
   if (!fs.existsSync(entryPath)) throw new Error(`Baseline ${commit} has no extensions/index.ts`);
   return { commit, entryPath };

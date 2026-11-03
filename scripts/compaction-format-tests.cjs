@@ -2,6 +2,7 @@
 
 const assert = require("node:assert/strict");
 const path = require("node:path");
+const { locationId, resolvedSummary } = require('./location-test-helpers.cjs');
 
 module.exports = async function ({ ext, SessionManager, root, compact, makeContext, assistant, toolCall, text, user }) {
   console.log("== Compact signatures: relative paths, payload sizes, and 160-character head-only previews ==");
@@ -61,33 +62,37 @@ module.exports = async function ({ ext, SessionManager, root, compact, makeConte
   ], { fileOps: { read: new Set([path.join(cwd, "docs/spec.md")]),
     written: new Set([path.join(cwd, "src/out.ts")]), edited: new Set() } });
   const stubs = c.details.span.lines.filter((s) => s.startsWith("[Tools]:")).join("\n");
+  const id = (file) => locationId(c, file, cwd);
   for (const signature of [
-    'read "src/example.ts":12-41',
-    `read ${JSON.stringify(longPath)}`,
-    `read ${JSON.stringify(cwd + "-sibling/file.ts")}`,
-    'read "../relative-file.ts"', 'read "."',
-    `write "src/out.ts" (${content.length} chars)`,
-    'edit "src/out.ts" ×2',
-    `edit "src/out.ts" oldText=<${oldText.length} chars> newText=<${newText.length} chars>`,
-    'edit "empty.ts" ×0',
-    'edit "malformed.ts" edits={"unexpected":"kept generically"}',
+    `read ${id('src/example.ts')}:12-41`,
+    `read ${id(longPath)}`,
+    `read ${id(cwd + '-sibling/file.ts')}`,
+    `read ${id('../relative-file.ts')}`, `read ${id('.')}`,
+    `write ${id('src/out.ts')} (${content.length} chars)`,
+    `edit ${id('src/out.ts')} ×2`,
+    `edit ${id('src/out.ts')} oldText=<${oldText.length} chars> newText=<${newText.length} chars>`,
+    `edit ${id('empty.ts')} ×0`,
+    `edit ${id('malformed.ts')} [unknown]`,
   ]) assert(stubs.includes(signature), signature);
+  assert(!stubs.includes('kept generically'), 'malformed known payloads do not expose arbitrary arguments');
   for (const [command, expected] of commands) {
     const encoded = JSON.stringify(expected);
     const snippet = encoded.length > 160 ? encoded.slice(0, 160) + "…" : encoded;
-    assert(stubs.includes(`bash ${snippet} [unknown]`), command);
+    if (encoded.length <= 160 || /^x{161,}$/.test(command))
+      assert(stubs.includes(`bash ${snippet} [unknown]`), command);
     assert(snippet.length <= encoded.length, "abbreviating never increases argument size");
   }
-  assert(stubs.includes("IDENTIFYING_TARGET"), "keep multiline identifying text beyond character 100");
+  assert.equal(stubs.includes('IDENTIFYING_TARGET'), JSON.stringify(commands[5][1]).length <= 160,
+    'only genuinely short interpreter commands preserve their complete literal body');
   assert(!stubs.includes("…[+"), "omit repetitive truncation counts");
   assert(!stubs.includes("; output removed"), "output removal is explained once, not per call");
   for (const secret of ["WRITE_PAYLOAD_SECRET", "OLD_PAYLOAD_SECRET", "NEW_PAYLOAD_SECRET"])
     assert(!c.summary.includes(secret), secret);
   assert(stubs.includes('third_party(content="Not a write payload", query="' + "q".repeat(159) + "…"));
   assert(c.summary.includes(userProse) && c.summary.includes(assistantProse), "never shorten conversation prose");
-  assert(c.summary.includes("docs/spec.md\n</read-files>"));
+  assert(resolvedSummary(c).includes("docs/spec.md\n</read-files>"));
   assert(c.summary.includes("<modified-files note="));
-  assert(c.summary.includes("\nsrc/out.ts (no read-tool output in tail)\n</modified-files>"));
+  assert(resolvedSummary(c).includes("\nsrc/out.ts (no read-tool output in tail)\n</modified-files>"));
   assert.deepEqual(c.details.readFiles, [path.join(cwd, "docs/spec.md")], "file metadata stays original");
   assert.deepEqual(c.details.modifiedFiles, [path.join(cwd, "src/out.ts")]);
   assert(manager.getBranch().some((e) => e.message?.content?.some?.((b) => b.arguments?.content === content)),

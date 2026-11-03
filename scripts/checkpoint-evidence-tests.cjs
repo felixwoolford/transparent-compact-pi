@@ -3,6 +3,7 @@
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
+const { locationId, resolvedSummary } = require('./location-test-helpers.cjs');
 
 module.exports = async function ({ ext, SessionManager, root, compact, makeContext, assistant, toolCall, text, user }) {
   console.log("== Checkpoint evidence: per-call outcomes, removed document contents, and closing rule ==");
@@ -48,25 +49,25 @@ module.exports = async function ({ ext, SessionManager, root, compact, makeConte
   const c = await compact(ext, ctx, ids, kept, "manual", {
     read: new Set(["SPEC.md", "docs/a guide.md"]), written: new Set(), edited: new Set(["changed.ts"]),
   });
-  assert(c.summary.includes('bash "check"; read "missing.md" [tool error]'));
+  assert(c.summary.includes(`bash "check"; read ${locationId(c, 'missing.md')} [tool error]`));
   assert(c.summary.includes('[Assistant]: All checks passed.'), "assistant prose stays verbatim, not endorsed");
   assert(c.summary.includes('bash "first-reuse"'));
   assert(c.summary.includes('bash "second-reuse" [tool error]'));
   for (const file of ["unfinished.md", "missing-status.md", "wrong-name.md", "before-call.md", "duplicate-a.md", "duplicate-b.md", "outside-selection.md"]) {
-    assert(c.summary.includes(`read "${file}" [unknown]`), file);
+    assert(c.summary.includes(`read ${locationId(c, file)} [unknown]`), file);
   }
   assert(!c.summary.includes("REMOVED_EVIDENCE_SECRET"), "neither successful nor failed output bodies leak");
   assert(c.summary.includes("Unlabelled does NOT establish exit 0 or passing tests."));
-  assert(c.summary.includes("SPEC.md\ndocs/a guide.md\n</read-files>"));
-  assert(c.summary.includes("changed.ts (no read-tool output in tail)"));
+  assert(resolvedSummary(c).includes("SPEC.md\ndocs/a guide.md\n</read-files>"));
+  assert(resolvedSummary(c).includes("changed.ts (no read-tool output in tail)"));
   assert.deepEqual(c.details.readFiles, ["SPEC.md", "docs/a guide.md"], "metadata retains bare paths");
   assert.deepEqual(c.details.modifiedFiles, ["changed.ts"]);
   const rule = "**Evidence boundary:** Tool stubs and file lists omit supporting details. Most output and detailed payloads are omitted. Inline observations are historical, not verification of unshown details or current state. Use `context_lookup` for omitted observations or provenance; inspect sources for current state.";
-  assert(c.summary.includes(`</modified-files>\n\n${rule}\n\nConversation`), "rule sits after file lists, immediately before the tail boundary");
+  assert(c.summary.includes(`</locations>\n\n${rule}\n\nConversation`), "rule sits after the location dictionary, immediately before the tail boundary");
   const next = manager.appendMessage(user("Next retained tail"));
   const repeated = await compact(ext, ctx, [kept], next);
   assert(repeated.summary.includes('bash "check"'), "signatures persist in saved uncapped spans");
-  assert(repeated.summary.includes("SPEC.md\ndocs/a guide.md\n</read-files>"), "cumulative read lists make no unsupported absence claim");
+  assert(resolvedSummary(repeated).includes("SPEC.md\ndocs/a guide.md\n</read-files>"), "cumulative read lists make no unsupported absence claim");
   assert.equal(repeated.summary.split(rule).length - 1, 1, "closing rule is not nested on repeated compaction");
 
   const split = SessionManager.inMemory(cwd);
@@ -78,7 +79,7 @@ module.exports = async function ({ ext, SessionManager, root, compact, makeConte
     preparation: { messagesToSummarize: [split.getEntry(a).message], turnPrefixMessages: [split.getEntry(t).message],
       isSplitTurn: true, firstKeptEntryId: tail, tokensBefore: 1000 },
   }, makeContext(split, cwd));
-  assert(splitResult.compaction.summary.includes('read "split.md" [tool error]'), "pairing spans both preparation arrays");
+  assert(splitResult.compaction.summary.includes(`read ${locationId(splitResult.compaction, 'split.md')} [tool error]`), "pairing spans both preparation arrays");
   assert(splitResult.compaction.summary.includes(rule), "rule is present without any file lists");
 
   const old = SessionManager.inMemory(cwd);
@@ -94,7 +95,7 @@ module.exports = async function ({ ext, SessionManager, root, compact, makeConte
   assert(legacy.summary.includes(oldLine), "old spans are not rewritten with guessed outcomes");
   assert(legacy.summary.includes(oldCustom), "previously saved custom-message bodies are not migrated");
   assert(legacy.summary.includes("legacy calls without status are unknown."));
-  assert(legacy.summary.includes("OLD.md\n</read-files>"));
+  assert(resolvedSummary(legacy).includes("OLD.md\n</read-files>"));
   console.log("== Custom messages: generic bounded stubs, raw recovery, and repeated compaction ==");
   const custom = SessionManager.inMemory(cwd);
   // The cap is off: removing bodies is compaction policy, not size trimming.

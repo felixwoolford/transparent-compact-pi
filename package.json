@@ -1,6 +1,6 @@
 {
   "name": "@foliox/transparent-compact-pi",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "description": "Deterministic, verbatim-preserving compaction for Pi, with session-backed subagent context recovery.",
   "keywords": [
     "pi-package",
@@ -36,7 +36,12 @@
     "test:cap": "node test.cjs cap",
     "test:caphang": "node test.cjs caphang",
     "test:capspans": "node test.cjs capspans",
-    "test:package": "node scripts/test-package.cjs"
+    "test:package": "node scripts/test-package.cjs",
+    "test:tool-stubs": "node --test experiments/tool-stubs/tests.mjs",
+    "compare:tool-stubs": "node experiments/tool-stubs/compare.mjs"
+  },
+  "dependencies": {
+    "@questi0nm4rk/shell-ast": "0.8.0"
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "1.1.0"

@@ -60,6 +60,10 @@ ends with an evidence-boundary warning. Task-relevant recovery reminders and a
 brief recovery recap follow **the retained recent history and any pending new
 user input**. This is instruction delivery, not a guarantee of model compliance.
 
+Tool stubs use `@N` location IDs defined once near the checkpoint's end. Short bash
+commands stay literal; `bash{...}` shows a lossy skeleton of longer commands.
+These are display notation, not replayable commands or filenames.
+
 Compaction hides earlier details from the model's view; recorded history remains
 retrievable. Recovery guidance explicitly names uncertain provenance (where a
 finding came from or why a conclusion was reached) and contradictions between
@@ -182,7 +186,8 @@ reading. It does not capture every possible reference or fill in incomplete read
 ### Control the compaction cap
 
 When the checkpoint exceeds its budget, capping first tightens tool presentation:
-160→120→80-character previews, then grouped tool-only prefixes. Only if those stages
+160→120→80-character literal previews, then grouped tool-only prefixes. Shell
+skeletons are not cut into misleading partial commands. Only if those stages
 cannot make it fit does it remove conversation content. `tools-tightened` marks presentation changes; `trimmed` marks actual
 omissions. Earlier structured spans can be tightened in the new checkpoint without
 editing their stored originals; disabling the cap restores their normal rendering.
@@ -218,7 +223,9 @@ Tokens are estimated with `ceil(chars / 4)`, not an exact tokenizer. For a
 characters. 
 
 The budget is a size guard, not a guarantee that the whole model context fits.
-Instructions and file lists remain outside it. Retained startup reads count as
+Instructions and file lists remain outside it. The shared location dictionary
+counts toward the budget; definitions unused by retained stubs or file lists are
+omitted. Retained startup reads count as
 fixed overhead but are never trimmed; if they alone exceed the budget, the
 extension warns and keeps them. Disabling the cap still removes thinking and
 unselected tool outputs and abbreviates tool-call signatures.

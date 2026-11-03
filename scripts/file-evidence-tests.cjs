@@ -6,6 +6,7 @@ const path = require("node:path");
 const { homedir } = require("node:os");
 const { pathToFileURL } = require("node:url");
 const scenario = require("./reorientation-fixture.cjs");
+const { resolvedSummary } = require('./location-test-helpers.cjs');
 
 module.exports = async function (h) {
   const { ext, SessionManager, root, compact, makeContext, assistant, toolCall, text, user, jiti } = h;
@@ -43,7 +44,7 @@ module.exports = async function (h) {
   const line = (summary, file) => summary.split("\n").find((s) => s === file || s.startsWith(file + " ("));
   const label = async (r, file, expected, options) => {
     const c = await r.build([file], options);
-    assert.equal(line(c.summary, file), `${file} (${expected})`);
+    assert.equal(line(resolvedSummary(c), file), `${file} (${expected})`);
     return c;
   };
 
@@ -109,7 +110,7 @@ module.exports = async function (h) {
   renamed.manager.appendContextEdit(read.call, { content: [toolCall("read", { path: "different.ts" }, "evidence-0")] });
   const renamedC = await renamed.build(["original.ts", "different.ts"]);
   for (const file of ["original.ts", "different.ts"])
-    assert.equal(line(renamedC.summary, file), `${file} (no read-tool output in tail)`);
+    assert.equal(line(resolvedSummary(renamedC), file), `${file} (no read-tool output in tail)`);
 
   const omittedMutation = rig();
   omittedMutation.op("read", "stale.ts", {}, "OLDER_SOURCE");
@@ -122,8 +123,8 @@ module.exports = async function (h) {
   errors.op("read", "unknown.ts", {}, "NOT_CONFIRMED", { isError: undefined });
   const errorsC = await errors.build(["failed.ts", "unknown.ts"], { read: ["unrelated.md"] });
   for (const file of ["failed.ts", "unknown.ts"])
-    assert.equal(line(errorsC.summary, file), `${file} (no read-tool output in tail)`);
-  assert.equal(line(errorsC.summary, "unrelated.md"), "unrelated.md", "unmodified paths do not repeat the negative label per file");
+    assert.equal(line(resolvedSummary(errorsC), file), `${file} (no read-tool output in tail)`);
+  assert.equal(line(resolvedSummary(errorsC), "unrelated.md"), "unrelated.md", "unmodified paths do not repeat the negative label per file");
   const readHeader = '<read-files note="reads in compacted history; unless annotated, no retained read-tool output identified">';
   assert.equal(errorsC.summary.split(readHeader).length - 1, 1, "read list states its negative default once");
   assert(errorsC.summary.includes("unannotated paths do not establish content visibility"));
@@ -163,8 +164,8 @@ module.exports = async function (h) {
       { id: "wrapper/1", name: "read", status: "ok", durationMs: 1, arguments: { path: "hidden.ts" } },
     ] } });
   const nestedC = await nested.build(["nested.ts", "hidden.ts"]);
-  assert.equal(line(nestedC.summary, "nested.ts"), "nested.ts (read in tail, then edited)");
-  assert.equal(line(nestedC.summary, "hidden.ts"), "hidden.ts (no read-tool output in tail)");
+  assert.equal(line(resolvedSummary(nestedC), "nested.ts"), "nested.ts (read in tail, then edited)");
+  assert.equal(line(resolvedSummary(nestedC), "hidden.ts"), "hidden.ts (no read-tool output in tail)");
 
   for (const alias of ["@./alias.ts", pathToFileURL(path.join(cwd, "alias.ts")).href]) {
     const r = rig();
@@ -187,16 +188,16 @@ module.exports = async function (h) {
   }) };
   const startupC = await compact(ext, startupCtx, startupManager.getBranch().slice(0, -1).map((e) => e.id), startupKept,
     "manual", { read: new Set(), written: new Set(), edited: new Set(["START.md"]) });
-  assert(startupC.summary.includes("START.md (startup read output retained in checkpoint or tail; may be partial)"));
-  assert(!startupC.summary.includes("START.md (no read-tool output"));
+  assert(resolvedSummary(startupC).includes("START.md (startup read output retained in checkpoint or tail; may be partial)"));
+  assert(!resolvedSummary(startupC).includes("START.md (no read-tool output"));
 
   // A later checkpoint recomputes evidence rather than persisting an old annotation.
   normal.manager.appendCompaction(normalC.summary, normal.kept, normalC.tokensBefore, normalC.details, true);
   const next = normal.manager.appendMessage(user("Move the read behind the cut"));
   const again = await compact(ext, makeContext(normal.manager, cwd),
     normal.manager.getBranch().filter((e) => e.type === "message").slice(1, -1).map((e) => e.id), next);
-  assert(again.summary.includes("same.ts (no read-tool output in tail)"));
-  assert(!again.summary.includes("same.ts (full read in tail)"));
+  assert(resolvedSummary(again).includes("same.ts (no read-tool output in tail)"));
+  assert(!resolvedSummary(again).includes("same.ts (full read in tail)"));
   assert(!JSON.stringify(again.details).includes("full read in tail"), "visibility labels are not cumulative metadata");
 
   await runtimeCases(h);
@@ -244,7 +245,7 @@ async function runtimeCases(h) {
       await session.compact();
       const c = manager.getBranch().findLast((e) => e.type === "compaction");
       const expected = sourceSurvives ? "full read in tail" : "no read-tool output in tail";
-      assert(c.summary.includes(`build.ts (${expected})`));
+      assert(resolvedSummary(c).includes(`build.ts (${expected})`));
       assert(!c.summary.includes("; output removed"), "use current compact signatures, not the 0.8.6 stubs");
       await session.prompt("Continue safely");
       assert.equal(requests.length, 1, "test observes delivery, not live-model compliance");

@@ -3,7 +3,8 @@
  */
 export const TOOL_PREFIX = "[Tools]: ";
 export const FILTER_MARKER = "[Turn manually filtered]";
-export const NORMAL_PREVIEW_CHARS = 160;
+import { NORMAL_PREVIEW_CHARS, headPrefix, commandPreview } from "./tool-stubs/display.mjs";
+export { NORMAL_PREVIEW_CHARS, commandPreview };
 export const TIGHTENED_ATTR = ' tools-tightened="true"';
 
 // Encoded display fragments, NOT full commands or executable arguments.
@@ -13,34 +14,27 @@ export interface ToolStub {
   prefix: string;
   command?: CommandPreview;
   suffix: string;
+  /** Authoritative dictionary references, never inferred by scanning prose. */
+  locations?: string[];
 }
 export interface ToolLine {
   index: number;
   calls: ToolStub[];
   /** Both adjacent messages must be tool-only before prefixes may be folded. */
   mergeable: boolean;
+  prefix?: string;
 }
 export interface ToolLines { version: 2; lines: ToolLine[] }
 export interface SpanContent { lines: string[]; tools?: ToolLines; protectedLines?: number[] }
-export interface CappedSpans { lines: string[][]; tightened: boolean[]; trimmed: boolean[] }
-
-function headPrefix(text: string, max: number): string {
-  let end = Math.min(text.length, max);
-  if (/[\uD800-\uDBFF]/.test(text[end - 1])) end--;
-  return text.slice(0, end);
-}
-export function commandPreview(encoded: string): CommandPreview {
-  return encoded.length <= NORMAL_PREVIEW_CHARS ? { head: encoded }
-    : { head: headPrefix(encoded, NORMAL_PREVIEW_CHARS), truncated: true };
-}
+export interface CappedSpans { lines: string[][]; tightened: boolean[]; trimmed: boolean[]; locationIds: string[] }
 export function renderCommand(preview: CommandPreview, max = NORMAL_PREVIEW_CHARS): string {
   return headPrefix(preview.head, max) + (preview.truncated || preview.head.length > max ? "…" : "");
 }
 export function renderToolStub(stub: ToolStub, max = NORMAL_PREVIEW_CHARS): string {
   return stub.prefix + (stub.command ? renderCommand(stub.command, max) : "") + stub.suffix;
 }
-export function renderToolLine(calls: ToolStub[], max = NORMAL_PREVIEW_CHARS): string {
-  return TOOL_PREFIX + calls.map((call) => renderToolStub(call, max)).join("; ");
+export function renderToolLine(calls: ToolStub[], max = NORMAL_PREVIEW_CHARS, prefix = TOOL_PREFIX): string {
+  return prefix + calls.map((call) => renderToolStub(call, max)).join("; ");
 }
 
 // Stored records are optional/versioned. Require exact canonical round-tripping
@@ -55,9 +49,11 @@ function toolRecords(span: SpanContent): Map<number, ToolLine> {
       if (!record || !Number.isSafeInteger(record.index) || record.index < 0 || record.index >= span.lines.length) continue;
       if (seen.has(record.index)) { records.delete(record.index); continue; }
       seen.add(record.index);
-      if (typeof record.mergeable !== "boolean" || !Array.isArray(record.calls) || !record.calls.length) continue;
+      if (typeof record.mergeable !== "boolean" || !Array.isArray(record.calls) || !record.calls.length ||
+          (record.prefix !== undefined && record.prefix !== TOOL_PREFIX && record.prefix !== "[BashExecution]: ")) continue;
       const valid = record.calls.every((call) => {
         if (!call || typeof call.prefix !== "string" || typeof call.suffix !== "string") return false;
+        if (call.locations !== undefined && (!Array.isArray(call.locations) || !call.locations.every((id) => typeof id === "string" && /^@\d+$/.test(id)))) return false;
         const p = call.command;
         if (p === undefined) return true;
         if (!p || typeof p.head !== "string") return false;
@@ -65,7 +61,7 @@ function toolRecords(span: SpanContent): Map<number, ToolLine> {
           (p.truncated === undefined || typeof p.truncated === "boolean") &&
           (p.truncated !== true || p.head.length >= NORMAL_PREVIEW_CHARS - 1);
       });
-      if (valid && renderToolLine(record.calls) === span.lines[record.index]) records.set(record.index, record);
+      if (valid && renderToolLine(record.calls, NORMAL_PREVIEW_CHARS, record.prefix) === span.lines[record.index]) records.set(record.index, record);
     }
   } catch { return new Map(); }
   return records;
@@ -78,6 +74,7 @@ interface Row {
   calls?: ToolStub[];
   mergeable: boolean;
   preview: number;
+  prefix: string;
   foldPrefix: boolean;
   tightened: boolean;
 }
@@ -86,22 +83,26 @@ interface Row {
  * tool-only prefixes, and finally the historical destructive cap.
  * Every rung walks oldest first, across all spans (not just the new one).
  */
-export function capSpans(spans: SpanContent[], budget = Infinity): CappedSpans {
+export function capSpans(spans: SpanContent[], budget = Infinity, extraChars: (ids: string[]) => number = () => 0): CappedSpans {
   const tightened = spans.map(() => false), trimmed = spans.map(() => false);
-  let size = spans.reduce((n, span) => n + span.lines.reduce((s, line) => s + line.length + 1, 0), 0);
-  if (size <= budget) return { lines: spans.map((s) => s.lines.slice()), tightened, trimmed };
-  const states = spans.map((span) => {
-    const records = toolRecords(span);
+  const records = spans.map(toolRecords);
+  const references = (calls: ToolStub[]) => [...new Set(calls.flatMap((call) => call.locations ?? []))];
+  const initialIds = references(records.flatMap((map) => [...map.values()].flatMap((record) => record.calls)));
+  let size = spans.reduce((n, span) => n + span.lines.reduce((s, line) => s + line.length + 1, 0), 0) + extraChars(initialIds);
+  if (size <= budget) return { lines: spans.map((s) => s.lines.slice()), tightened, trimmed, locationIds: initialIds };
+  const states = spans.map((span, spanIndex) => {
+    const ownRecords = records[spanIndex];
     return span.lines.map((text, index): Row => {
-      const record = records.get(index);
+      const record = ownRecords.get(index);
       return { index, protected: span.protectedLines?.includes(index) ?? false, text, calls: record?.calls.slice(), mergeable: record?.mergeable ?? false,
-        preview: NORMAL_PREVIEW_CHARS, foldPrefix: false, tightened: false };
+        preview: NORMAL_PREVIEW_CHARS, prefix: record?.prefix ?? TOOL_PREFIX, foldPrefix: false, tightened: false };
     });
   });
   const joined = (rows: Row[], i: number) => i > 0 && rows[i].foldPrefix && rows[i].calls && rows[i - 1].calls &&
-    rows[i].mergeable && rows[i - 1].mergeable && rows[i].index === rows[i - 1].index + 1;
+    rows[i].mergeable && rows[i - 1].mergeable && rows[i].prefix === TOOL_PREFIX && rows[i - 1].prefix === TOOL_PREFIX && rows[i].index === rows[i - 1].index + 1;
+  const currentIds = () => references(states.flatMap((rows) => rows.flatMap((row) => row.calls ?? [])));
   const measure = () => states.reduce((n, rows) => n + rows.reduce((s, row, i) =>
-    s + row.text.length + 1 - (joined(rows, i) ? TOOL_PREFIX.length - 1 : 0), 0), 0);
+    s + row.text.length + 1 - (joined(rows, i) ? TOOL_PREFIX.length - 1 : 0), 0), 0) + extraChars(currentIds());
   const finish = (): CappedSpans => ({
     lines: states.map((rows, span) => {
       const lines: string[] = [];
@@ -112,9 +113,9 @@ export function capSpans(spans: SpanContent[], budget = Infinity): CappedSpans {
         if (row.tightened || joined(rows, i)) tightened[span] = true;
       }
       return lines;
-    }), tightened, trimmed,
+    }), tightened, trimmed, locationIds: currentIds(),
   });
-  const render = (row: Row) => renderToolLine(row.calls!, row.preview);
+  const render = (row: Row) => renderToolLine(row.calls!, row.preview, row.prefix);
   const update = (row: Row) => {
     const text = render(row);
     if (text.length < row.text.length) {

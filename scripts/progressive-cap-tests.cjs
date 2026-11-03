@@ -118,7 +118,8 @@ module.exports = async function (h) {
   const displayCalls = checkpoint.details.span.tools.lines.flatMap((line) => line.calls);
   assert.equal(displayCalls.length, 4);
   for (const call of displayCalls) {
-    assert.deepEqual(Object.keys(call).sort(), call.command ? ["command", "prefix", "suffix"] : ["prefix", "suffix"]);
+    assert(Object.keys(call).every((key) => ['command', 'prefix', 'suffix', 'locations'].includes(key)));
+    for (const id of call.locations ?? []) assert(checkpoint.details.locations.some((entry) => entry.id === id));
   }
   assert.doesNotMatch(checkpoint.summary, /\bref=/);
   assert.doesNotMatch(JSON.stringify(checkpoint.details.span), /PRIVATE_PAYLOAD_NOT_IN_CAP_RECORDS|PRIVATE_OLD_TEXT|PRIVATE_NEW_TEXT/);
@@ -128,7 +129,7 @@ module.exports = async function (h) {
   manager.appendCustomEntry("transparent-compact:cap-compaction", { mode: "off", budget: { unit: "chars", value: 80000 } });
   const ids = [manager.appendMessage(user("PRESERVED_INSTRUCTION")), manager.appendMessage(assistant([text("PRESERVED_EARLIER_PROSE")]))];
   for (let i = 0; i < 25; i++) {
-    ids.push(manager.appendMessage(assistant([toolCall("bash", { command: `cat ${"long-directory/".repeat(30)}file-${i}.txt` }, `cap-${i}`)], "toolUse")));
+    ids.push(manager.appendMessage(assistant([toolCall("bash", { command: `command-${'x'.repeat(200)} file-${i}.txt` }, `cap-${i}`)], "toolUse")));
     ids.push(manager.appendMessage({ role: "toolResult", toolName: "bash", toolCallId: `cap-${i}`, isError: false, content: [text("read output")], timestamp: 0 }));
   }
   const kept = manager.appendMessage(user("First recent tail"));

@@ -1,5 +1,6 @@
 "use strict";
 const assert = require("node:assert/strict");
+const { locationId } = require('./location-test-helpers.cjs');
 
 module.exports = async function (h) {
   const { ext, SessionManager, root, compact, makeContext, assistant, toolCall, text, user, toolText, search, jiti } = h;
@@ -65,11 +66,11 @@ module.exports = async function (h) {
   assert(line(tiny).includes('output: "no buffers$"'));
   assert(line(error).includes('output: "NameError:'));
   assert(line(commit).endsWith("→ commit abc1234"));
-  assert(line(truncated).includes("import os\\n"), "imports remain part of the literal preview");
-  assert(line(truncated).includes(`bash ${JSON.stringify(longCommand).slice(0, 160)}…`));
+  assert(line(truncated).includes('python [body]'), 'long scripts become opaque-body skeletons');
+  assert(!line(truncated).includes('import os'), 'setup code is omitted, not mistaken for intent');
   assert(!line(truncated).includes("IDENTIFYING_END"), "a head-only preview must not retain an omitted tail");
   assert(!line(truncated).includes("middle".repeat(20)));
-  assert(line(background).includes("background=true") && !line(background).includes("timeout="));
+  assert(!line(background).includes('background=') && !line(background).includes('timeout='));
   assert(line(quoted).includes('output: "a\\nb \\"quote\\"; bash evil"'));
   assert(line(whitespace).includes(`output: ${JSON.stringify("  \n\t  ")}`), "tiny complete quotes preserve whitespace");
   assert(line(structuredExit).endsWith("→ exit 2"), "use explicit structured shell status when available");
@@ -130,7 +131,7 @@ module.exports = async function (h) {
   const rm = m.appendMessage(assistant([toolCall("bash", { command: "rm scratch.py" }, "rm")], "toolUse"));
   const tail = m.appendMessage(user("Use the old scratch code"));
   const old = await compact(ext, cx, [a, t2, t1, rm], tail);
-  assert(old.summary.includes('write "scratch.py" (22 chars)'));
+  assert(old.summary.includes(`write ${locationId(old, 'scratch.py')} (22 chars)`));
   assert.doesNotMatch(old.summary, /\bref=/);
   const writePair = await callDirect(t1, true, {}, cx);
   assert(writePair.includes("DELETED_SCRATCH_SOURCE") && writePair.includes("WROTE_SCRATCH"));

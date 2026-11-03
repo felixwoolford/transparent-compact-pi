@@ -21,24 +21,51 @@ extension builds a checkpoint without changing that boundary or calling a model:
 New tool lines use `[Tools]:` with compact display signatures:
 
 ```text
-read "src/example.ts":12-41
-write "scratch.py" (2144 chars)
-edit "src/example.ts" ×2
+read @1:12-41
+write @2 (2144 chars)
+edit @1 ×2
 bash "uv run pytest -q 2>&1 | tail -25" → output: "3 failed, 16 passed in 0.21s"
+bash{cd @3 && cargo test >@4 | tail}
 ```
 
-File paths remain complete and are relative to the session working directory where
-possible. Read ranges record requested lines, not actual returned coverage or symbol
-locations. Write bodies become sizes; edit arrays become counts (individual
-`oldText`/`newText` fields become sizes). Bash omits its tool-level `timeout` argument
-but retains other arguments such as `background`. Commands abbreviate the working
-directory to `.` at path boundaries. New JSON-encoded previews keep the first 160
-characters, followed by an ellipsis when truncated. Newlines remain escaped;
-imports, redirections, and shell syntax are not rewritten. Other argument previews
-remain bounded prefixes. These signatures are display notation, not replayable shell
-commands. Calls normally remain separate across assistant messages. The size guard
-may fold adjacent tool-only prefixes while preserving ordering and independently
-removable calls. No command diffs or read folding are performed.
+Known tools use positive input selection: bash retains `command`; read retains
+`path`, `offset` and `limit`; write/edit retain their path and payload-derived
+sizes/counts. Other call arguments are omitted regardless of extension, including
+non-null execution controls. Unknown tools keep bounded agnostic argument previews.
+Read ranges describe requests, not returned coverage or symbol positions.
+
+Quoted bash commands of at most 160 encoded characters stay literal, with cwd
+shortening and escaped newlines. Longer commands use a full mvdan/sh AST to retain
+commands, common subcommands, path operands, pipes, sequencing, redirects and
+grouping. Flags and non-location arguments are generally omitted. Inline program
+bodies become explicit `[inline]`/`[body]` markers with bounded lexical path mentions;
+these are not effect analysis. Unsupported, oversized or malformed shell input
+falls back to a head-only literal preview, still without execution metadata.
+
+A shared `<locations>` dictionary near the checkpoint end resolves `@N` IDs.
+File lists use the same IDs while retaining their operation/evidence annotations.
+IDs are append-only and branch-local, persisted in compaction details so resume,
+fork, filtering/restoration and repeated compaction do not renumber old references.
+Definitions are rendered only for surviving structured tool references and visible
+file lists, never discovered by regex-scanning prose. Canonical metadata keeps the
+complete registry so restoring a turn or disabling the cap restores its definitions.
+Raw command/program payloads are not copied into display records.
+
+The cap counts dictionary characters, including their removal when a call is
+trimmed. Definitions needed by file lists are fixed overhead; unused definitions
+are omitted after pruning, native-turn replacement and capping. Skeletons are not
+shortened into partial syntax. Literal previews can tighten to 120 then 80 encoded
+characters before adjacent tool-only prefixes are grouped and destructive trimming
+starts. Calls remain independently removable and ordered.
+
+All signatures are display notation, not replayable commands or tool arguments.
+No command diffs or read folding are performed.
+
+**Development experiment — dictionary placement:** keep the shared dictionary at
+the end for now, preserving the checkpoint's start for session-start information.
+Compare dictionary-first versus dictionary-last in independent behavioural tests;
+prompt-order research is suggestive, not a direct evaluation of this format. Do
+not duplicate the dictionary without evidence that the extra context cost helps.
 
 `[tool error]` means a safely matched result was flagged as an error; `[unknown]`
 means no safely matched result/status. Plain successes have no status label; this

@@ -78,7 +78,7 @@ async function compact(ext, ctx, ids, kept, reason = "manual", fileOps) {
   assert.equal(c.firstKeptEntryId, kept);
   assert.equal(c.tokensBefore, preparation.tokensBefore);
   assert.equal(c.details.kind, "mech-compact");
-  assert.deepEqual(Object.keys(c.details), ["kind", "readFiles", "modifiedFiles", "startupReads", "span"],
+  assert.deepEqual(Object.keys(c.details), ["kind", "readFiles", "modifiedFiles", "startupReads", "locations", "span"],
     "checkpoint metadata contains only the current session-backed contract");
   assert(!c.summary.includes("conversation.md"));
   assert(!c.summary.includes(ctx.cwd), "checkpoint does not disclose the transcript path");
@@ -472,6 +472,7 @@ async function main() {
     await require("./scripts/file-evidence-tests.cjs")({ ...hybridHelpers, factory, load, compact, jiti, piRoot });
     await require("./scripts/compaction-format-tests.cjs")({ ...hybridHelpers, compact });
     await require("./scripts/tool-stub-tests.cjs")({ ...hybridHelpers, compact, jiti });
+    await require('./scripts/live-tool-stub-tests.cjs')({ ...hybridHelpers, factory, load, compact, jiti });
     await require("./scripts/progressive-cap-tests.cjs")({ ...hybridHelpers, compact, jiti });
     await capPolicyTests(capHelpers);
     assert.deepEqual(Object.keys(ext.tools.context_lookup.parameters.properties), ["question"]);
@@ -509,7 +510,7 @@ async function main() {
     const c1 = await compact(ext, ctx, [f.u, f.a, f.t], f.kept, "manual", { read: new Set(["src/bar.ts"]), written: new Set(), edited: new Set(["src/foo.ts"]) });
     assert(c1.summary.includes("Please fix the N=7 bug."));
     assert(c1.summary.includes("I will inspect the file."));
-    assert(c1.summary.includes('[Tools]: read "src/foo.ts"'));
+    assert(c1.summary.includes(`[Tools]: read ${require('./scripts/location-test-helpers.cjs').locationId(c1, 'src/foo.ts')}`));
     assert(!c1.details.span.lines.some((line) => line.includes("[ok]")));
     assert(!c1.summary.includes(argumentsText), "checkpoint truncates long arguments");
     const next = f.manager.appendMessage(user("The next retained tail.", epoch + 2000));
