@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { parse } from '@questi0nm4rk/shell-ast';
+import { parseShell as parse } from './parse.mjs';
 
 const PATH_COMMANDS = new Set(['cat', 'head', 'tail', 'wc', 'ls', 'tree', 'stat', 'file', 'du',
   'cp', 'mv', 'install', 'rm', 'mkdir', 'touch', 'tee', 'diff', 'cmp', 'readlink', 'realpath']);
@@ -20,22 +20,22 @@ export const looksLikeLocation = value => !!value && !/[\n\r\x00]/.test(value) &
       /\//.test(value) || /\.[a-z][a-z\d_-]{0,12}$/i.test(value))));
 
 // AST positions are UTF-8 byte offsets, not JS string indices.
-const sourceText = (source, node) => source.subarray(node.pos.offset, node.end.offset).toString('utf8');
+const sourceText = (source, node) => source.subarray(node.Pos.Offset, node.End.Offset).toString('utf8');
 const expression = (source, node) => {
   const raw = sourceText(source, node);
   return /^(["']).*\1$/s.test(raw) ? raw.slice(1, -1) : raw;
 };
 function literal(word) {
-  if (!word?.parts) return null;
+  if (!word?.Parts) return null;
   let out = '';
-  for (const part of word.parts) {
-    if (part.type === 'Lit') out += part.value.replace(/\\([^\n])/g, '$1').replace(/\\\n/g, '');
-    else if (part.type === 'SglQuoted' && !part.dollar) out += part.value;
-    else if (part.type === 'DblQuoted' && !part.dollar) {
+  for (const part of word.Parts) {
+    if (part.Type === 'Lit') out += (part.Value ?? '').replace(/\\([^\n])/g, '$1').replace(/\\\n/g, '');
+    else if (part.Type === 'SglQuoted' && !part.Dollar) out += part.Value ?? '';
+    else if (part.Type === 'DblQuoted' && !part.Dollar) {
       let text = '';
-      for (const item of part.parts ?? []) {
-        if (item.type !== 'Lit') return null;
-        text += item.value.replace(/\\([$`"\\])/g, '$1').replace(/\\\n/g, '');
+      for (const item of part.Parts ?? []) {
+        if (item.Type !== 'Lit') return null;
+        text += (item.Value ?? '').replace(/\\([$`"\\])/g, '$1').replace(/\\\n/g, '');
       }
       out += text;
     } else return null;
@@ -46,7 +46,7 @@ function literal(word) {
 /** Pure static description: never runs commands, opens paths, or expands globs. */
 export async function shellSkeleton(command, locations, options = {}) {
   const { maxBytes = 262144, maxNodes = 2048, maxMentions = 8, parseShell = parse } = options;
-  const ast = await parseShell(command, 'bash', { maxBytes });
+  const ast = await parseShell(command, { maxBytes });
   const source = Buffer.from(command);
   const cues = [], refs = new Set();
   let visited = 0;
@@ -76,27 +76,30 @@ export async function shellSkeleton(command, locations, options = {}) {
 
   function nested(node, state) {
     if (!node || typeof node !== 'object') return [];
+    // Upstream JSON includes several source-position fields per node. They are
+    // coordinates, not nested syntax, and must not consume the AST node budget.
+    if (typeof node.Offset === 'number' && typeof node.Line === 'number' && typeof node.Col === 'number') return [];
     tick();
-    if (node.type === 'CmdSubst' || node.type === 'ProcSubst')
-      return [`${node.type === 'CmdSubst' ? '$(' : node.op + '('}${list(node.stmts, copy(state))})`];
+    if (node.Type === 'CmdSubst' || node.Type === 'ProcSubst')
+      return [`${node.Type === 'CmdSubst' ? '$(' : node.Op}${list(node.Stmts, copy(state))})`];
     return Object.values(node).flatMap(value => Array.isArray(value)
       ? value.flatMap(item => nested(item, state)) : value && typeof value === 'object' ? nested(value, state) : []);
   }
 
   function call(node, state) {
-    const words = node.args ?? [];
+    const words = node.Args ?? [];
     const values = words.map(literal);
     const name = values[0] === null ? '[dynamic command]' : path.posix.basename(values[0] ?? '[assign]');
     if (name.length > 160) throw new Error('command name exceeds display budget');
     let text = cue('command', name);
     if (values[0]?.includes('/')) text += `[${location(values[0], state)}]`;
     if (name === 'timeout' && /^\d+(?:\.\d+)?[smhd]?$/.test(values[1] ?? '') && words.length > 2)
-      return `${text} ${call({ ...node, args: words.slice(2) }, state)}`;
+      return `${text} ${call({ ...node, Args: words.slice(2) }, state)}`;
     if (name === 'uv' && values[1] === 'run' && values[2] && !values[2].startsWith('-'))
-      return `${text} ${cue('subcommand', 'run')} ${call({ ...node, args: words.slice(2) }, state)}`;
+      return `${text} ${cue('subcommand', 'run')} ${call({ ...node, Args: words.slice(2) }, state)}`;
     if (name === 'env' && values[1] && !values[1].startsWith('-')) {
       const start = values.findIndex((value, index) => index > 0 && value && !value.includes('='));
-      if (start > 0) return `${text} ${call({ ...node, args: words.slice(start) }, state)}`;
+      if (start > 0) return `${text} ${call({ ...node, Args: words.slice(start) }, state)}`;
     }
     let pattern = ['sed', 'awk', 'grep', 'rg'].includes(name);
     let afterDash = false, needsSubcommand = SUBCOMMANDS.has(name), verb = null;
@@ -153,7 +156,7 @@ export async function shellSkeleton(command, locations, options = {}) {
     }
     // Substitutions may be in arguments that were otherwise discarded as flags/patterns.
     for (const word of words) for (const expansion of nested(word, state)) text += ` ${expansion}`;
-    for (const assignment of node.assigns ?? []) {
+    for (const assignment of node.Assigns ?? []) {
       for (const expansion of nested(assignment, state)) text += ` ${expansion}`;
     }
     if (name === 'cd') {
@@ -167,83 +170,84 @@ export async function shellSkeleton(command, locations, options = {}) {
     tick();
     if (!node) return '';
     const initial = copy(state);
-    let text = render(node.cmd, node.background ? copy(state) : state);
-    if (node.negated) text = `! ${text}`;
+    let text = render(node.Cmd, node.Background ? copy(state) : state);
+    if (node.Negated) text = `! ${text}`;
     // Redirections resolve before a command changes cwd.
-    for (const redirect of node.redirs ?? []) {
-      if (redirect.hdoc) {
-        const body = literal(redirect.hdoc) ?? sourceText(source, redirect.hdoc);
+    for (const redirect of node.Redirs ?? []) {
+      if (redirect.Hdoc) {
+        const body = literal(redirect.Hdoc) ?? sourceText(source, redirect.Hdoc);
         text += ` [body${mentions(body, initial)}]`;
-        for (const expansion of nested(redirect.hdoc, initial)) text += ` ${expansion}`;
+        for (const expansion of nested(redirect.Hdoc, initial)) text += ` ${expansion}`;
       } else {
-        const value = literal(redirect.word), raw = expression(source, redirect.word);
-        const expansions = nested(redirect.word, initial);
-        const fd = redirect.n?.value ?? '';
-        if (redirect.op === '<<<') {
+        const value = literal(redirect.Word), raw = expression(source, redirect.Word);
+        const expansions = nested(redirect.Word, initial);
+        const fd = redirect.N?.Value ?? '';
+        if (redirect.Op === '<<<') {
           text += ` ${operator('<<<')}[stdin${mentions(value ?? raw, initial)}]`;
         } else {
-          const destination = /[<>]&/.test(redirect.op) && /^\d+-?$|^-$/.test(value ?? '')
+          const destination = /[<>]&/.test(redirect.Op) && /^\d+-?$|^-$/.test(value ?? '')
             ? value : value === null && expansions.length ? '[dynamic]' : location(value ?? raw, initial);
-          text += ` ${operator(fd + redirect.op)}${destination}`;
+          text += ` ${operator(fd + redirect.Op)}${destination}`;
         }
         for (const expansion of expansions) text += ` ${expansion}`;
       }
     }
-    if (node.background) text += ` ${operator('&')}`;
+    if (node.Background) text += ` ${operator('&')}`;
     return text;
   }
 
   function list(nodes = [], state) { return join(nodes.map(node => stmt(node, state))); }
-  function render(node, state) {
+  function render(node, state, type = node?.Type) {
     tick();
     if (!node) return '[assignment]';
-    switch (node.type) {
+    switch (type) {
       case 'CallExpr': return call(node, state);
       case 'BinaryCmd': {
         const before = copy(state), leftState = copy(state);
-        const left = stmt(node.x, leftState);
-        const rightState = copy(node.op === '&&' ? leftState : before);
-        const right = stmt(node.y, rightState);
+        const left = stmt(node.X, leftState);
+        const rightState = copy(node.Op === '&&' ? leftState : before);
+        const right = stmt(node.Y, rightState);
         // An enclosing && RHS is reached only after the left chain succeeded.
         // Track that lexical success-path cwd; no claim about observed execution.
-        state.cwd = node.op === '&&' ? rightState.cwd : leftState.cwd === rightState.cwd ? leftState.cwd : null;
-        if (node.op === '|' || node.op === '|&') state.cwd = before.cwd;
-        return `${left} ${operator(node.op)} ${right}`;
+        state.cwd = node.Op === '&&' ? rightState.cwd : leftState.cwd === rightState.cwd ? leftState.cwd : null;
+        if (node.Op === '|' || node.Op === '|&') state.cwd = before.cwd;
+        return `${left} ${operator(node.Op)} ${right}`;
       }
-      case 'Subshell': return `(${list(node.stmts, copy(state))})`;
-      case 'Block': return `{${list(node.stmts, state)}}`;
+      case 'Subshell': return `(${list(node.Stmts, copy(state))})`;
+      case 'Block': return `{${list(node.Stmts, state)}}`;
       case 'IfClause': {
         const yes = copy(state), no = copy(state);
-        const condition = list(node.cond, yes);
-        const then = list(node.then, yes);
-        const otherwise = node.else ? render(node.else, no) : '';
+        const condition = list(node.Cond, yes);
+        const then = list(node.Then, yes);
+        // Else is a concrete *IfClause, so upstream JSON omits its Type.
+        const otherwise = node.Else ? render(node.Else, no, 'IfClause') : '';
         state.cwd = yes.cwd === no.cwd ? yes.cwd : null;
         return condition ? `if{${condition}} then{${then}}${otherwise ? ` else{${otherwise}}` : ''}` : then;
       }
       case 'ForClause': {
         const loopState = copy(state);
-        const body = list(node.do, loopState);
+        const body = list(node.Do, loopState);
         if (loopState.cwd !== state.cwd) state.cwd = null;
         return `for{${body}}`;
       }
       case 'WhileClause': {
-        const local = copy(state), condition = list(node.cond, local), body = list(node.do, local);
+        const local = copy(state), condition = list(node.Cond, local), body = list(node.Do, local);
         if (local.cwd !== state.cwd) state.cwd = null;
-        return `${node.until ? 'until' : 'while'}{${condition}} do{${body}}`;
+        return `${node.Until ? 'until' : 'while'}{${condition}} do{${body}}`;
       }
       case 'CaseClause': {
-        const body = node.items.map(item => `{${list(item.stmts, copy(state))}}`).join('; ');
+        const body = (node.Items ?? []).map(item => `{${list(item.Stmts, copy(state))}}`).join('; ');
         state.cwd = null;
         return `case{${body}}`;
       }
-      case 'FuncDecl': return `function ${node.name.value}{${stmt(node.body, { cwd: null })}}`;
-      case 'TimeClause': return `time ${stmt(node.stmt, state)}`;
+      case 'FuncDecl': return `function ${node.Name.Value}{${stmt(node.Body, { cwd: null })}}`;
+      case 'TimeClause': return `time ${stmt(node.Stmt, state)}`;
       case 'TestClause': return '[[test]]';
       case 'ArithmCmd': return '((arithmetic))';
-      default: throw new Error(`unsupported AST node: ${node.type}`);
+      default: throw new Error(`unsupported AST node: ${type}`);
     }
   }
 
-  const text = list(ast.stmts, { cwd: locations.cwd });
+  const text = list(ast.Stmts, { cwd: locations.cwd });
   return { text, cues, refs: [...refs], nodes: visited };
 }

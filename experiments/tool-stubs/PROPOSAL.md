@@ -140,21 +140,23 @@ history when running comparisons.
 
 ### Parser choice
 
-Use the complete mvdan/sh AST exposed by
-[`@questi0nm4rk/shell-ast`](https://github.com/Questi0nM4rk/shell-ast), pinned as a
-**runtime** dependency. Only its parser is used; no effect classifier,
-execution engine or security policy is adopted. It bundles WASM, so comparison
-requires neither Python, Go nor an installed shfmt executable.
+Use the official [`mvdan/sh`](https://github.com/mvdan/sh) parser and its own
+`syntax/typedjson` encoder, pinned in the bundled parser's `go.mod`. A small
+in-package Go/WASM bridge replaces the third-party npm wrapper. The renderer
+consumes upstream's typed JSON directly. No effect classifier, execution engine
+or security policy is adopted. Runtime use requires neither Python, Go nor an
+installed shfmt executable.
 
 [`bashxtract`](https://github.com/AnswerDotAI/safecmd/blob/main/safecmd/bashxtract.py)
 is useful reference material, but its final command list and operator set flatten
 relationships that the skeleton should retain. Its `shfmt --to-json` input is the
 right structural model.
 
-The evaluated `sh-syntax` API exposes reduced nodes that lose command arguments;
-it is insufficient for this prototype. The full-AST wrapper remains replaceable
-at the live `shell.mjs`. The pinned published package is MIT-licensed and is
-installed with the extension as an ordinary runtime dependency.
+The parser source, pinned upstream checksums, compiled WASM, matching unmodified
+Go support script, licenses and build provenance live in
+`extensions/lib/tool-stubs/parser/`. Go is needed only to rebuild these assets
+with `npm run build:shell-parser`; there is no npm parser dependency. See
+`docs/DESIGN.md` for the build contract.
 
 Limits are deliberately simple: default 256 KiB parser input, 2,048 traversal
 visits, 64 KiB scanned per body and eight distinct body path mentions. Exceeding

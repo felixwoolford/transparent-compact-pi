@@ -16,8 +16,8 @@ async function main() {
   assert(manifest.keywords.includes("pi-package"));
   assert.deepEqual(manifest.pi.extensions, ["./extensions/index.ts"]);
   assert.deepEqual(manifest.pi.skills, ["./skills/context-retrieval"]);
-  assert.deepEqual(manifest.dependencies, { '@questi0nm4rk/shell-ast': '0.8.0' }, 'only the shell parser is a runtime dependency');
-  for (const host of Object.keys(manifest.peerDependencies)) assert(!manifest.dependencies[host], 'host runtime packages stay peer dependencies');
+  assert.deepEqual(manifest.dependencies ?? {}, {}, 'parser is bundled directly; there are no npm runtime dependencies');
+  for (const host of Object.keys(manifest.peerDependencies)) assert(!(manifest.dependencies ?? {})[host], 'host runtime packages stay peer dependencies');
 
   const packResult = JSON.parse(execFileSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], {
     cwd: root,
@@ -73,13 +73,16 @@ async function main() {
     assert.deepEqual([...packedPaths].filter((p) => p.startsWith("extensions/")).sort(),
       ['extensions/index.ts', 'extensions/lib/checkpoint-cap.ts',
         'extensions/lib/tool-stubs/display.mjs', 'extensions/lib/tool-stubs/inputs.mjs',
-        'extensions/lib/tool-stubs/locations.mjs', 'extensions/lib/tool-stubs/renderer.mjs', 'extensions/lib/tool-stubs/shell.mjs',
-        'extensions/lib/turn-context.ts', 'extensions/lib/turn-filter.ts'], 'package ships the live renderer and all its helpers');
+        'extensions/lib/tool-stubs/locations.mjs', 'extensions/lib/tool-stubs/parse.mjs',
+        'extensions/lib/tool-stubs/renderer.mjs', 'extensions/lib/tool-stubs/shell.mjs',
+        ...['LICENSE.Go', 'LICENSE.mvdan-sh', 'NOTICE.md', 'PATENTS.Go', 'build.json', 'go.mod', 'go.sum', 'main.go', 'shell.wasm', 'wasm_exec.js']
+          .map(file => `extensions/lib/tool-stubs/parser/${file}`),
+        'extensions/lib/turn-context.ts', 'extensions/lib/turn-filter.ts'].sort(), 'package ships the live renderer, parser, source, and licenses');
     assert(![...packedPaths].some((p) => p.startsWith("source/")), "package has no obsolete source tree");
     assert(![...packedPaths].some((p) => p.startsWith('experiments/')), 'live compaction does not depend on experimental files');
 
-    // Materialize exactly the npm file list plus the published runtime parser,
-    // with no project devDependencies or experiment tree. Exercise the real Pi
+    // Materialize exactly the npm file list: no node_modules, separate parser
+    // package, Go toolchain, or experiment tree. Exercise the real Pi
     // loader AND an actual AST compaction from that isolated package root.
     const isolated = path.join(temp, 'packed');
     for (const file of packedPaths) {
@@ -87,10 +90,8 @@ async function main() {
       fs.mkdirSync(path.dirname(target), { recursive: true });
       fs.copyFileSync(path.join(root, file), target);
     }
-    const parserDir = 'node_modules/@questi0nm4rk/shell-ast';
-    fs.cpSync(path.join(root, parserDir), path.join(isolated, parserDir), { recursive: true });
-    assert(fs.existsSync(path.join(isolated, parserDir, 'dist/shell-ast.wasm')));
-    assert(!fs.existsSync(path.join(isolated, 'node_modules/@earendil-works/pi-coding-agent')));
+    assert(fs.existsSync(path.join(isolated, 'extensions/lib/tool-stubs/parser/shell.wasm')));
+    assert(!fs.existsSync(path.join(isolated, 'node_modules')), 'only packed files are needed');
     const isolatedLoad = await loadExtensions([path.join(isolated, 'extensions/index.ts')], isolated);
     assert.deepEqual(isolatedLoad.errors, []);
     const message = (id, value, parentId = null) => ({ type: 'message', id, parentId, timestamp: '2026-01-01T00:00:00.000Z', message: { timestamp: 0, ...value } });
@@ -104,7 +105,7 @@ async function main() {
       preparation: { messagesToSummarize: branch.slice(0, 2).map(entry => entry.message), turnPrefixMessages: [], firstKeptEntryId: 'tail', tokensBefore: 1000,
         fileOps: { read: new Set(), written: new Set(), edited: new Set() } } },
       { cwd: '/sandbox', sessionManager: { getBranch: () => branch }, model: { contextWindow: 131072 }, hasUI: false, ui: { notify() {} } });
-    assert(packedResult?.compaction?.summary.includes('bash{'), 'packed install can load WASM and generate skeletons');
+    assert(packedResult?.compaction?.summary.includes('bash{'), 'packed install can load the bundled upstream parser and generate skeletons');
     assert(packedResult.compaction.details.locations.some(entry => entry.display === 'src/config.json'));
     assert(!packedResult.compaction.summary.includes('background='));
     assert(packedResult.compaction.summary.includes('</locations>'));

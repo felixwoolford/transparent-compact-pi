@@ -1,0 +1,5 @@
+# Preserve reproducible parser source/assets across checkout platforms.
+extensions/lib/tool-stubs/parser/* text eol=lf
+extensions/lib/tool-stubs/parser/*.wasm binary
+# Copied byte-for-byte from the official Go toolchain.
+extensions/lib/tool-stubs/parser/wasm_exec.js -text

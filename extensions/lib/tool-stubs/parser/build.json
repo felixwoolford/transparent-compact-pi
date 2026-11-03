@@ -1,0 +1,12 @@
+{
+  "module": "mvdan.cc/sh/v3",
+  "version": "v3.14.1",
+  "go": "go1.27.3",
+  "wasmSha256": "5a3863987dcd484b76f7e30ba2e1b0e7ec44733de2b9020ced47fce1a805759a",
+  "runtimeSha256": "0c949f4996f9a89698e4b5c586de32249c3b69b7baadb64d220073cc04acba14",
+  "sourceSha256": {
+    "main.go": "9e3e81b5b887ebeed4a9ce892f1aacb074f25f1d3bc9e566cb6f5c3934c2c84c",
+    "go.mod": "6abdd17a1fbbd701de015c52d58142fb7baefeb3afae0eb95369f0a7d3062bdd",
+    "go.sum": "816811ceede3e018d293b5097e3cfea283ce6205309d387c21fce95846e2215b"
+  }
+}

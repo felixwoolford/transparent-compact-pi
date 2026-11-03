@@ -61,6 +61,27 @@ starts. Calls remain independently removable and ordered.
 All signatures are display notation, not replayable commands or tool arguments.
 No command diffs or read folding are performed.
 
+**Parser dependency and rebuilds.** `extensions/lib/tool-stubs/parser/go.mod`
+pins the official `mvdan.cc/sh/v3` module at `v3.14.1`. Our small Go bridge calls
+`syntax.NewParser` and upstream's `syntax/typedjson.Encode` directly; the renderer
+consumes that upstream JSON format without an intermediate AST schema. It does
+not import an interpreter. The JavaScript loader initializes the bundled WASM
+lazily, once, with Go's globals isolated from Pi. There are no npm parser
+runtime dependencies, external executables, downloads, or target-file reads.
+
+Checked-in WASM keeps npm and Git installs self-contained. Rebuild with Go
+1.27.3 available on PATH:
+
+```bash
+npm run build:shell-parser
+```
+
+The build uses pinned module checksums, `-trimpath`, no VCS stamping and no build
+ID. It copies the matching Go support script unmodified. `parser/build.json`
+records source/asset hashes and toolchain/upstream versions; tests detect stale
+sources or assets. The bundled Go and mvdan/sh licenses are in that directory.
+Go is a build-only requirement; users do not need it.
+
 **Development experiment — dictionary placement:** keep the shared dictionary at
 the end for now, preserving the checkpoint's start for session-start information.
 Compare dictionary-first versus dictionary-last in independent behavioural tests;

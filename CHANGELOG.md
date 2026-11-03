@@ -8,8 +8,9 @@
 - Keep the location dictionary near the checkpoint end, with stable branch-local
   IDs across compaction, resume, fork and turn-mode changes. Count dictionary
   cost under the cap and omit unused definitions after filtering or trimming.
-- Include the shell parser as a runtime dependency and retain a pinned-baseline
-  offline comparison harness for further evaluation.
+- Bundle the official mvdan/sh parser and typed-JSON encoder as WebAssembly,
+  using a small in-package bridge. No third-party npm parser wrapper, runtime
+  downloads, Go installation, or external shfmt executable is required.
 
 ## 0.10.0
 
