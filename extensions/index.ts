@@ -1054,7 +1054,7 @@ async function buildMechanicalSummary(opts: {
   // The location dictionary stays above the LAST checkpoint line; everything
   // after that line is Pi's verbatim tail.
   const locationTable = dictionary(capped.locationIds);
-  if (locationTable) parts.push("", locationTable);
+  if (locationTable) parts.push("", "The following location dictionary resolves `@N` references above; it is not part of the conversation.", locationTable);
   parts.push("");
   parts.push(EVIDENCE_BOUNDARY_RULE);
   parts.push("");
