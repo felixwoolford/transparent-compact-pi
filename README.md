@@ -1,4 +1,4 @@
-# transparent-compact
+# transparent-compact-pi
 
 [Context compaction](#control-compaction) and pruning for [Pi](https://pi.dev/) that keeps conversation text verbatim instead of replacing it with a model-generated summary. It removes thinking and most tool output from the active context, while keeping user messages, assistant text, compact tool-call stubs and explicitly selected reads. The original session history remains available.
 
