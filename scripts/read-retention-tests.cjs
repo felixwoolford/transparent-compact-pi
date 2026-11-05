@@ -40,6 +40,34 @@ module.exports = async function ({ factory, load, SessionManager, root, makeCont
     };
     return { manager, ctx, notices, ext, append, call, result, read, compact, project };
   }
+  // Providers may serialize omitted optional arguments as null. These are
+  // successful ordinary reads, including batched calls, not invalid ranges.
+  const nullable = rig(); nullable.append(user("Read with nullable arguments"));
+  nullable.append(assistant([
+    toolCall("read", { path: "docs/SPEC.md", offset: 1, limit: null }, "null-spec"),
+    toolCall("read", { path: "GUIDE.md", offset: null, limit: null }, "null-guide"),
+  ], "toolUse"));
+  nullable.result("null-spec", "NULL_SPEC_CONTENT");
+  nullable.result("null-guide", "NULL_GUIDE_FIRST");
+  nullable.read("GUIDE.md", "NULL_GUIDE_LATEST", { offset: null, limit: null });
+  nullable.read("null-pages", "a\nb\n\n[1 more lines in file. Use offset=3 to continue.]", { offset: null, limit: 2 });
+  nullable.read("null-pages", "c", { offset: 3, limit: null });
+  for (const limit of [0, -1, 1.5, "2", false]) nullable.read("invalid-limit", "INVALID_LIMIT_CONTENT", { limit });
+  const nullCatalog = readCatalog(nullable.manager.getBranch(), cwd);
+  assert.equal(nullCatalog.length, 3, "null means omitted; other invalid limits remain excluded");
+  const nullGuide = nullCatalog.find((f) => f.path.endsWith("/GUIDE.md"));
+  assert.equal(nullGuide.episodes.length, 2);
+  assert.equal(nullGuide.episodes[0].reads[0].offset, 1);
+  assert.equal(nullGuide.episodes[0].reads[0].limit, undefined);
+  assert.equal(episodeCoverage(nullGuide.episodes[0]), "full");
+  const nullPages = nullCatalog.find((f) => f.path.endsWith("/null-pages"));
+  assert.equal(nullPages.episodes.length, 1);
+  assert.equal(nullPages.episodes[0].reads.length, 2);
+  assert.equal(episodeCoverage(nullPages.episodes[0]), "full");
+  const nullTail = nullable.append(user("Tail")), nullCheckpoint = await nullable.compact(nullTail);
+  assert(nullCheckpoint.summary.includes("NULL_SPEC_CONTENT") && nullCheckpoint.summary.includes("NULL_GUIDE_LATEST"));
+  assert(!nullCheckpoint.summary.includes("NULL_GUIDE_FIRST"));
+
   const r = rig();
   const owner = r.append(user("First task"));
   const page1 = "SPEC_PAGE_ONE\n  whitespace  \n\n[2 more lines in file. Use offset=3 to continue.]";

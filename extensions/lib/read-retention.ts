@@ -98,7 +98,7 @@ export function readCatalog(entries: SessionEntry[], cwd: string): ReadFile[] {
       pending.delete(message.toolCallId);
       if (!call || call.name !== "read" || message.toolName !== call.name || message.isError !== false ||
           typeof call.args?.path !== "string" || !message.content.length || message.content.some((b) => b.type !== "text" || typeof b.text !== "string")) continue;
-      const offset = call.args.offset ?? 1, limit = call.args.limit;
+      const offset = call.args.offset ?? 1, limit = call.args.limit ?? undefined;
       if (!Number.isSafeInteger(offset) || offset < 1 || (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1))) continue;
       const text = message.content.map((b) => (b as { text: string }).text);
       reads.push({ entryId: entry.id, path: readPath(call.args.path, cwd), owner: call.owner, order: call.order, offset,
