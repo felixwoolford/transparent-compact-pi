@@ -28,6 +28,19 @@ test('location identities are append-only, scoped, restorable, and escaped', () 
   assert(restored.render().includes('a\\nb.ts'));
 });
 
+test('location rendering is a plain lookup scoped to selected definitions', () => {
+  const locations = new Locations(cwd);
+  const file = locations.ref('a\nb.ts');
+  const url = locations.ref('https://example.invalid/source');
+  const before = JSON.stringify(locations.entries);
+  assert.deepEqual(locations.render().split('\n').slice(1, -1), [
+    `${file.id} "a\\nb.ts"`, `${url.id} URL "https://example.invalid/source"`,
+  ]);
+  assert(!locations.render(new Set([url.id])).includes(file.id));
+  assert.equal(locations.render(new Set()), '');
+  assert.equal(JSON.stringify(locations.entries), before);
+});
+
 test('keeps shell topology, subcommands and redirect paths, drops simulation values', async () => {
   const result = await skeleton('cd rust && cargo test --features parallel > /tmp/tests.log | tail -5');
   assert.match(result.text, /cd @1 &&.*cargo test >@2 \| tail/);

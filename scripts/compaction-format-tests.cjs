@@ -2,7 +2,7 @@
 
 const assert = require("node:assert/strict");
 const path = require("node:path");
-const { locationId, resolvedSummary } = require('./location-test-helpers.cjs');
+const { locationId, locationLine } = require('./location-test-helpers.cjs');
 
 module.exports = async function ({ ext, SessionManager, root, compact, makeContext, assistant, toolCall, text, user }) {
   console.log("== Compact signatures: relative paths, payload sizes, and 160-character head-only previews ==");
@@ -90,13 +90,29 @@ module.exports = async function ({ ext, SessionManager, root, compact, makeConte
     assert(!c.summary.includes(secret), secret);
   assert(stubs.includes('third_party(content="Not a write payload", query="' + "q".repeat(159) + "…"));
   assert(c.summary.includes(userProse) && c.summary.includes(assistantProse), "never shorten conversation prose");
-  assert(resolvedSummary(c).includes("docs/spec.md\n</read-files>"));
-  assert(c.summary.includes("<modified-files note="));
-  assert(resolvedSummary(c).includes("\nsrc/out.ts (no read-tool output in tail)\n</modified-files>"));
+  assert(!c.summary.includes("docs/spec.md"), "metadata-only paths do not create dictionary entries");
+  assert.equal(locationLine(c, "src/out.ts"), `${id('src/out.ts')} "src/out.ts"`);
+  assert(!/<(?:read|modified)-files\b/.test(c.summary), "no separate file inventories");
   assert.deepEqual(c.details.readFiles, [path.join(cwd, "docs/spec.md")], "file metadata stays original");
   assert.deepEqual(c.details.modifiedFiles, [path.join(cwd, "src/out.ts")]);
   assert(manager.getBranch().some((e) => e.message?.content?.some?.((b) => b.arguments?.content === content)),
     "write bodies remain in raw history");
+
+  const joined = (await build([assistant([
+    toolCall("read", { path: "src/both.ts" }, "joined"),
+    toolCall("read", { path: "lexical-only.ts" }, "lexical"),
+  ], "toolUse")], { fileOps: { read: new Set(["src/both.ts", "read-only.md"]),
+    written: new Set(), edited: new Set(["./src/both.ts"]) } })).c;
+  for (const file of ["src/both.ts", "lexical-only.ts"])
+    assert.equal(locationLine(joined, file), `${locationId(joined, file)} ${JSON.stringify(file)}`,
+      "operation metadata does not annotate definitions");
+  assert(!joined.summary.includes("read-only.md"));
+
+  const oversizedFile = "src/" + "long-directory/".repeat(100) + "read.md";
+  const fixed = (await build([assistant([toolCall("read", { path: oversizedFile }, "oversized")], "toolUse")],
+    { budget: 700, fileOps: { read: new Set([oversizedFile]), written: new Set(), edited: new Set() } })).c;
+  assert(!fixed.summary.includes(`[Tools]: read ${locationId(fixed, oversizedFile)}`), "cap removes the tool stub");
+  assert(!fixed.summary.includes(oversizedFile), "capping the last reference removes its definition even if operation metadata contains it");
 
   const execution = await build([{ role: "bashExecution", command: `cd '${cwd}' && ` + "x".repeat(2000),
     output: "EXECUTION_OUTPUT_SECRET", exitCode: 0, cancelled: false, truncated: false, timestamp: 0 }]);

@@ -3,7 +3,7 @@
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
-const { resolvedSummary } = require('./location-test-helpers.cjs');
+const { locationLine } = require('./location-test-helpers.cjs');
 
 module.exports = async function ({ factory, load, SessionManager, root, makeContext, assistant, toolCall, text, user, saveSession }) {
   console.log("== Startup reads: lexical selection, original chunks, frozen carry-forward and tail deduplication ==");
@@ -91,8 +91,8 @@ module.exports = async function ({ factory, load, SessionManager, root, makeCont
   for (const value of ["BEFORE_FIRST_PROMPT", "EXCLUDED_", "FAILED_CONTENT", "UNKNOWN_CONTENT", "IMAGE_CONTENT", "IMAGE_BYTES", "AMBIGUOUS_CONTENT", "WRONG_TOOL_CONTENT", "UNMATCHED_CONTENT", "OMITTED_CONTENT", "OLD_REPLACED_CONTENT", "OMITTED_CALL_CONTENT", "AFTER_SECOND_RESULT", "AFTER_SECOND_PROMPT"])
     assert(!first.summary.includes(value), value);
   assert(!first.details.span.lines.join("\n").includes(page1), "read bodies are not part of trimmable spans");
-  assert(resolvedSummary(first).includes("docs/SPEC.md (startup read output retained in checkpoint or tail; may be partial)"));
-  assert.match(resolvedSummary(first), /^UNRELATED\.md$/m, "no absence claim for unannotated read paths");
+  for (const file of ["docs/SPEC.md", "UNRELATED.md"])
+    assert(locationLine(first, file).endsWith(JSON.stringify(file)), "retention does not add per-file annotations");
   assert(first.summary.indexOf("### Retained startup reads") > first.summary.lastIndexOf("</compacted-span>"));
   assert(first.summary.indexOf("### Retained startup reads") < first.summary.indexOf("**Evidence boundary:**"));
 

@@ -37,7 +37,7 @@ If `context_lookup` is not in your tool list, say that subagent recovery is unav
 - You are unsure where an earlier finding came from, what a command actually printed, or why you reached a conclusion.
 - Earlier notes conflict with new evidence and you need to check the historical evidence behind them.
 
-Tool stubs and file lists do not preserve the full supporting material. Most output
+Tool stubs do not preserve the full supporting material. Most output
 and detailed payloads are omitted. Inline observations are historical, not verification
 of unshown details or current state. Unlabelled calls do not establish exit 0 or passing tests.
 
@@ -112,7 +112,7 @@ intended context parameters.
 2. Ask narrowly scoped questions using exact error strings, file paths, function names, or the command whose output you need. Recover tightly related details together; use separate queries for independent facts. Ask the subagent for evidence, not for a solution to the broader task.
 3. Findings cite ENTRY ids and the logical transcript name. Retain these citations when relying on recovered facts. The renderer preserves full thinking, text, tool-call arguments, and tool results, although individual search results have output limits.
 4. Distinguish **user instructions**, **observed tool output**, and **reasoning at the time**. A recovered `[thinking]` block is a historical hypothesis, not verified fact. Earlier assistant prose is not independently observed evidence either.
-5. Historical tool output proves what was observed then, not what is true now. Review uncommitted work and re-verify current build/test state when needed. **Before using `write` to replace an existing file, re-read it unless its current contents are already visible in context. Do not reconstruct unchanged sections from memory.** This is not a blanket reread requirement for small exact-match `edit`s. File-list annotations describe retained evidence as of the checkpoint, not live filesystem state; a read or write payload may already be visible in the tail.
+5. Historical tool output proves what was observed then, not what is true now. Review uncommitted work and re-verify current build/test state when needed. **Before using `write` to replace an existing file, re-read it unless its current contents are already visible in context. Do not reconstruct unchanged sections from memory.** This is not a blanket reread requirement for small exact-match `edit`s.
 6. Lookups can return incomplete findings or fail. State what remains missing; do not invent details or treat a partial answer as exhaustive.
 
 ## Independent exports

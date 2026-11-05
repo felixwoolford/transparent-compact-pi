@@ -94,7 +94,7 @@ async function compact(ext, ctx, ids, kept, reason = "manual", fileOps) {
   assert(c.summary.includes("user and assistant prose is kept verbatim, subject to budget trimming"));
   assert(c.summary.includes("Retained prose is a record of what was said, not verification of its claims."));
   assert(c.summary.includes("Thinking and most output are removed; selected output observations remain after →."));
-  assert(c.summary.includes("**Evidence boundary:** Tool stubs and file lists omit supporting details."));
+  assert(c.summary.includes("**Evidence boundary:** Tool stubs omit supporting details."));
   assert(c.summary.lastIndexOf("**Evidence boundary:**") < c.summary.lastIndexOf("Conversation"), "closing evidence rule stays above the uncompacted tail");
   assert(!c.summary.includes("EARLIEST_TOOL_OUTPUT"));
   assert(!c.summary.includes("EARLIEST_THINKING"));
@@ -315,8 +315,9 @@ async function capTests(ext, SessionManager, root, budget) {
   const d = manager.appendMessage(user(huge("D")));
   const tail2 = manager.appendMessage(user("Retained tail 2", epoch + 2000));
   const c2 = await compact(ext, ctx, [tail1, c, d], tail2);
-  const section = c2.summary.split("### Compacted conversation (oldest first)")[1];
-  // The size guard includes a minimum 500-char line budget.
+  const section = c2.summary.split("### Compacted conversation (oldest first)")[1].split("**Evidence boundary:**")[0];
+  // Measure capped content, not the instruction envelope. The size guard
+  // includes a minimum 500-char line budget.
   assert(section.length <= budget + 400, `conversation section ${section.length}, budget ${budget}`);
   assert.equal((c2.summary.match(/<compacted-span /g) ?? []).length, 2);
   assert(c2.summary.includes("PASTED LOG LINE D"), "newest user content survives");
@@ -362,7 +363,7 @@ async function checkpointTests(ext, SessionManager, root) {
   assert.equal((legacyResult.summary.match(/LEGACY_CHECKPOINT_EXACT_TEXT/g) ?? []).length, 1);
   assert.deepEqual(legacyResult.details.readFiles, ["legacy-read.ts"]);
   assert.deepEqual(legacyResult.details.modifiedFiles, ["legacy-edited.ts"]);
-  assert(legacyResult.summary.lastIndexOf("</modified-files>") < legacyResult.summary.lastIndexOf("Conversation from"));
+  assert(!legacyResult.summary.includes("<locations "), "operation metadata alone does not create a dictionary");
 
   const branched = SessionManager.inMemory(cwd);
   const branchCtx = makeContext(branched, cwd);
@@ -522,7 +523,8 @@ async function main() {
     assert.equal((c3.summary.match(/\*\*Recovering hidden details\.\*\*/g) ?? []).length, 1);
     assert.equal((c3.summary.match(/<compacted-span /g) ?? []).length, 3);
     for (const n of [1, 2, 3]) assert(c3.summary.includes(`<compacted-span n="${n}"`));
-    assert(c3.summary.includes("src/foo.ts") && c3.summary.includes("src/bar.ts"), "file lists are cumulative");
+    assert(c3.summary.includes("src/foo.ts") && !c3.summary.includes("src/bar.ts"), "only referenced locations appear in context");
+    assert.deepEqual(c3.details.readFiles, ["src/bar.ts"], "file operation metadata remains cumulative for summary mode");
     assert(c3.summary.endsWith("onward continues verbatim below — it was not compacted."));
     assert(!JSON.stringify(f.manager.buildSessionContext()).includes(output), "evidence is absent from model context");
     assert.deepEqual(fs.readdirSync(cwd), [], "compaction does not write additional files");

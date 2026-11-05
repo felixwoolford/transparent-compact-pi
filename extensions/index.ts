@@ -736,16 +736,6 @@ ${r.text.join("\n")}
   ].join("\n\n");
 }
 
-// File annotations describe evidence, not a guarantee of filesystem freshness.
-// Use Pi's projection for visibility, but recorded mutations can invalidate a
-// snapshot even when the mutation's message was subsequently omitted.
-interface FileEvidence {
-  kind: "read" | "write";
-  completeness?: "full" | "partial" | "unknown";
-  changed?: "edit" | "write";
-  orderUncertain?: boolean;
-}
-
 function fileEvidenceKey(file: string, cwd: string): string {
   // Lexical normalization only: no stat/realpath, and no symlink-equivalence claim.
   let normalized = file.replace(/[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g, " ").replace(/^@/, "");
@@ -756,87 +746,6 @@ function fileEvidenceKey(file: string, cwd: string): string {
   }
   return path.resolve(cwd, normalized);
 }
-
-function readCompleteness(args: Record<string, any>, message: Record<string, any>, replaced: boolean): "full" | "partial" | "unknown" {
-  const blocks = message.content;
-  if (replaced || !Array.isArray(blocks) || blocks.length !== 1 || blocks[0].type !== "text" || typeof blocks[0].text !== "string") return "unknown";
-  const text = blocks[0].text;
-  if (/^Read image file \[/.test(text)) return "unknown";
-  const truncation = message.details?.truncation;
-  if (truncation?.firstLineExceedsLimit) return "unknown"; // Only a warning, not file contents.
-  // Pi's read tool supplies these notices for both default and explicit limits.
-  if (truncation?.truncated === true || /\[(?:Showing lines [^\n]*Use offset=\d+ to continue\.|\d+ more lines in file\. Use offset=\d+ to continue\.)\]\s*$/.test(text)) return "partial";
-  const offset = args.offset ?? 1;
-  if (!Number.isInteger(offset) || offset < 1 || (args.limit != null && (!Number.isInteger(args.limit) || args.limit < 1))) return "unknown";
-  if (offset > 1) return "partial";
-  // A limit is not proof of partialness: without a continuation notice Pi reached EOF.
-  // Unknown argument schemas are not assumed to have Pi's read semantics.
-  return Object.keys(args).every((key) => ["path", "offset", "limit"].includes(key)) ? "full" : "unknown";
-}
-
-function retainedFileEvidence(entries: SessionEntry[], firstKeptEntryId: string | undefined, cwd: string): Map<string, FileEvidence> {
-  const evidence = new Map<string, FileEvidence>();
-  const cut = entries.findIndex((entry) => entry.id === firstKeptEntryId);
-  if (cut < 0) return evidence;
-  const visible = new Map(buildSessionProjection(entries).entries.map((entry) => [entry.sourceEntry.id, entry.messages]));
-  const pending = new Map<string, { name: string; args: Record<string, any>; visible: boolean; orderUncertain: boolean } | null>();
-  const changed = (name: "edit" | "write", args: Record<string, any>) => {
-    if (typeof args.path !== "string") return;
-    const previous = evidence.get(fileEvidenceKey(args.path, cwd));
-    if (previous) previous.changed = name;
-  };
-  for (const entry of entries.slice(cut)) {
-    if (entry.type !== "message") continue;
-    const raw = entry.message as unknown as Record<string, any>;
-    const projected = visible.get(entry.id)?.find((message) => message.role === raw.role) as Record<string, any> | undefined;
-    if (raw.role === "assistant") {
-      const blocks = Array.isArray(raw.content) ? raw.content : [];
-      for (const block of blocks) {
-        if (block.type !== "toolCall" || typeof block.id !== "string") continue;
-        // Sibling calls may execute concurrently; result order is not read/write order.
-        const orderUncertain = typeof block.arguments?.path === "string" && blocks.some((other: any) =>
-          other !== block && other.type === "toolCall" && ["write", "edit"].includes(other.name) &&
-          typeof other.arguments?.path === "string" &&
-          fileEvidenceKey(other.arguments.path, cwd) === fileEvidenceKey(block.arguments.path, cwd));
-        const shown = projected?.content?.filter?.((b: any) => b.type === "toolCall" && b.id === block.id);
-        const sameCall = shown?.length === 1 && shown[0].name === block.name &&
-          JSON.stringify(shown[0].arguments) === JSON.stringify(block.arguments);
-        pending.set(block.id, pending.has(block.id) ? null : { name: block.name, args: block.arguments ?? {}, visible: sameCall, orderUncertain });
-      }
-    } else if (raw.role === "toolResult") {
-      const call = pending.get(raw.toolCallId);
-      pending.delete(raw.toolCallId);
-      if (call && call.name === raw.toolName && typeof call.args.path === "string" && raw.isError === false) {
-        const key = fileEvidenceKey(call.args.path, cwd);
-        if (call.name === "write" || call.name === "edit") changed(call.name, call.args);
-        if (call.visible && projected && call.name === "read") {
-          const completeness = readCompleteness(call.args, projected, projected.content !== raw.content);
-          const previous = evidence.get(key);
-          // A later partial read does not hide an earlier complete snapshot.
-          if (!previous || previous.changed || previous.orderUncertain || (previous.kind === "read" && previous.completeness !== "full"))
-            evidence.set(key, { kind: "read", completeness, orderUncertain: call.orderUncertain });
-        } else if (call.visible && call.name === "write" && typeof call.args.content === "string") {
-          evidence.set(key, { kind: "write", orderUncertain: call.orderUncertain });
-        }
-      }
-      // Nested calls have metadata but no model-visible read outputs or write payloads.
-      for (const nested of raw.nestedCalls?.calls ?? []) {
-        if (nested.status === "ok" && (nested.name === "edit" || nested.name === "write")) changed(nested.name, nested.arguments ?? {});
-      }
-    }
-  }
-  return evidence;
-}
-
-function fileEvidenceLabel(evidence: FileEvidence | undefined): string | undefined {
-  if (!evidence) return;
-  if (evidence.orderUncertain) return `${evidence.kind} in tail; order uncertain`;
-  if (evidence.changed) return `${evidence.kind} in tail, then ${evidence.changed === "edit" ? "edited" : "written"}`;
-  if (evidence.kind === "write") return "write content in tail";
-  return evidence.completeness === "unknown" ? "read output in tail" : `${evidence.completeness} read in tail`;
-}
-
-const FILE_LIST_EXPLANATION = "File lists record earlier operations. Read/write annotations describe retained evidence as of this checkpoint, not live filesystem state; unannotated paths do not establish content visibility.";
 
 const SECTION_HEADER = "### Compacted conversation (oldest first)";
 const SPAN_CLOSE = "</compacted-span>";
@@ -1075,7 +984,7 @@ const CHECKPOINT_EXPLANATION = `**Compacted conversation follows.** The earlier 
 
 const RECOVERY_INSTRUCTIONS = `**Recovering hidden details.** Use \`context_lookup\` with a specific historical question: a subagent searches this conversation's full session history and returns relevant findings. Use the recovery tools for history established by this conversation or its checkpoint, not for project discovery or exploration of other sessions. If its findings are incomplete, use the bounded fallback tools \`context_list_entries\`, \`context_grep\`, and \`context_show_entry\`.`;
 
-const EVIDENCE_BOUNDARY_RULE = "**Evidence boundary:** Tool stubs and file lists omit supporting details. Most output and detailed payloads are omitted. Inline observations are historical, not verification of unshown details or current state. Use `context_lookup` for omitted observations or provenance; inspect sources for current state.";
+const EVIDENCE_BOUNDARY_RULE = "**Evidence boundary:** Tool stubs omit supporting details. Most output and detailed payloads are omitted. Inline observations are historical, not verification of unshown details or current state. Use `context_lookup` for omitted observations or provenance; inspect sources for current state.";
 
 const REORIENT_MESSAGE = "transparent-compact:reorient";
 const RECOVERY_RECAP = `**Recovery recap.** ${RECOVERY_SCOPE_RULE} For unfamiliar project details or missing requirements, inspect project files or ask the user instead. If lookup findings are incomplete, use \`context_list_entries\`, \`context_grep\`, or \`context_show_entry\`, following pagination instructions. ${RECOVERY_FILESYSTEM_RULE} Keep these evidence/recovery rules in force as work continues.`;
@@ -1167,8 +1076,6 @@ async function buildMechanicalSummary(opts: {
   spanFrom?: string; // ISO timestamp of the first summarised message
   spanTo?: string; // ISO timestamp of the last summarised message
   firstKeptEntryId?: string; // start of the verbatim (uncompacted) tail
-  readFiles: string[];
-  modifiedFiles: string[];
   startupReads: StartupReads;
   cwd: string;
   notify: (msg: string) => void;
@@ -1179,19 +1086,13 @@ async function buildMechanicalSummary(opts: {
   const native = Object.keys(fidelity).length ? fidelityMessages(opts.branchEntries, fidelity, opts.firstKeptEntryId!) : new Map<string, AgentMessage[]>();
   const nativeMessages = [...native.values()].flat();
   const nativeChars = messageTokens(nativeMessages) * 4;
-  const nativeResults = pairedToolResults(nativeMessages), nativeReadPaths = new Set<string>();
-  for (const message of nativeMessages) if (message.role === "assistant") for (const block of message.content) {
-    if (block.type === "toolCall" && block.name === "read" && typeof block.arguments?.path === "string" && nativeResults.get(block)?.isError === false)
-      nativeReadPaths.add(fileEvidenceKey(block.arguments.path, opts.cwd));
-  }
   const rendered = fidelitySpans(filterSpans(opts.revisedAt ? spans : [...spans, {
     at: opts.now, reason: opts.reason, from: opts.spanFrom, to: opts.spanTo,
     lines: opts.spanLines, tools: opts.spanTools, turnIds: opts.spanTurnIds,
   }], new Set(opts.filteredTurnIds)), fidelity);
   const allSpans = rendered.spans;
   const locations = new Locations(opts.cwd, opts.locations ?? checkpointLocations(opts.branchEntries));
-  const fileIds = [...opts.readFiles, ...opts.modifiedFiles].map((file) => locations.ref(file, opts.cwd, 'path', true).id);
-  const dictionary = (ids: string[]) => locations.render(new Set([...fileIds, ...ids]));
+  const dictionary = (ids: string[]) => locations.render(new Set(ids));
   const dictionaryCost = (ids: string[]) => { const text = dictionary(ids); return text ? text.length + 2 : 0; };
   const allLocationIds = allSpans.flatMap((span) => span.tools?.lines.flatMap((line) => line.calls.flatMap((call) => call.locations ?? [])) ?? []);
   const coversOf = (s: { from?: string; to?: string }): string | undefined => (s.from && s.to ? `${s.from} → ${s.to}` : undefined);
@@ -1225,8 +1126,6 @@ async function buildMechanicalSummary(opts: {
     opts.notify(`transparent-compact: the base block alone is ${base.summary.length.toLocaleString()} chars (budget ${maxChars.toLocaleString()}); it is kept un-capped`);
   if (maxChars !== undefined && retainedReads.length > maxChars)
     opts.notify(`transparent-compact: retained startup reads alone are ${retainedReads.length.toLocaleString()} chars (budget ${maxChars.toLocaleString()}); they are kept un-capped`);
-  if (maxChars !== undefined && dictionaryCost([]) > maxChars)
-    opts.notify(`transparent-compact: location definitions required by file lists exceed the budget; they are kept to avoid dangling references`);
   if (maxChars !== undefined && nativeChars > maxChars)
     opts.notify(`transparent-compact: full-fidelity turns alone are ~${nativeChars.toLocaleString()} estimated chars (budget ${maxChars.toLocaleString()}); they are kept un-capped. Only PROSE can be trimmed.`);
   const capped = capSpans(allSpans, maxChars === undefined ? undefined : Math.max(500, maxChars - overhead), dictionaryCost);
@@ -1272,29 +1171,9 @@ async function buildMechanicalSummary(opts: {
   parts.push(SECTION_HEADER);
   parts.push("");
   parts.push(blocks.length > 0 ? blocks.join("\n\n") : "(no user or assistant prose in these spans — use context_lookup)");
-  // The file lists describe the compacted spans, so they belong above the
-  // verbatim boundary line. That closing line is the LAST line of the
-  // checkpoint; everything after it is pi's retained verbatim tail.
+  // Retained reads and the location dictionary describe compacted history,
+  // above the LAST checkpoint line; everything after it is Pi's verbatim tail.
   if (retainedReads) parts.push("", retainedReads);
-  const retainedPaths = new Set(opts.startupReads.reads.map((r) => fileEvidenceKey(r.path, opts.cwd)));
-  const hasFileLists = opts.readFiles.length > 0 || opts.modifiedFiles.length > 0;
-  if (hasFileLists) {
-    const evidence = retainedFileEvidence(opts.branchEntries, opts.firstKeptEntryId, opts.cwd);
-    const knownTail = opts.branchEntries.some((entry) => entry.id === opts.firstKeptEntryId);
-    const fileLine = (file: string, modified: boolean): string => {
-      const key = fileEvidenceKey(file, opts.cwd);
-      const label = fileEvidenceLabel(evidence.get(key)) ?? (retainedPaths.has(key)
-        ? "startup read output retained in checkpoint or tail; may be partial"
-        : nativeReadPaths.has(key) ? "historical read output retained in a full-fidelity turn; re-read for current contents"
-        : modified && knownTail ? "no read-tool output in tail" : undefined);
-      return `${locations.ref(file, opts.cwd, 'path', true).id}${label ? ` (${label})` : ""}`;
-    };
-    parts.push("", FILE_LIST_EXPLANATION);
-    if (opts.readFiles.length > 0)
-      parts.push(`<read-files note="reads in compacted history; unless annotated, no retained read-tool output identified">\n${opts.readFiles.map((file) => fileLine(file, false)).join("\n")}\n</read-files>`);
-    if (opts.modifiedFiles.length > 0)
-      parts.push(`<modified-files note="modified in compacted history">\n${opts.modifiedFiles.map((file) => fileLine(file, true)).join("\n")}\n</modified-files>`);
-  }
   const locationTable = dictionary(capped.locationIds);
   if (locationTable) parts.push("", locationTable);
   parts.push("");
@@ -2238,7 +2117,6 @@ export default function (pi: ExtensionAPI) {
       const spanFrom = toIso(msgTs(allMessages[0]));
       const spanTo = toIso(msgTs(allMessages[allMessages.length - 1]));
       const renderer = new ToolRenderer(ctx.cwd, { entries: checkpointLocations(branchEntries) });
-      for (const file of [...canonicalReadFiles, ...canonicalModifiedFiles]) renderer.locations.ref(file, ctx.cwd, 'path', true);
       const span = await summarizeMessages(allMessages, renderer, preparedTurnOwners(branchEntries, allMessages));
       const spanLines = span.lines;
 

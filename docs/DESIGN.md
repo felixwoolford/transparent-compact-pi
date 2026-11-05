@@ -16,7 +16,6 @@ extension builds a checkpoint without changing that boundary or calling a model:
 | Custom messages | Short type stubs marked `content removed`; bodies remain in the raw session. Managed re-orientation messages are regenerated instead. |
 | Recent conversation | Pi keeps its normal verbatim tail. |
 | Earlier compacted spans | Re-rendered chronologically, without repeated model summarization. |
-| Read/modified file lists | Cumulative operation lists with checkpoint-relative retained-evidence annotations. |
 
 New tool lines use `[Tools]:` with compact display signatures:
 
@@ -43,17 +42,16 @@ these are not effect analysis. Unsupported, oversized or malformed shell input
 falls back to a head-only literal preview, still without execution metadata.
 
 A shared `<locations>` dictionary near the checkpoint end resolves `@N` IDs.
-File lists use the same IDs while retaining their operation/evidence annotations.
 IDs are append-only and branch-local, persisted in compaction details so resume,
 fork, filtering/restoration and repeated compaction do not renumber old references.
-Definitions are rendered only for surviving structured tool references and visible
-file lists, never discovered by regex-scanning prose. Canonical metadata keeps the
+Definitions are rendered only for surviving structured tool references, never
+discovered by regex-scanning prose. Canonical metadata keeps the
 complete registry so restoring a turn or disabling the cap restores its definitions.
 Raw command/program payloads are not copied into display records.
 
 The cap counts dictionary characters, including their removal when a call is
-trimmed. Definitions needed by file lists are fixed overhead; unused definitions
-are omitted after pruning, native-turn replacement and capping. Skeletons are not
+trimmed. Unused definitions are omitted after pruning, native-turn replacement
+and capping. Skeletons are not
 shortened into partial syntax. Literal previews can tighten to 120 then 80 encoded
 characters before adjacent tool-only prefixes are grouped and destructive trimming
 starts. Calls remain independently removable and ordered.
@@ -160,16 +158,16 @@ A group includes all activity until the next raw user message, even across multi
 compaction spans. Confirmed exclusions are stored as the current `filteredTurnIds`
 snapshot on the compaction entry or its standalone revision, not an append-only
 union. Later verbatim checkpoints apply that branch-local selection to the original canonical spans before size
-trimming, reindexing tool display records without changing stored history. File
-operation lists and startup-read snapshots in compaction details remain canonical
-and unfiltered; only the rendered checkpoint masks them. Restoring a turn therefore
-also restores its retained-read copies and file-list membership without re-reading
+trimming, reindexing tool display records without changing stored history.
+Startup-read snapshots in compaction details remain canonical and unfiltered;
+only the rendered checkpoint masks them. Restoring a turn therefore
+also restores its retained-read copies and location definitions without re-reading
 files or reselecting startup evidence. There is no migration or reconstruction of
 saved spans without turn ownership; opaque content is not individually selectable.
 
 One `[Turn manually filtered]` marker replaces each excluded group at its original
 position, even across spans. Markers survive the size cap. Startup-read copies owned
-by the group are excluded; file-list paths used only by excluded turns are removed.
+by the group are excluded; location definitions used only by excluded turns are removed.
 Filtering does not undo filesystem mutations. The checkpoint introduction and
 persistent reorientation conditionally explain that the user excluded low-value
 context, which remains retrievable from the full raw history. Recovery tools are
@@ -190,7 +188,7 @@ receive the revision. The checkpoint size guard applies before a revision is sav
 Reload/resume and tree navigation select revisions from the raw active branch.
 The next real verbatim compaction inherits their choices and supersedes the old
 revision; model-summary compaction is also given the revised previous summary and
-file lists rather than stale saved checkpoint content. Cancelling the picker or
+file-operation metadata rather than stale saved checkpoint content. Cancelling the picker or
 size-cap decision saves no filtering revision. No-op confirmation writes nothing.
 
 `/filter-later <message>` (alias `/fl`) submits an ordinary user message through Pi's user-message API.
@@ -305,42 +303,6 @@ ready. Loading text appears only before any successful estimate (or when retryin
 a failed estimate), not on every toggle. Generation checks reject stale results, and
 closing/disposing the dialog invalidates pending work. No estimated sizes are
 persisted in checkpoint metadata, and no model calls are introduced.
-
-### File-list evidence annotations
-
-The lists record reads and modifications in compacted history, not an exhaustive
-inventory of current file contents. At every checkpoint, the extension checks
-Pi's model-context projection from `firstKeptEntryId` onward. The turn prefix is
-being compacted and is not treated as retained evidence. Context omissions and
-replacements are respected; replacement read text has unknown completeness.
-No filesystem reads or model calls are made for annotation.
-
-Successful, unambiguously paired `read` results receive `(full read in tail)`,
-`(partial read in tail)`, or `(read output in tail)` when completeness is uncertain.
-For Pi's read contract, offset/limit alone does not imply partialness: an offset of
-1 with a limit beyond EOF can still be complete. Truncation metadata and continuation
-notices are checked. Separate partial pages are not combined into a full-file claim.
-A later partial read does not hide an earlier complete snapshot with no intervening
-tracked modification.
-
-Successful writes with a visible full payload receive `(write content in tail)`.
-Recorded subsequent edits/writes invalidate earlier snapshots and produce labels
-such as `(read in tail, then edited)`. Mutation metadata can invalidate a snapshot
-even when the mutation's message was omitted, but cannot restore omitted source
-contents. Nested calls can invalidate snapshots, not supply visible file contents.
-Same-path sibling operations may run concurrently, so ambiguous read/write versus
-mutation ordering receives `(read in tail; order uncertain)` or the write equivalent
-instead of treating result order as proof of freshness.
-
-Modified paths without retained read/write evidence receive `(no read-tool output
-in tail)`, unless a selected startup read is retained separately. Startup reads
-keep their existing positive annotation. Unmodified paths without established
-retained evidence remain unannotated; the read-list header states the default once:
-"unless annotated, no retained read-tool output identified". A bare path does not
-establish that document contents are still visible. The shared explanation states that labels
-apply as of this checkpoint, not to live filesystem state; shell reads/changes and
-external modifications are not inferred. File contents are never duplicated into
-these lists, and annotations are recomputed rather than persisted as file metadata.
 
 ### Retained startup reads
 
@@ -560,7 +522,7 @@ instructions that must be prominent at the actual point of resumption:
 
 ```text
 Checkpoint introduction: what was removed + full recovery instructions
-All compacted spans (oldest first), then retained startup reads and file lists
+All compacted spans (oldest first), then retained startup reads and location dictionary
 One evidence-boundary warning + start-of-verbatim-tail marker
 Retained verbatim tail
 Any pending new user input

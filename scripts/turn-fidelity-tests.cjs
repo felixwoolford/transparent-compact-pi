@@ -94,7 +94,7 @@ module.exports = async function ({ factory, load, SessionManager, root, makeCont
   assert(c.slots[0].offset < c.slots[1].offset);
   assert(!c.summary.includes("TOOLS_PROSE") && !c.summary.includes("ARGUMENT_END") && !c.summary.includes("OUTPUT_END"), "raw content is not duplicated in the checkpoint");
   assert(!c.summary.includes("FULL_THINKING_PRESENT"));
-  assert(c.summary.includes("historical read output retained in a full-fidelity turn"));
+  assert(!c.summary.includes("historical read output retained in a full-fidelity turn"), "native content is not catalogued in per-file annotations");
   assert.equal(JSON.stringify(manager.getBranch().slice(0, -1)), before, "only a revision is appended");
   const checkpointId = selection.id;
   const source = JSON.stringify(manager.getBranch());
