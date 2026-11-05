@@ -78,7 +78,7 @@ async function compact(ext, ctx, ids, kept, reason = "manual", fileOps) {
   assert.equal(c.firstKeptEntryId, kept);
   assert.equal(c.tokensBefore, preparation.tokensBefore);
   assert.equal(c.details.kind, "mech-compact");
-  assert.deepEqual(Object.keys(c.details), ["kind", "readFiles", "modifiedFiles", "startupReads", "locations", "span"],
+  assert.deepEqual(Object.keys(c.details), ["kind", "readFiles", "modifiedFiles", "readRetention", "locations", "span"],
     "checkpoint metadata contains only the current session-backed contract");
   assert(!c.summary.includes("conversation.md"));
   assert(!c.summary.includes(ctx.cwd), "checkpoint does not disclose the transcript path");
@@ -462,8 +462,8 @@ async function main() {
     await require("./scripts/lookup-paging-tests.cjs")(hybridHelpers);
     await require("./scripts/runtime-lookup-tests.cjs")({ ...hybridHelpers, jiti, piRoot });
     await require("./scripts/reorientation-tests.cjs")({ ...hybridHelpers, factory, load, compact, jiti, piRoot });
-    await require("./scripts/startup-reads-tests.cjs")({ ...hybridHelpers, factory, load });
-    assert.deepEqual(Object.keys(ext.commands), ["compaction-method", "cap-compaction", "filter-later", "fl", "filter-auto", "compact-filtered", "filter-turns"]);
+    await require("./scripts/read-retention-tests.cjs")({ ...hybridHelpers, factory, load, jiti });
+    assert.deepEqual(Object.keys(ext.commands), ["compaction-method", "cap-compaction", "filter-later", "fl", "filter-auto", "compact-filtered", "filter-turns", "retain-reads"]);
     await require("./scripts/turn-filter-ui-tests.cjs")({ jiti, piRoot });
     await require("./scripts/turn-filter-tests.cjs")({ ...hybridHelpers, factory, load, jiti, piRoot });
     await require("./scripts/turn-fidelity-tests.cjs")({ ...hybridHelpers, factory, load, jiti, piRoot });
@@ -496,7 +496,7 @@ async function main() {
     assert(!skillText.includes("Before a long, tool-heavy task"), "ordinary task startup is not a recovery trigger");
     assert.match(loadedSkills.skills[0].description, /using context_lookup after compaction.*target earlier evidence.*phrase effective lookup questions.*handle incomplete findings/);
     assert.match(skillText, /history established by this conversation or its checkpoint,\s+not project\s+discovery/);
-    assert.match(skillText, /Retained startup reads and the uncompacted tail\s+remain available as evidence/);
+    assert.match(skillText, /Selected retained reads and the uncompacted tail\s+remain available as evidence/);
     assert(!skillText.includes("re-read required project documents"));
     assert(!skillText.includes("Re-read any file you are about to modify"));
     assert(skillText.includes("reasoning at the time"));

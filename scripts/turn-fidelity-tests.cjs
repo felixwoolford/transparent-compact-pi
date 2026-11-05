@@ -55,7 +55,7 @@ module.exports = async function ({ factory, load, SessionManager, root, makeCont
   let aborts = 0;
   const ctx = { ...makeContext(manager, cwd), model, mode: "tui", hasUI: true, isIdle: () => true, hasPendingMessages: () => false,
     abort: () => { aborts++; }, getSystemPrompt: () => "Test system prompt.",
-    getSystemPromptOptions: () => ({ contextFiles: [{ path: "AGENTS.md", content: "Read STARTUP.md" }] }),
+    getSystemPromptOptions: () => ({ contextFiles: [{ path: "AGENTS.md", content: "<retain-reads>\nSTARTUP.md\n</retain-reads>" }] }),
     ui: { notify: (...args) => notices.push(args) } };
   const run = async (ids, boundary, reason = "manual") => ext.handlers.session_before_compact({
     reason, signal: new AbortController().signal,

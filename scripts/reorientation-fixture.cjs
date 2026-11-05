@@ -18,7 +18,7 @@ const prompt = "Yes, proceed with the experiments now.";
 
 function seedScenario(manager, cwd) {
   const token = "REMOVED_SPEC_EVIDENCE_20261017";
-  const instructions = "Read SPEC.md first, then RUNBOOK.md. SPEC.md is the authoritative design. " +
+  const instructions = "<retain-reads>\nSPEC.md\nRUNBOOK.md\n</retain-reads>\nRead SPEC.md first, then RUNBOOK.md. SPEC.md is the authoritative design. " +
     "This is a Git repository; check git status before new work. Stage 1 is complete. " +
     "For the experiments stage, write experiments/e1-plan.txt with the exact E1 procedure and its run token, " +
     "then stop for approval. Do not execute the experiment or repeat completed stage-1 writes.";

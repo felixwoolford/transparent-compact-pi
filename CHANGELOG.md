@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased
+
+- Replace heuristic startup-read retention with explicit `<retain-reads>` declarations
+  in AGENTS/CLAUDE files: default to the first read, or use `latest:`.
+- Add `/retain-reads` with OFF/FIRST/LATEST selection, first/latest read ordering,
+  complete previews, coverage labels and filtered-turn flags. Group consecutive
+  partial reads into episodes; preserve selected outputs independently of turn
+  filtering without duplicating recent-tail or native-turn outputs. Choices persist
+  in the session branch; confirmed edits can revise an existing checkpoint without
+  additional compaction.
+- Document the potential next-request prompt-cache cost of manual context edits.
+
+## 0.11.2
+
+- Remove read/modified file inventories and per-file evidence annotations from
+  checkpoints. Keep the location dictionary as a plain ID-to-location lookup and
+  remove related agent-facing guidance; file operations remain in conversation context.
+
+## 0.11.2
+
+- Added manual context filtering.
+
 ## 0.11.0
 
 - Use shared location IDs and AST-based skeletons for long bash tool calls.

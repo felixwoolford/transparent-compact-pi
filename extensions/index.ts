@@ -25,8 +25,6 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { homedir } from "node:os";
-import { fileURLToPath } from "node:url";
 import { Type } from "typebox";
 import { contentText, normalizeContext, uuidv7 } from "@earendil-works/pi-ai";
 import type { Message as AiMessage, Model, Tool as AiTool } from "@earendil-works/pi-ai";
@@ -41,6 +39,9 @@ import type { ToolLines, ToolStub } from "./lib/checkpoint-cap.js";
 import { FILTER_EXPLANATION, PREFLAG_ENTRY, AUTO_FILTER_ENTRY, FILTER_REVISION_ENTRY, autoFilterEnabled, preflaggedTurns,
   filterSpans, pickFilteredTurns, turnOwners } from "./lib/turn-filter.js";
 import type { FilterTurn, TurnSpan } from "./lib/turn-filter.js";
+import { readPath as fileEvidenceKey, readCatalog, readRetentionState, selectedReads, renderRetainedReads, READ_RETENTION_ENTRY } from "./lib/read-retention.js";
+import type { ReadOutput, ReadRetention } from "./lib/read-retention.js";
+import { pickRetainedReads } from "./lib/read-retention-ui.js";
 import { FIDELITY_EXPLANATION, fidelityMessages, fidelitySpans, locateSlots, expandCheckpoint,
   messageTokens, previewMessages, checkCheckpointBudget, checkContextBudget, isExpandedCheckpoint, checkpointContextMessages, retainedTailMessages, estimateContext } from "./lib/turn-context.js";
 import type { ContextEstimate, NoticeTokens, TurnFidelities, TurnSelection, TurnSlot } from "./lib/turn-context.js";
@@ -618,135 +619,6 @@ async function summarizeMessages(messages: AgentMessage[], renderer: ToolRendere
   return { lines, ...(owners ? { turnIds } : {}), ...(tools.lines.length ? { tools } : {}) };
 }
 
-// Startup reference retention is a lexical heuristic, not an interpretation of
-// required-reading prose. Snapshot actual text read results; never open files.
-interface StartupRead {
-  entryId: string;
-  path: string;
-  offset?: number;
-  limit?: number;
-  text: string[];
-}
-interface StartupReads {
-  version: 1;
-  closed: boolean;
-  reads: StartupRead[];
-}
-
-function isInstructionFile(file: string): boolean {
-  return /^(AGENTS(?:\.override)?|CLAUDE)\.md$/i.test(path.basename(file));
-}
-
-function mentionsPath(content: string, name: string): boolean {
-  if (!name) return false;
-  // A bare name can match, but not as a substring of another path or filename.
-  // Permit sentence-final punctuation, Markdown delimiters and link anchors.
-  const word = /[\p{L}\p{N}_./\\-]/u;
-  for (let at = content.indexOf(name); at >= 0; at = content.indexOf(name, at + 1)) {
-    const end = at + name.length;
-    const before = content[at - 1];
-    const after = content[end];
-    if ((!before || !word.test(before)) &&
-        (!after || !word.test(after) || (after === "." && (!content[end + 1] || /\s/.test(content[end + 1]))))) return true;
-  }
-  return false;
-}
-
-function startupReads(entries: SessionEntry[], ctx: ExtensionContext): StartupReads {
-  const latest = entries.findLast((e) => e.type === "compaction");
-  const previous = latest?.type === "compaction" &&
-    (latest.details as { kind?: string })?.kind === MECH_KIND
-    ? (latest.details as { startupReads?: StartupReads }).startupReads : undefined;
-  // Once the second user prompt has arrived, the selection and output bytes are
-  // frozen. Repeated compaction does not parse or compact an earlier checkpoint.
-  if (previous?.version === 1 && previous.closed) return previous;
-
-  const prompts = entries.filter((e) => e.type === "message" && e.message.role === "user");
-  const first = prompts[0] ? entries.indexOf(prompts[0]) : -1;
-  const second = prompts[1] ? entries.indexOf(prompts[1]) : entries.length;
-  const state: StartupReads = { version: 1, closed: prompts.length >= 2, reads: previous?.reads.slice() ?? [] };
-  if (first < 0) return state;
-
-  const sources = (ctx.getSystemPromptOptions?.().contextFiles ?? [])
-    .filter((f) => isInstructionFile(f.path)).map((f) => ({ path: f.path, content: f.content }));
-  // Older/custom contexts may expose only the rendered prompt. Restrict fallback
-  // extraction to named project-instruction blocks, never arbitrary prompt prose.
-  if (sources.length === 0) {
-    for (const match of (ctx.getSystemPrompt?.() ?? "").matchAll(/<project_instructions path="([^"]+)">\n?([\s\S]*?)<\/project_instructions>/g)) {
-      if (isInstructionFile(match[1])) sources.push({ path: match[1], content: match[2] });
-    }
-  }
-
-  // Respect explicit context omissions/replacements when selecting original
-  // reads. Raw session text remains recoverable, but is not silently resurrected.
-  const edits = new Map(entries.filter((e) => e.type === "context_edit").map((e) => [e.targetId, e.replacement]));
-  const pending = new Map<string, { name: string; args: Record<string, any> } | null>();
-  const reads: StartupRead[] = [];
-  for (const entry of entries.slice(first + 1, second)) {
-    if (entry.type !== "message" || edits.get(entry.id) === null) continue;
-    const msg = entry.message;
-    const content = edits.get(entry.id)?.content ?? (msg as { content?: unknown }).content;
-    const blocks = typeof content === "string" ? [{ type: "text", text: content }] : content;
-    if (!Array.isArray(blocks)) continue;
-    if (msg.role === "assistant") {
-      for (const b of blocks) {
-        if (b.type !== "toolCall" || typeof b.id !== "string") continue;
-        pending.set(b.id, pending.has(b.id) ? null : { name: b.name, args: b.arguments ?? {} });
-      }
-    } else if (msg.role === "toolResult") {
-      const call = pending.get(msg.toolCallId);
-      if (!call || call.name !== msg.toolName) continue;
-      pending.delete(msg.toolCallId);
-      if (call.name !== "read" || msg.isError !== false || typeof call.args.path !== "string" ||
-          blocks.length === 0 || blocks.some((b) => b.type !== "text" || typeof b.text !== "string")) continue;
-      const read: StartupRead = { entryId: entry.id, path: call.args.path,
-        ...(typeof call.args.offset === "number" ? { offset: call.args.offset } : {}),
-        ...(typeof call.args.limit === "number" ? { limit: call.args.limit } : {}),
-        text: blocks.map((b) => b.text) };
-      reads.push(read);
-      // Also recognize instruction files explicitly read during startup, e.g.
-      // nested AGENTS.md files not automatically loaded into the system prompt.
-      if (isInstructionFile(read.path)) sources.push({ path: read.path, content: read.text.join("\n") });
-    }
-  }
-  const known = new Set(state.reads.map((r) => r.entryId));
-  for (const read of reads) {
-    const absolute = path.resolve(ctx.cwd, read.path);
-    const names = [read.path, absolute, path.relative(ctx.cwd, absolute), path.basename(absolute)];
-    if (!known.has(read.entryId) && sources.some((source) =>
-      [...names, path.relative(path.dirname(path.resolve(ctx.cwd, source.path)), absolute)]
-        .some((name) => mentionsPath(source.content, name)))) {
-      state.reads.push(read);
-      known.add(read.entryId);
-    }
-  }
-  return state;
-}
-
-function renderStartupReads(state: StartupReads, entries: SessionEntry[], firstKeptEntryId?: string): string {
-  const cut = entries.findIndex((e) => e.id === firstKeptEntryId);
-  const tail = new Set(cut < 0 ? [] : entries.slice(cut).map((e) => e.id));
-  const retained = state.reads.filter((r) => !tail.has(r.entryId));
-  if (retained.length === 0) return "";
-  return ["### Retained startup reads",
-    "Original read outputs, preserved verbatim. Offsets and truncation notices are part of the original reads. These are not new filesystem reads. Tool-call status labels refer to the conversation spans, not these retained copies.",
-    ...retained.map((r) => `<retained-read entry=${JSON.stringify(r.entryId)} path=${JSON.stringify(r.path)} offset=${r.offset ?? 1}${r.limit === undefined ? "" : ` limit=${r.limit}`}>
-${r.text.join("\n")}
-</retained-read>`),
-  ].join("\n\n");
-}
-
-function fileEvidenceKey(file: string, cwd: string): string {
-  // Lexical normalization only: no stat/realpath, and no symlink-equivalence claim.
-  let normalized = file.replace(/[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g, " ").replace(/^@/, "");
-  if (normalized === "~") normalized = homedir();
-  else if (normalized.startsWith("~/") || (process.platform === "win32" && normalized.startsWith("~\\"))) normalized = path.join(homedir(), normalized.slice(2));
-  if (normalized.startsWith("file://")) {
-    try { normalized = fileURLToPath(normalized); } catch { /* Unknown path syntax: keep it literal. */ }
-  }
-  return path.resolve(cwd, normalized);
-}
-
 const SECTION_HEADER = "### Compacted conversation (oldest first)";
 const SPAN_CLOSE = "</compacted-span>";
 const SPAN_TRIMMED_NOTE = "(trimmed for size — use context_lookup)";
@@ -825,6 +697,7 @@ interface FilterRevision {
   keptAsideTurnIds: string[];
   fidelity?: TurnFidelities;
   slots?: TurnSlot[];
+  readRetention: ReadRetention;
 }
 
 function checkpointLocations(entries: SessionEntry[]): LocationEntry[] {
@@ -887,7 +760,7 @@ function preparedTurnOwners(entries: SessionEntry[], messages: AgentMessage[]): 
 }
 
 function filterChoices(entries: SessionEntry[], spans: TurnSpan[], excluded: Set<string>, firstKeptEntryId: string,
-  retained: StartupReads, selected = excluded, fidelity: TurnFidelities = turnFidelities(entries)): FilterTurn[] {
+  retained: ReadOutput[], selected = excluded, fidelity: TurnFidelities = turnFidelities(entries)): FilterTurn[] {
   const owners = turnOwners(entries), flagged = preflaggedTurns(entries);
   const cut = entries.findIndex((entry) => entry.id === firstKeptEntryId);
   const tailOwners = new Set(entries.slice(cut).filter((entry) => entry.type === "message" || entry.type === "custom_message" || entry.type === "branch_summary")
@@ -897,10 +770,10 @@ function filterChoices(entries: SessionEntry[], spans: TurnSpan[], excluded: Set
     const owner = span.turnIds?.[index];
     if (owner) { const group = lines.get(owner) ?? []; group.push(line); lines.set(owner, group); }
   });
-  for (const read of retained.reads) {
+  for (const read of retained) {
     const owner = owners.get(read.entryId);
     if (owner && entries.findIndex((entry) => entry.id === read.entryId) < cut)
-      lines.get(owner)?.push(`[Retained startup read: ${read.path}]\n${read.text.join("\n")}`);
+      lines.get(owner)?.push(`[Independently retained read: ${read.path}]\n${read.text.join("\n")}`);
   }
   return entries.filter((entry) => entry.type === "message" && entry.message.role === "user").map((entry) => {
     const content = lines.get(entry.id) ?? [];
@@ -955,15 +828,11 @@ function excludedFilePaths(entries: SessionEntry[], excluded: Set<string>, first
 }
 
 function checkpointEvidence(entries: SessionEntry[], firstKeptEntryId: string, cwd: string,
-  startup: StartupReads, readFiles: string[], modifiedFiles: string[], excluded: Set<string>, fidelity: TurnFidelities = {}) {
-  if (!excluded.size && !Object.keys(fidelity).length) return { startupReads: startup, readFiles, modifiedFiles };
-  const owners = turnOwners(entries);
+  readRetention: ReadRetention, readFiles: string[], modifiedFiles: string[], excluded: Set<string>) {
+  if (!excluded.size) return { readRetention, readFiles, modifiedFiles };
   const removedPaths = excludedFilePaths(entries, excluded, firstKeptEntryId, cwd);
   return {
-    startupReads: { ...startup, reads: startup.reads.filter((read) => {
-      const owner = owners.get(read.entryId) ?? "";
-      return !excluded.has(owner) && !fidelity[owner];
-    }) },
+    readRetention,
     readFiles: readFiles.filter((file) => !removedPaths.has(fileEvidenceKey(file, cwd))),
     modifiedFiles: modifiedFiles.filter((file) => !removedPaths.has(fileEvidenceKey(file, cwd))),
   };
@@ -974,12 +843,12 @@ const RECOVERY_SOURCE_GUIDANCE = "Re-read project files for their current conten
 const RECOVERY_SCOPE_RULE = "Use the recovery tools for history established by this conversation or its checkpoint, not project discovery, requirements never supplied, other sessions, or abandoned branches.";
 const RECOVERY_FILESYSTEM_RULE = "For recovery of details hidden by compaction, do not read or grep raw session JSONL files through filesystem tools; use the recovery tools instead.";
 
-const REORIENT_BLOCK = `**Post-compaction re-orientation.** ${RECOVERY_HISTORY_NOTE} Retained startup reads and the uncompacted tail remain available as evidence. Recover only hidden information needed for the current task.
+const REORIENT_BLOCK = `**Post-compaction re-orientation.** ${RECOVERY_HISTORY_NOTE} Selected retained reads and the uncompacted tail remain available as evidence. Recover only hidden information needed for the current task.
 1. **Restore only information needed to continue.** Re-read project files when you need their current contents; cheap local rereads and recomputations are reasonable. If you need an earlier observation, the source of a finding, or the reason for a conclusion that compaction hid, use \`context_lookup\`. This can avoid repeating slow or unreliable research. Restore inputs, not completed actions: do not redo writes, edits, or other state-changing actions merely because their results are hidden. **Before using \`write\` to replace an existing file, re-read it unless its current contents are already visible in context. Do not reconstruct unchanged sections from memory.**
 2. If this is a Git repository, run \`git status\` and review uncommitted work. Re-verify build/test state if you are about to rely on it.
 3. **Distinguish earlier claims from supporting evidence.** Retained assistant prose records what was said, not independent verification. If a task-relevant claim has uncertain provenance or conflicts with new evidence, check its supporting output (using \`context_lookup\` if hidden) or the current source before treating it as established; label unresolved claims unverified. Retrieved reasoning remains a historical hypothesis, and historical outputs do not establish current file or build/test state.`;
 
-const REVISION_NOTE_PREFIX = "- Turn context revised: ";
+const REVISION_NOTE_PREFIX = "- Checkpoint context revised: ";
 const CHECKPOINT_EXPLANATION = `**Compacted conversation follows.** The earlier part of this conversation has been compacted into the checkpoint below. This is not the full transcript. ${RECOVERY_HISTORY_NOTE}`;
 
 const RECOVERY_INSTRUCTIONS = `**Recovering hidden details.** Use \`context_lookup\` with a specific historical question: a subagent searches this conversation's full session history and returns relevant findings. Use the recovery tools for history established by this conversation or its checkpoint, not for project discovery or exploration of other sessions. If its findings are incomplete, use the bounded fallback tools \`context_list_entries\`, \`context_grep\`, and \`context_show_entry\`.`;
@@ -1076,7 +945,7 @@ async function buildMechanicalSummary(opts: {
   spanFrom?: string; // ISO timestamp of the first summarised message
   spanTo?: string; // ISO timestamp of the last summarised message
   firstKeptEntryId?: string; // start of the verbatim (uncompacted) tail
-  startupReads: StartupReads;
+  readRetention: ReadRetention;
   cwd: string;
   notify: (msg: string) => void;
   chooseCap: (size: { overhead: number; lineChars: number }) => Promise<number | undefined | null>;
@@ -1101,7 +970,8 @@ async function buildMechanicalSummary(opts: {
   // The base and retained reads are fixed overhead, never trimmed. Either can
   // exceed the budget by itself; warn rather than silently dropping evidence.
   const baseOpen = base ? `<compacted-base kind="${base.kind}" compacted-at="${base.at}">` : "";
-  const retainedReads = renderStartupReads(opts.startupReads, opts.branchEntries, opts.firstKeptEntryId);
+  const retainedReads = renderRetainedReads(readCatalog(opts.branchEntries, opts.cwd), opts.readRetention,
+    opts.branchEntries, opts.firstKeptEntryId, new Set(opts.filteredTurnIds), fidelity);
   let overhead = nativeChars + SECTION_HEADER.length + 2 + (retainedReads ? retainedReads.length + 2 : 0);
   if (base) overhead += baseOpen.length + 1 + BASE_CLOSE.length + 2 + base.summary.length;
   overhead += allSpans.reduce(
@@ -1125,7 +995,7 @@ async function buildMechanicalSummary(opts: {
   if (maxChars !== undefined && base && base.summary.length > maxChars)
     opts.notify(`transparent-compact: the base block alone is ${base.summary.length.toLocaleString()} chars (budget ${maxChars.toLocaleString()}); it is kept un-capped`);
   if (maxChars !== undefined && retainedReads.length > maxChars)
-    opts.notify(`transparent-compact: retained startup reads alone are ${retainedReads.length.toLocaleString()} chars (budget ${maxChars.toLocaleString()}); they are kept un-capped`);
+    opts.notify(`transparent-compact: retained reads alone are ${retainedReads.length.toLocaleString()} chars (budget ${maxChars.toLocaleString()}); they are kept un-capped`);
   if (maxChars !== undefined && nativeChars > maxChars)
     opts.notify(`transparent-compact: full-fidelity turns alone are ~${nativeChars.toLocaleString()} estimated chars (budget ${maxChars.toLocaleString()}); they are kept un-capped. Only PROSE can be trimmed.`);
   const capped = capSpans(allSpans, maxChars === undefined ? undefined : Math.max(500, maxChars - overhead), dictionaryCost);
@@ -1857,21 +1727,38 @@ export default function (pi: ExtensionAPI) {
 
   const filterTurns = {
     description: "Choose checkpoint turn modes: pruned, prose, prose+tools or full; no compaction",
-    handler: async (args: string, ctx: ExtensionContext) => {
-      if (args.trim()) { ctx.ui.notify("Usage: /filter-turns", "error"); return; }
+    handler: async (args: string, ctx: ExtensionContext, reads = false) => {
+      const command = reads ? "/retain-reads" : "/filter-turns";
+      if (args.trim()) { ctx.ui.notify(`Usage: ${command}`, "error"); return; }
       if (ctx.mode !== "tui" || !ctx.hasUI) {
-        ctx.ui.notify("/filter-turns requires the interactive terminal UI.", "error"); return;
+        ctx.ui.notify(`${command} requires the interactive terminal UI.`, "error"); return;
       }
       if (!ctx.isIdle() || ctx.hasPendingMessages()) {
         ctx.ui.notify("Wait until the agent is idle and queued messages have been handled before filtering turns.", "warning"); return;
       }
       const entries = ctx.sessionManager.getBranch();
       const compaction = latestVerbatimCompaction(entries);
-      if (compactionMethod(entries) !== "verbatim" || !compaction) {
-        ctx.ui.notify("/filter-turns requires an existing verbatim checkpoint. Use /compact-filtered to create one.", "error"); return;
+      if (compactionMethod(entries) !== "verbatim") {
+        ctx.ui.notify(`${command} requires verbatim compaction.`, "error"); return;
       }
-      const canonical = compaction.details as { span: StoredSpan; startupReads: StartupReads; readFiles: string[]; modifiedFiles: string[] };
-      if (!canonical.span || !canonical.startupReads) {
+      const catalog = readCatalog(entries, ctx.cwd);
+      let retention = readRetentionState(entries, ctx, catalog);
+      if (!compaction) {
+        if (!reads) { ctx.ui.notify("/filter-turns requires an existing verbatim checkpoint. Use /compact-filtered to create one.", "error"); return; }
+        const sessionId = ctx.sessionManager.getSessionId(), leafId = ctx.sessionManager.getLeafId();
+        const result = await pickRetainedReads(ctx, catalog, retention, new Set(), new AbortController().signal);
+        if (!result) return;
+        if (ctx.sessionManager.getSessionId() !== sessionId || ctx.sessionManager.getLeafId() !== leafId || !ctx.isIdle() || ctx.hasPendingMessages()) {
+          ctx.ui.notify("Session changed; retention update cancelled.", "warning"); return;
+        }
+        if (JSON.stringify(result) === JSON.stringify(retention)) {
+          ctx.ui.notify("No read-retention changes.", "info"); return;
+        }
+        pi.appendEntry(READ_RETENTION_ENTRY, result);
+        ctx.ui.notify("Read retention saved for future verbatim compactions.", "info"); return;
+      }
+      const canonical = compaction.details as { span: StoredSpan; readRetention: ReadRetention; readFiles: string[]; modifiedFiles: string[] };
+      if (!canonical.span) {
         ctx.ui.notify("This checkpoint has no editable canonical spans. Use /compact-filtered first.", "error"); return;
       }
       const sessionId = ctx.sessionManager.getSessionId();
@@ -1882,9 +1769,20 @@ export default function (pi: ExtensionAPI) {
         const excluded = new Set(previousExcluded), keptAsides = new Set(previousKept);
         const previousFidelity = turnFidelities(entries), fidelity = { ...previousFidelity }, slots: TurnSlot[] = [];
         const preflags = preflaggedTurns(entries);
+        const anchor = latestFilterRevision(entries) ?? compaction;
+        const savedRetention = anchor.type === "custom" ? anchor.data.readRetention : canonical.readRetention;
+        const savedEntries = entries.slice(0, entries.indexOf(anchor) + 1);
+        const previousRetained = renderRetainedReads(readCatalog(savedEntries, ctx.cwd), savedRetention,
+          savedEntries, compaction.firstKeptEntryId, excluded, fidelity);
+        // LATEST can move (or an output can be context-edited) without a mode
+        // toggle. Compare generated read copies against their original branch
+        // inputs, never by parsing quoted text out of the saved checkpoint.
+        const sameRetention = () => JSON.stringify(retention) === JSON.stringify(savedRetention) &&
+          renderRetainedReads(catalog, retention, entries, compaction.firstKeptEntryId,
+            new Set(previousExcluded), previousFidelity) === previousRetained;
         const proposed = new Set([...excluded, ...[...preflags].filter((id) => !keptAsides.has(id))]);
         const choices = filterChoices(entries, collectBaseAndSpans(entries).spans, excluded,
-          compaction.firstKeptEntryId, canonical.startupReads, proposed);
+          compaction.firstKeptEntryId, selectedReads(catalog, retention), proposed);
         const unchanged = (pruned: Set<string>, kept: Set<string>, modes: TurnFidelities) =>
           pruned.size === previousExcluded.length && previousExcluded.every((id) => pruned.has(id)) &&
           kept.size === previousKept.length && previousKept.every((id) => kept.has(id)) &&
@@ -1895,7 +1793,7 @@ export default function (pi: ExtensionAPI) {
           now: canonical.span.at, revisedAt: new Date().toISOString(), spanLines: [], filteredTurnIds: [...pruned], fidelity: modes, slots: placements, presentation,
           firstKeptEntryId: compaction.firstKeptEntryId,
           ...checkpointEvidence(entries, compaction.firstKeptEntryId, ctx.cwd,
-            canonical.startupReads, canonical.readFiles, canonical.modifiedFiles, pruned, modes),
+            retention, canonical.readFiles, canonical.modifiedFiles, pruned),
           cwd: ctx.cwd, notify: preview ? () => {} : (message) => ctx.ui.notify(message, "warning"),
           chooseCap: preview ? async () => {
             if (cap.mode === "off") return undefined;
@@ -1924,7 +1822,7 @@ export default function (pi: ExtensionAPI) {
           const pruned = new Set(previousExcluded), kept = new Set(previousKept), modes = { ...previousFidelity }, placements: TurnSlot[] = [];
           applyTurnSelection(choices, selection, preflags, pruned, kept, modes);
           const original = await baseline;
-          if (unchanged(pruned, kept, modes)) return { ...(original ?? measure(saved.summary, saved.slots ?? [], previousFidelity, pruned)), delta: original ? 0 : undefined };
+          if (unchanged(pruned, kept, modes) && sameRetention()) return { ...(original ?? measure(saved.summary, saved.slots ?? [], previousFidelity, pruned)), delta: original ? 0 : undefined };
           const presentation = { shortened: false };
           const summary = await renderCheckpoint(pruned, modes, placements, true, presentation);
           if (summary === undefined) throw new Error("Checkpoint preview cancelled.");
@@ -1937,26 +1835,32 @@ export default function (pi: ExtensionAPI) {
               fidelity: Boolean(Object.keys(previousFidelity).length) === Boolean(Object.keys(modes).length) ? 0 : estimated.noticeTokens.fidelity - original.noticeTokens.fidelity,
             } : undefined };
         };
-        const result = await pickFilteredTurns(ctx, choices, signal, estimateSelection);
-        if (result === undefined) return;
-        applyTurnSelection(choices, result, preflags, excluded, keptAsides, fidelity);
-        if (unchanged(excluded, keptAsides, fidelity)) {
-          ctx.ui.notify("No checkpoint turn-mode changes.", "info"); return;
+        if (reads) {
+          const result = await pickRetainedReads(ctx, catalog, retention, excluded, signal);
+          if (!result) return;
+          retention = result;
+        } else {
+          const result = await pickFilteredTurns(ctx, choices, signal, estimateSelection);
+          if (result === undefined) return;
+          applyTurnSelection(choices, result, preflags, excluded, keptAsides, fidelity);
+        }
+        if (unchanged(excluded, keptAsides, fidelity) && sameRetention()) {
+          ctx.ui.notify("No checkpoint context changes.", "info"); return;
         }
         const summary = await renderCheckpoint(excluded, fidelity, slots, false);
         if (summary === undefined) return;
         checkCheckpointBudget(summary, slots, fidelity, entries, compaction.firstKeptEntryId, ctx);
         const current = ctx.sessionManager.getBranch();
         if (ctx.sessionManager.getSessionId() !== sessionId || latestVerbatimCompaction(current)?.id !== compaction.id ||
-            latestFilterRevision(current)?.id !== revisionId) {
+            latestFilterRevision(current)?.id !== revisionId || ctx.sessionManager.getLeafId() !== entries.at(-1)?.id || !ctx.isIdle() || ctx.hasPendingMessages()) {
           ctx.ui.notify("Session/checkpoint changed; filtering update cancelled.", "warning"); return;
         }
-        pi.appendEntry(FILTER_REVISION_ENTRY, { compactionId: compaction.id, summary,
+        pi.appendEntry(FILTER_REVISION_ENTRY, { compactionId: compaction.id, summary, readRetention: retention,
           filteredTurnIds: [...excluded], keptAsideTurnIds: [...keptAsides],
           ...(Object.keys(fidelity).length ? { fidelity, slots } : {}) } satisfies FilterRevision);
-        ctx.ui.notify("Checkpoint turn modes updated. No additional history compacted; recent messages and boundary unchanged.", "info");
+        ctx.ui.notify("Checkpoint context updated. No additional history compacted; recent messages and boundary unchanged.", "info");
       } catch (error) {
-        ctx.ui.notify(`Checkpoint turn update cancelled: ${errMsg(error)}`, "error");
+        ctx.ui.notify(`Checkpoint context update cancelled: ${errMsg(error)}`, "error");
       }
     },
   };
@@ -2001,6 +1905,10 @@ export default function (pi: ExtensionAPI) {
     },
   });
   pi.registerCommand("filter-turns", filterTurns);
+  pi.registerCommand("retain-reads", {
+    description: "Choose retained file reads: off, first or latest; preview full outputs",
+    handler: (args, ctx) => filterTurns.handler(args, ctx, true),
+  });
 
   pi.on("session_start", (_event, ctx) => {
     clearAsideSubmission();
@@ -2051,10 +1959,10 @@ export default function (pi: ExtensionAPI) {
         preparation.previousSummary = projectCheckpoint([{ role: "compactionSummary", summary: active.summary, tokensBefore: active.tokensBefore, timestamp: 0 }], branchEntries)
           .map((message) => message.role === "compactionSummary" ? message.summary : previewMessages([message]).join("\n")).join("\n\n");
         const canonical = latestVerbatimCompaction(branchEntries)!.details as {
-          startupReads: StartupReads; readFiles: string[]; modifiedFiles: string[];
+          readRetention: ReadRetention; readFiles: string[]; modifiedFiles: string[];
         };
         const visible = checkpointEvidence(branchEntries, preparation.firstKeptEntryId, ctx.cwd,
-          canonical.startupReads, canonical.readFiles, canonical.modifiedFiles, new Set(filteredTurns(branchEntries)));
+          readRetentionState(branchEntries, ctx), canonical.readFiles, canonical.modifiedFiles, new Set(filteredTurns(branchEntries)));
         const ops = preparation.fileOps;
         ops.read = new Set(visible.readFiles);
         ops.edited = new Set(visible.modifiedFiles);
@@ -2120,9 +2028,9 @@ export default function (pi: ExtensionAPI) {
       const span = await summarizeMessages(allMessages, renderer, preparedTurnOwners(branchEntries, allMessages));
       const spanLines = span.lines;
 
-      // 3) Freeze startup references after the second user prompt, then carry
-      // their original outputs forward outside the trimmable conversation spans.
-      const canonicalRetained = startupReads(branchEntries, ctx);
+      // 3) Explicit read choices apply independently after whole-turn filtering.
+      const catalog = readCatalog(branchEntries, ctx.cwd);
+      const canonicalRetained = readRetentionState(branchEntries, ctx, catalog);
       const excluded = new Set(filteredTurns(branchEntries));
       const keptAsides = new Set(keptAsideTurns(branchEntries));
       const fidelity = { ...turnFidelities(branchEntries) }, slots: TurnSlot[] = [];
@@ -2130,13 +2038,13 @@ export default function (pi: ExtensionAPI) {
         const preflags = preflaggedTurns(branchEntries);
         const proposed = new Set([...excluded, ...[...preflags].filter((id) => !keptAsides.has(id))]);
         const choices = filterChoices(branchEntries, [...collectBaseAndSpans(branchEntries).spans, span],
-          excluded, preparation.firstKeptEntryId, canonicalRetained, proposed);
+          excluded, preparation.firstKeptEntryId, selectedReads(catalog, canonicalRetained), proposed);
         for (const turn of choices)
           if (!turn.unavailable && !turn.deferred && proposed.has(turn.id)) excluded.add(turn.id);
       }
       const filteredTurnIds = [...excluded];
       const evidence = checkpointEvidence(branchEntries, preparation.firstKeptEntryId, ctx.cwd,
-        canonicalRetained, canonicalReadFiles, canonicalModifiedFiles, excluded, fidelity);
+        canonicalRetained, canonicalReadFiles, canonicalModifiedFiles, excluded);
       const summary = await buildMechanicalSummary({
         reason, // pi's raw reason, passed through unchanged
         tokensBefore: preparation.tokensBefore,
@@ -2171,10 +2079,10 @@ export default function (pi: ExtensionAPI) {
           details: {
             kind: MECH_KIND,
             // Canonical metadata stays reversible; only the rendered checkpoint
-            // masks file paths/startup reads owned by excluded turns.
+            // masks file paths owned by excluded turns. Retained reads are independent.
             readFiles: canonicalReadFiles,
             modifiedFiles: canonicalModifiedFiles,
-            startupReads: canonicalRetained,
+            readRetention: canonicalRetained,
             locations: renderer.locations.entries,
             ...(filteredTurnIds.length ? { filteredTurnIds } : {}),
             ...(keptAsides.size ? { keptAsideTurnIds: [...keptAsides] } : {}),

@@ -65,7 +65,7 @@ async function main() {
     assert.equal(loaded.extensions.length, 1);
     const extension = loaded.extensions[0];
     assert.deepEqual([...extension.tools.keys()], ["context_list_entries", "context_grep", "context_show_entry", "context_lookup"], "session lookup and three direct fallback tools are registered");
-    assert.deepEqual([...extension.commands.keys()], ["compaction-method", "cap-compaction", "filter-later", "fl", "filter-auto", "compact-filtered", "filter-turns"], "compaction policy, aside and turn-filtering commands are registered");
+    assert.deepEqual([...extension.commands.keys()], ["compaction-method", "cap-compaction", "filter-later", "fl", "filter-auto", "compact-filtered", "filter-turns", "retain-reads"], "compaction policy, aside and turn-filtering commands are registered");
     const lookup = extension.tools.get("context_lookup");
     assert.deepEqual(Object.keys(lookup.definition.parameters.properties), ["question"], "lookup accepts only question");
     const skills = loadSkills({ cwd: root, agentDir: temp, skillPaths, includeDefaults: false });
@@ -79,7 +79,8 @@ async function main() {
         'extensions/lib/tool-stubs/renderer.mjs', 'extensions/lib/tool-stubs/shell.mjs',
         ...['LICENSE.Go', 'LICENSE.mvdan-sh', 'NOTICE.md', 'PATENTS.Go', 'build.json', 'go.mod', 'go.sum', 'main.go', 'shell.wasm', 'wasm_exec.js']
           .map(file => `extensions/lib/tool-stubs/parser/${file}`),
-        'extensions/lib/turn-context.ts', 'extensions/lib/turn-filter.ts'].sort(), 'package ships the live renderer, parser, source, and licenses');
+        'extensions/lib/turn-context.ts', 'extensions/lib/turn-filter.ts',
+        'extensions/lib/read-retention.ts', 'extensions/lib/read-retention-ui.ts'].sort(), 'package ships the live renderer, parser, source, and licenses');
     assert.deepEqual([...packedPaths].filter(p => /^(?:source|experiments|scripts|stub-overhaul|node_modules)\//.test(p) || p === 'test.cjs'), [],
       'package excludes development harnesses, tests, dependencies, and obsolete source');
 

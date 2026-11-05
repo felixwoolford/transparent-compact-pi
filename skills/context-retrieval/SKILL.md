@@ -9,7 +9,7 @@ description: "Guidance for using context_lookup after compaction: how to target 
 
 Compaction hides earlier details from your current view. The original conversation
 history, including recorded tool outputs and your reasoning, is preserved in the
-session and can be retrieved. Retained startup reads and the uncompacted tail
+session and can be retrieved. Selected retained reads and the uncompacted tail
 remain available as evidence; recover only hidden information needed for the task.
 
 Use the recovery tools for history established by this conversation or its checkpoint,
@@ -23,7 +23,7 @@ those tasks; use ordinary file tools as needed for the requested analysis.
 
 This skill pairs with the `@foliox/transparent-compact-pi` extension, which provides:
 
-- **Verbatim compaction** — a deterministic checkpoint retains user messages, assistant prose, and compact tool-call signatures. Thinking and most tool outputs are removed from the active model context, not from the raw session history. Selected startup read outputs remain verbatim in the checkpoint or uncompacted tail. Earlier spans are re-rendered flat, with recovery guidance before them and an evidence-boundary warning after them. Persistent task-relevant recovery reminders and a recap follow the retained tail; later compactions replace the old generated reminders rather than duplicating them. An inherited opaque base is kept when needed.
+- **Verbatim compaction** — a deterministic checkpoint retains user messages, assistant prose, and compact tool-call signatures. Thinking and most tool outputs are removed from the active model context, not from the raw session history. Explicitly selected read outputs remain verbatim in the checkpoint or uncompacted tail. Earlier spans are re-rendered flat, with recovery guidance before them and an evidence-boundary warning after them. Persistent task-relevant recovery reminders and a recap follow the retained tail; later compactions replace the old generated reminders rather than duplicating them. An inherited opaque base is kept when needed.
 - **`context_lookup`** — the preferred first step for this recovery workflow: a subagent searches the full raw session branch in its **own** context and returns relevant findings. At lookup time, the extension mechanically renders the branch into entry-anchored text with an authoritative entry/section index, in memory.
 - **Bounded direct tools** — use `context_show_entry` for a specific detail hidden by compaction at a known ENTRY id returned by a recovery tool. If lookup findings are incomplete, use `context_list_entries` to locate an entry, `context_grep` to find a narrow passage, or `context_show_entry` to inspect a known entry. Their raw results enter this conversation; retrieve only what the question needs. For recovery of details hidden by compaction, these are the permitted direct tools, not filesystem access to session files.
 

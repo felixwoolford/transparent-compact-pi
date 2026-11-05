@@ -39,7 +39,7 @@ module.exports = async function ({ factory, load, SessionManager, root, makeCont
   const tail = manager.appendMessage(user("RECENT_TAIL"));
   const notices = [];
   const ctx = { ...makeContext(manager, cwd), mode: "tui", hasUI: true, isIdle: () => true, hasPendingMessages: () => false,
-    getSystemPromptOptions: () => ({ contextFiles: [{ path: "AGENTS.md", content: "ASIDE.md" }] }),
+    getSystemPromptOptions: () => ({ contextFiles: [{ path: "AGENTS.md", content: "<retain-reads>\nASIDE.md\n</retain-reads>" }] }),
     ui: { notify: (...args) => notices.push(args) } };
   const prepare = async (extension, context, session, ids, kept, reason = "manual", fileOps) => extension.handlers.session_before_compact({
     reason, signal: new AbortController().signal, branchEntries: session.getBranch(),
@@ -118,11 +118,12 @@ module.exports = async function ({ factory, load, SessionManager, root, makeCont
   assert.equal(filteredRevision.customType, FILTER_REVISION_ENTRY);
   assert.equal(filteredRevision.data.compactionId, completed.id);
   assert.deepEqual(filteredRevision.data.filteredTurnIds, [first]);
-  assert(!summary().includes("LOW_VALUE_") && !summary().includes("ASIDE.md") && !summary().includes("aside-only.ts"));
+  assert(!summary().includes("LOW_VALUE_PROSE") && !summary().includes("LOW_VALUE_AFTER_SPLIT") && !summary().includes("aside-only.ts"));
+  assert(summary().includes("LOW_VALUE_STARTUP_OUTPUT") && summary().includes('filtered-turn="true"'), "explicit read retention survives turn pruning");
   assert(summary().includes("USEFUL_USER") && summary().includes("USEFUL_AGENT") && summary().includes("kept.ts"));
   assert.equal(summary().split(FILTER_MARKER).length - 1, 2, "one explanation plus one positioned marker across spans");
   assert(manager.getEntry(completed.id).summary.includes("LOW_VALUE_AFTER_SPLIT"), "saved checkpoint is not rewritten");
-  assert.deepEqual(completed.details.startupReads.reads, older.details.startupReads.reads);
+  assert.deepEqual(completed.details.readRetention, older.details.readRetention);
   assert.deepEqual(completed.details.readFiles, ["ASIDE.md", "kept.ts"]);
   assert.deepEqual(completed.details.modifiedFiles, ["aside-only.ts"]);
   assert(ext.handlers.before_agent_start({}, ctx).message.content.includes(FILTER_EXPLANATION));
@@ -175,10 +176,10 @@ module.exports = async function ({ factory, load, SessionManager, root, makeCont
   const next = manager.appendMessage(user("NEXT_TAIL"));
   const later = await compact([tail], next, "threshold");
   assert.deepEqual(later.details.filteredTurnIds, [first]);
-  assert(!later.summary.includes("LOW_VALUE_"));
+  assert(!later.summary.includes("LOW_VALUE_PROSE") && later.summary.includes("LOW_VALUE_STARTUP_OUTPUT"));
   const file = path.join(root, "filtered-session.jsonl"); saveSession(manager, file);
   const reopened = SessionManager.open(file), resumed = load(factory, { current: reopened });
-  assert(!project(resumed, reopened).find((m) => m.role === "compactionSummary").summary.includes("LOW_VALUE_"));
+  assert(project(resumed, reopened).find((m) => m.role === "compactionSummary").summary.includes("LOW_VALUE_STARTUP_OUTPUT"));
   const recovered = await resumed.tools.context_show_entry.execute("recover", { id: read }, undefined, undefined, { ...ctx, sessionManager: reopened });
   assert(JSON.stringify(recovered).includes("LOW_VALUE_STARTUP_OUTPUT"));
   manager.branch(older.id); assert(!ext.handlers.before_agent_start({}, ctx).message.content.includes(FILTER_EXPLANATION));
@@ -242,7 +243,9 @@ module.exports = async function ({ factory, load, SessionManager, root, makeCont
   asideCtx.ui.custom = noPicker;
   for (const reason of ["threshold", "overflow"]) {
     const automatic = (await runAside([asideAgent, asideRead], asideTail, reason)).compaction;
-    assert.deepEqual(automatic.details.filteredTurnIds, [asideUser]); assert(!automatic.summary.includes("PREFLAGGED_"));
+    assert.deepEqual(automatic.details.filteredTurnIds, [asideUser]);
+    assert(!automatic.summary.includes("PREFLAGGED_AGENT") && !automatic.summary.includes("PREFLAGGED_USER"));
+    assert(automatic.summary.includes("PREFLAGGED_READ_OUTPUT"), "automatic turn pruning also preserves explicitly retained reads");
     const id = persistAside(automatic);
     asideExt.handlers.session_compact({ compactionEntry: asideManager.getEntry(id), willRetry: true }, asideCtx);
     assert(asideManager.getBranch().at(-1).content.includes(FILTER_EXPLANATION));

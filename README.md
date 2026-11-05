@@ -1,16 +1,16 @@
 # transparent-compact
 
-[Context compaction](#control-compaction) for [Pi](https://pi.dev/) that keeps conversation text verbatim instead of replacing it with a model-generated summary. It removes thinking and most tool output from the active context, while keeping user messages, assistant text, compact tool-call stubs and selected startup reads. The original session history remains available.
+[Context compaction](#control-compaction) and pruning for [Pi](https://pi.dev/) that keeps conversation text verbatim instead of replacing it with a model-generated summary. It removes thinking and most tool output from the active context, while keeping user messages, assistant text, compact tool-call stubs and explicitly selected reads. The original session history remains available.
 
 When the agent needs a detail that is no longer in context, it can use retrieval tools to search the recorded session with a subagent. Compaction itself does not make a model call.
 
-The user can also [selectively manipulate which turns to hold in the current context](#filter-turns) in higher or lower fidelity.
+The user can also [selectively manipulate which turns to hold in the current context](#filter-turns) in higher or lower fidelity, and [specify file reads to be retained in the context in full](#retain-reads), (e.g. a spec or plan).
 
 This extension is aimed at addressing two main issues that other compaction techniques face, which are especially exacerbated in agents running on lightweight and local LLMs: 
 - Model summaries such as Pi's default method can lead to degradation and confabulation of details that can cause confident blunders.
-- Retrieval-based systems like `pi-vcc` can be effective when the agent knows what to look for, but omitting session structure from the retained context can make retrieval less reliable.
+- Retrieval-based systems like `pi-vcc` can be effective when the agent knows what to look for, but omitting session structure from the retained context can make the actual use of retrieval less reliable.
 
-`transparent-compact` is also a retrieval-based system, but its design keeps manipulation of conversation text to a minimum and maximises the agent's awareness of its compacted state, with the aim of avoiding confabulation and encouraging accurate retrieval of historical details. [This study](https://arxiv.org/abs/2610.20116) found that a minimal approach outperformed more complex techniques with lightweight models and was at least as effective with frontier models.
+`transparent-compact` is also a retrieval-based system, but its design keeps manipulation of conversation text to a minimum and maximises the agent's awareness of its own compacted state, with the aim of avoiding confabulation and encouraging accurate retrieval of historical details. [This study](https://arxiv.org/abs/2610.20116) found that a minimal approach outperformed more complex techniques with lightweight models and was at least as effective with frontier models.
 
 The verbatim compaction system plays particularly nicely with manual pruning of the context. This allows you to decide which parts of the session remain important to the current work, without having to commit to a particular branching point with /tree or decide at the time of the prompt with something like claude's /btw.
 
@@ -35,7 +35,7 @@ Once loaded, the extension uses verbatim compaction by default. Pi's automatic c
 /compact
 ```
 
-No additional setup is required. The agent can recover missing details from session history as needed. Successful startup reads referenced by filename in `AGENTS.md` or `CLAUDE.md` are also retained when detected; this is a filename-matching heuristic, so it may not capture every relevant read.
+No additional setup is required. The agent can recover missing details from session history as needed.
 
 ## Filter turns
 
@@ -64,6 +64,12 @@ You can restore filtered turns later. Choices persist in the current session bra
 
 PROSE+TOOLS and FULL can use substantial context. Oversized selections are rejected, and if later context growth or a model change makes them too large, use `/filter-turns` to downgrade them. FULL includes only what was recorded; provider and model limitations can still affect thinking and images.
 
+### Manual context editing and caching
+Manual context edits typically reduce prompt-cache reuse for the next model request, so frequent edits of the retained reads or turn filters are discouraged, and the best time to adjust them is just after compaction, before the next request.
+
+The extension never automatically modifies the context outside of Pi's usual compaction trigger. The user is expected to control the filtering system, or simply ignore it when not needed.
+Treat filtering/pruning/read-retention as useful tools when the situation calls for them, not necessary to the use of the compaction system.
+
 ### Flag an aside
 
 ```text
@@ -75,6 +81,27 @@ PROSE+TOOLS and FULL can use substantial context. Oversized selections are rejec
 ```
 
 A flagged turn remains in context until it is eligible for filtering. It is preselected for pruning in the editor, where you can keep or later restore it. Automatic application of flags is **off** by default. `/fl` is a normal conversation turn, not an isolated aside.
+
+## Retain reads
+
+Use `/retain-reads` while the agent is idle to keep selected text-read outputs verbatim in the checkpoint. Each file can be **OFF**, **FIRST**, or **LATEST**. In the picker, controls are as in the turn-filtering picker.
+
+Consecutive partial reads of the same file with connected ranges form one selectable read episode. Another tool operation, a restarted range, or a new user turn starts a new episode. The picker shows full or partial coverage and flags reads from filtered turns. Retention survives turn filtering; 
+
+Retained outputs are historical snapshots of the read tool output, not current file contents. 
+
+### Automatic file retention
+
+Nothing is retained automatically, but files can be declared for retention in `AGENTS.md` or `CLAUDE.md` like so:
+
+```text
+<retain-reads>
+docs/SPEC.md
+latest: docs/WORKING-NOTES.md
+</retain-reads>
+```
+
+Use one literal path per line, relative to the instruction file. Plain paths default to FIRST; `latest:` selects the latest read. These declarations do not read files themselves. Manual choices override the defaults.
 
 ## Control compaction
 
@@ -105,7 +132,7 @@ If you regularly reach the cap, consider starting a new session or using a diffe
 /cap-compaction 40000c        # change budget without changing mode
 ```
 
-Mode and budget persist in the session branch; changing one leaves the other unchanged. They apply only to verbatim compaction. The cap estimates tokens at four characters each and is not a limit on the whole model context. Some content, including retained startup reads, is not trimmed. Disabling the cap may leave too much context for the model.
+Mode and budget persist in the session branch; changing one leaves the other unchanged. They apply only to verbatim compaction. The cap estimates tokens at four characters each and is not a limit on the whole model context. Some content, including retained reads, is not trimmed. Disabling the cap may leave too much context for the model.
 
 For unattended use, choose `on` to avoid interactive prompts. Without an interactive UI, `warn` emits a warning and applies the cap. If the model's context window is unavailable, use a fixed token or character budget, or turn the cap off.
 

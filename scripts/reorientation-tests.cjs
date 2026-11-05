@@ -9,7 +9,7 @@ const reminders = (messages) => messages.filter((m) => m.role === "custom" && m.
 const count = (s, needle) => s.split(needle).length - 1;
 
 function checkChecklist(content) {
-  for (const phrase of [heading, "Retained startup reads and the uncompacted tail remain available as evidence.",
+  for (const phrase of [heading, "Selected retained reads and the uncompacted tail remain available as evidence.",
     "Compaction hides earlier details from your current view.",
     "including recorded tool outputs and your reasoning, is preserved in the session and can be retrieved.",
     "Recover only hidden information needed for the current task.",
@@ -254,8 +254,8 @@ async function runtimeTests(h) {
       if (mode === "threshold" || mode === "overflow" || mode === "pre-run") assert.equal(c.details.span.reason, mode === "pre-run" ? "threshold" : mode);
       assert.equal(c.summary.includes(fixture.token), retain);
       assert.equal(JSON.stringify(manager.buildSessionContext()).includes(fixture.token), retain,
-        "spec contents survive only when an identified AGENTS/CLAUDE file mentions them");
-      assert.equal(c.details.startupReads.reads.length, retain ? 2 : 0);
+        "spec contents survive only when explicitly declared for retention");
+      assert.equal(Object.keys(c.details.readRetention.defaults).length, retain ? 2 : 0);
       const marked = requests.map((r) => JSON.stringify(r).includes(heading));
       const startsCompacted = mode === "manual" || mode === "pre-run";
       assert.deepEqual(marked, startsCompacted ? [true, true] : mode === "post-run" ? [false, true] : [false, true, true], mode);
@@ -294,8 +294,8 @@ async function runtimeTests(h) {
       assert.equal(count(JSON.stringify(secondRequest), "**Recovery recap.**"), 1);
       checkChecklist(JSON.stringify(secondRequest.messages.at(-1)));
       assert.equal(count(JSON.stringify(secondRequest), fixture.token), retain ? 1 : 0);
-      assert.deepEqual(c2.details.startupReads.reads, c.details.startupReads.reads,
-        "subsequent compaction carries retained read bytes unchanged");
+      assert.deepEqual(c2.details.readRetention, c.details.readRetention,
+        "subsequent compaction preserves explicit retention choices");
       assert.equal(footers().length, 2, "raw audit history keeps the old and current managed entries");
       assert(footers().some((e) => e.id === firstFooterId));
       assert.equal(footers().at(-1).details.compactionId, c2.id);

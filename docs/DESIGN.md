@@ -12,7 +12,7 @@ extension builds a checkpoint without changing that boundary or calling a model:
 | Assistant prose | Kept, subject to the size guard. |
 | Tool calls | Short signatures with outcome labels; full arguments and outputs remain recoverable. |
 | Assistant thinking | Removed from the checkpoint; retained in the raw session. |
-| Tool outputs | Mostly removed; selected bash observations and startup reads remain. All remain in raw history. |
+| Tool outputs | Mostly removed; selected bash observations and explicitly retained reads remain. All remain in raw history. |
 | Custom messages | Short type stubs marked `content removed`; bodies remain in the raw session. Managed re-orientation messages are regenerated instead. |
 | Recent conversation | Pi keeps its normal verbatim tail. |
 | Earlier compacted spans | Re-rendered chronologically, without repeated model summarization. |
@@ -159,15 +159,15 @@ compaction spans. Confirmed exclusions are stored as the current `filteredTurnId
 snapshot on the compaction entry or its standalone revision, not an append-only
 union. Later verbatim checkpoints apply that branch-local selection to the original canonical spans before size
 trimming, reindexing tool display records without changing stored history.
-Startup-read snapshots in compaction details remain canonical and unfiltered;
-only the rendered checkpoint masks them. Restoring a turn therefore
-also restores its retained-read copies and location definitions without re-reading
-files or reselecting startup evidence. There is no migration or reconstruction of
-saved spans without turn ownership; opaque content is not individually selectable.
+Read-retention choices apply independently after turn filtering; selected read
+outputs survive even when their owning turn is pruned. Restoring a turn restores
+its prose and location definitions without filesystem reads. There is no migration
+or reconstruction of saved spans without turn ownership; opaque content is not
+individually selectable.
 
 One `[Turn manually filtered]` marker replaces each excluded group at its original
-position, even across spans. Markers survive the size cap. Startup-read copies owned
-by the group are excluded; location definitions used only by excluded turns are removed.
+position, even across spans. Markers survive the size cap. Explicitly retained reads
+remain separately labelled; location definitions used only by excluded turns are removed.
 Filtering does not undo filesystem mutations. The checkpoint introduction and
 persistent reorientation conditionally explain that the user excluded low-value
 context, which remains retrievable from the full raw history. Recovery tools are
@@ -236,10 +236,9 @@ copies prevent later transforms from mutating canonical session records. Provide
 compatibility transformations still apply, including cross-model reasoning and
 non-vision image handling; no unavailable reasoning or nested outputs are invented.
 
-Native turns replace their compacted prose and startup-read duplicates, not the
-canonical source data. File paths remain listed and successful read outputs in
-native turns get a conservative historical-evidence annotation. PROSE restoration
-can recover its canonical retained reads again. Mode choices inherit through
+Native turns replace their compacted prose and retained-read duplicates, not the
+canonical source data. PROSE restoration makes separately selected reads visible
+in the retained-read section again. Mode choices inherit through
 reload/resume, tree navigation and later verbatim compactions; explicit fidelity
 choices also override aside pre-flags. An empty revision clears old fidelity rather
 than falling back to the source checkpoint's map. Explicit summary compaction gets
@@ -304,38 +303,50 @@ a failed estimate), not on every toggle. Generation checks reject stale results,
 closing/disposing the dialog invalidates pending work. No estimated sizes are
 persisted in checkpoint metadata, and no model calls are introduced.
 
-### Retained startup reads
+### Explicit read retention
 
-On the first verbatim compaction, the extension scans successful text-only `read`
-call/result pairs between the first and second user messages on the active branch.
-It retains outputs whose file paths or bare names occur literally in AGENTS/CLAUDE
-context files supplied by Pi, or in AGENTS/CLAUDE files read during that interval.
-`AGENTS.override.md` is recognized too. Named project-instruction blocks in the
-rendered system prompt provide a fallback when structured context files are not
-available. No files are opened and no model or agent action is involved.
+`extensions/lib/read-retention.ts` derives a file/episode catalog from Pi's
+context-edited original projection of the active branch. Only unambiguous,
+successful, text-only `read` pairs qualify. Failed, missing-status, orphaned,
+non-text and explicitly omitted reads do not. Replacements supply their projected
+bytes. Shell and nested reads have no standalone result to retain. No source
+files are opened, and no model calls or additional tool operations are involved.
 
-Matching accepts absolute paths, paths relative to the working directory or
-instruction file, and standalone basenames. It rejects substrings of other paths
-or filenames. A bare basename can select multiple same-named files. This is a
-lexical heuristic, not a required-reading parser: optional links can qualify;
-indirect references, shell reads, nested tool calls and reads after the second
-user message do not. Custom messages do not close the startup interval.
+Defaults come only from `<retain-reads>` blocks in AGENTS/CLAUDE context files
+(including `AGENTS.override.md`) or their recorded reads. Named project-instruction
+blocks provide a fallback when structured context files are absent. Each line is
+a literal path resolved relative to its instruction file: plain paths select FIRST,
+`latest:` selects LATEST. Ordinary mentions, basenames elsewhere and globs have
+no matching semantics. Current system context files override recorded copies.
+There is no special first-user-turn selection window.
 
-All selected output chunks are preserved verbatim, with entry IDs, paths, offsets
-and limits. Pagination/truncation notices are retained too; retention never
-invents missing pages or claims a partial read is a complete document. Failed,
-ambiguous and non-text results are excluded. Selection respects explicit context
-omissions/replacements. It does not check on-disk freshness.
+Consecutive successful reads of the same normalized path and user turn form an
+episode when their ranges advance and connect or overlap. Assistant commentary
+is allowed between pages; other tool calls, gaps, errors, restarted ranges and
+new user turns break adjacency. Source call order, not tool completion order,
+defines adjacency. The first/latest episode is selected per file. Requested limits
+are not output coverage: Pi pagination notices and delivered text determine
+coverage, and unknown truncation stays partial. Outputs remain separate verbatim
+blocks, including their original pagination notices; no synthetic file is built.
 
-The selection is stored in compaction details, separately from conversation spans.
-Subsequent verbatim compactions carry it forward unchanged, without re-compacting
-checkpoint text. If the second user message has not arrived yet, selection remains
-open: later compactions scan the startup interval again and add newly qualifying
-reads until it closes. Reads still in the uncompacted tail are not duplicated in
-the checkpoint; they move into its retained-read section when the cut passes them.
-Reload, resume and branch navigation follow the stored state on the active branch.
-An older checkpoint without retention metadata initializes selection from the
-original branch, not from its summary prose.
+`/retain-reads` uses a local draft with OFF/FIRST/LATEST, first/latest ascending
+ordering, full scrollable previews, coverage/size labels and filtered-turn flags.
+Enter reviews and then saves; Escape cancels. Manual overrides, including OFF,
+persist branch-locally and can be reset to declarations. Before any checkpoint,
+choices are custom state; afterward they share the checkpoint revision mechanism
+with turn controls. Revisions preserve the existing boundary, tail and native
+placements, with session/leaf checks before saving. Compaction details and revisions
+store defaults and overrides, not additional copies of raw read bodies. Saving
+also refreshes changed read candidates without requiring a mode toggle; no-op
+checks compare generated retained copies against the previous revision's branch
+inputs, never parsed checkpoint text.
+
+Retention applies after turn pruning and survives it, with `filtered-turn="true"`
+on separately retained outputs from pruned turns. OFF does not remove normal tool
+content. Tail/native outputs are not duplicated. Repeated compactions select
+original projected outputs again (FIRST stays first; LATEST follows later reads),
+not text parsed from earlier checkpoints. Reload, resume and tree navigation use
+the active branch's choices and candidates.
 
 #### How cap trimming works
 
@@ -377,7 +388,7 @@ opaque and use the conservative omission fallback. They are not regex-parsed or
 reconstructed from current raw history, which might differ from the projected
 content originally compacted. Inherited model-summary/opaque bases remain fixed.
 
-Retained startup reads count as fixed budget overhead and are never trimmed.
+Explicitly retained reads count as fixed budget overhead and are never trimmed.
 Like an inherited base, they can exceed the budget by themselves; in that case
 the extension warns and preserves them. The conversation-line budget still has
 a 500-character minimum. Space for span annotations is reserved in the size guard.
@@ -522,14 +533,14 @@ instructions that must be prominent at the actual point of resumption:
 
 ```text
 Checkpoint introduction: what was removed + full recovery instructions
-All compacted spans (oldest first), then retained startup reads and location dictionary
+All compacted spans (oldest first), then retained reads and location dictionary
 One evidence-boundary warning + start-of-verbatim-tail marker
 Retained verbatim tail
 Any pending new user input
 Task-relevant recovery reminders + brief recovery recap
 ```
 
-The recovery reminders identify retained startup reads and the uncompacted tail
+The recovery reminders identify selected retained reads and the uncompacted tail
 as available evidence. They ask for recovery only when task-relevant inputs are
 missing, not for rediscovery of reading requirements or blanket document rereads.
 They also distinguish restoring inputs from repeating completed writes, call for
