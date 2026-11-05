@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import type { ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { originalProjection, turnOwners } from "./turn-context.js";
+import type { TurnSpan } from "./turn-filter.js";
 
 export type ReadMode = "off" | "first" | "latest";
 export interface ReadRetention {
@@ -176,12 +177,52 @@ export function episodeCoverage(episode: ReadEpisode): string {
 /** Only extra copies are rendered: OFF never touches normal tool/tail content.
  * Turn pruning does not suppress explicit read retention. Native turns already
  * contain their read output, so they and the recent tail need no duplicate. */
-export function renderRetainedReads(catalog: ReadFile[], state: ReadRetention, entries: SessionEntry[], boundary: string | undefined,
-  excluded: Set<string>, fidelity: Record<string, unknown>): string {
+export function retainedReadOutputs(catalog: ReadFile[], state: ReadRetention, entries: SessionEntry[], boundary: string | undefined,
+  fidelity: Record<string, unknown>): ReadOutput[] {
   const cut = entries.findIndex((e) => e.id === boundary);
   const visible = new Set(cut < 0 ? [] : entries.slice(cut).map((e) => e.id));
-  const reads = selectedReads(catalog, state).filter((r) => !visible.has(r.entryId) && !fidelity[r.owner ?? ""]);
-  if (!reads.length) return "";
-  return ["### Retained reads", "Selected original read outputs, preserved verbatim, independently of turn filtering. These are historical snapshots, not new filesystem reads; ranges and truncation notices may be partial.",
-    ...reads.map((r) => `<retained-read entry=${JSON.stringify(r.entryId)} path=${JSON.stringify(r.path)} offset=${r.offset}${r.limit === undefined ? "" : ` limit=${r.limit}`}${excluded.has(r.owner ?? "") ? ' filtered-turn="true"' : ""}>\n${r.text.join("\n")}\n</retained-read>`)].join("\n\n");
+  return selectedReads(catalog, state).filter((r) => !visible.has(r.entryId) && !fidelity[r.owner ?? ""]);
+}
+
+function renderRetainedRead(read: ReadOutput, excluded: Set<string>): string {
+  return `<retained-read entry=${JSON.stringify(read.entryId)} path=${JSON.stringify(read.path)} offset=${read.offset}${read.limit === undefined ? "" : ` limit=${read.limit}`}${excluded.has(read.owner ?? "") ? ' filtered-turn="true"' : ""}>\n${read.text.join("\n")}\n</retained-read>`;
+}
+
+/** Stable comparison of selected copies; never used as a checkpoint section. */
+export function renderRetainedReads(catalog: ReadFile[], state: ReadRetention, entries: SessionEntry[], boundary: string | undefined,
+  excluded: Set<string>, fidelity: Record<string, unknown>): string {
+  return retainedReadOutputs(catalog, state, entries, boundary, fidelity).map((read) => renderRetainedRead(read, excluded)).join("\n");
+}
+
+/** Insert outputs at recorded result boundaries, not by matching historical text.
+ * Source spans keep only IDs/indices, so OFF -> FIRST/LATEST remains reversible.
+ * Protected rows survive capping and are relocated by turn pruning as a group.
+ */
+export function retainReadSpans<T extends TurnSpan>(spans: T[], reads: ReadOutput[], excluded: Set<string>) {
+  const selected = new Map(reads.map((read) => [read.entryId, read]));
+  const placed = new Set<string>();
+  const rendered = spans.map((span) => {
+    const positions = new Map<number, ReadOutput[]>();
+    for (const position of span.readPositions ?? []) {
+      const read = selected.get(position.entryId);
+      if (!read || placed.has(read.entryId)) continue;
+      if (!Number.isSafeInteger(position.index) || position.index < 0 || position.index > span.lines.length)
+        throw new Error(`Invalid retained-read position for ${read.entryId}.`);
+      placed.add(read.entryId);
+      const at = positions.get(position.index) ?? []; at.push(read); positions.set(position.index, at);
+    }
+    const lines: string[] = [], turnIds: (string | null)[] = [], protectedLines: number[] = [], indices = new Map<number, number>();
+    for (let index = 0; index <= span.lines.length; index++) {
+      for (const read of positions.get(index) ?? []) {
+        protectedLines.push(lines.length); lines.push(renderRetainedRead(read, excluded)); turnIds.push(read.owner);
+      }
+      if (index === span.lines.length) break;
+      indices.set(index, lines.length);
+      if (span.protectedLines?.includes(index)) protectedLines.push(lines.length);
+      lines.push(span.lines[index]); turnIds.push(span.turnIds?.[index] ?? null);
+    }
+    const tools = span.tools && { ...span.tools, lines: span.tools.lines.map((record) => ({ ...record, index: indices.get(record.index)! })) };
+    return { ...span, lines, turnIds, tools, protectedLines };
+  });
+  return { spans: rendered, unplaced: reads.filter((read) => !placed.has(read.entryId)) };
 }

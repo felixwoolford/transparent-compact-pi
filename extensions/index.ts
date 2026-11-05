@@ -25,6 +25,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { homedir } from "node:os";
 import { Type } from "typebox";
 import { contentText, normalizeContext, uuidv7 } from "@earendil-works/pi-ai";
 import type { Message as AiMessage, Model, Tool as AiTool } from "@earendil-works/pi-ai";
@@ -38,8 +39,8 @@ import { Locations } from "./lib/tool-stubs/locations.mjs";
 import type { ToolLines, ToolStub } from "./lib/checkpoint-cap.js";
 import { FILTER_EXPLANATION, PREFLAG_ENTRY, AUTO_FILTER_ENTRY, FILTER_REVISION_ENTRY, autoFilterEnabled, preflaggedTurns,
   filterSpans, pickFilteredTurns, turnOwners } from "./lib/turn-filter.js";
-import type { FilterTurn, TurnSpan } from "./lib/turn-filter.js";
-import { readPath as fileEvidenceKey, readCatalog, readRetentionState, selectedReads, renderRetainedReads, READ_RETENTION_ENTRY } from "./lib/read-retention.js";
+import type { FilterTurn, TurnSpan, ReadPosition } from "./lib/turn-filter.js";
+import { readPath as fileEvidenceKey, readCatalog, readRetentionState, selectedReads, renderRetainedReads, retainedReadOutputs, retainReadSpans, READ_RETENTION_ENTRY } from "./lib/read-retention.js";
 import type { ReadOutput, ReadRetention } from "./lib/read-retention.js";
 import { pickRetainedReads } from "./lib/read-retention-ui.js";
 import { FIDELITY_EXPLANATION, fidelityMessages, fidelitySpans, locateSlots, expandCheckpoint,
@@ -556,9 +557,10 @@ function bashOutputLabel(command: string, result: Record<string, any>): string {
   return labels.join("; ");
 }
 
-async function summarizeMessages(messages: AgentMessage[], renderer: ToolRenderer, owners?: (string | null)[]): Promise<TurnSpan> {
+interface MessageSource { entryId: string; owner: string | null }
+async function summarizeMessages(messages: AgentMessage[], renderer: ToolRenderer, sources?: (MessageSource | null)[]): Promise<TurnSpan> {
   const results = pairedToolResults(messages);
-  const lines: string[] = [], turnIds: (string | null)[] = [];
+  const lines: string[] = [], turnIds: (string | null)[] = [], readPositions: ReadPosition[] = [];
   const tools: ToolLines = { version: 2, lines: [] };
   for (const [messageIndex, msg] of messages.entries()) {
     const start = lines.length;
@@ -591,9 +593,13 @@ async function summarizeMessages(messages: AgentMessage[], renderer: ToolRendere
         }
         break;
       }
-      case "toolResult":
-        // removed by design (kept in the session)
+      case "toolResult": {
+        // Keep a structural insertion point even when retention is OFF. Outputs
+        // are fetched from the session only when rendering a selected read.
+        const source = sources?.[messageIndex];
+        if (m.toolName === "read" && source) readPositions.push({ entryId: source.entryId, index: lines.length });
         break;
+      }
       case "bashExecution": {
         const calls = [await renderer.render("bash", { command: String(m.command ?? "") }, " [output removed]")];
         const prefix = "[BashExecution]: ";
@@ -614,9 +620,9 @@ async function summarizeMessages(messages: AgentMessage[], renderer: ToolRendere
       default:
         break;
     }
-    for (let i = start; i < lines.length; i++) turnIds.push(owners?.[messageIndex] ?? null);
+    for (let i = start; i < lines.length; i++) turnIds.push(sources?.[messageIndex]?.owner ?? null);
   }
-  return { lines, ...(owners ? { turnIds } : {}), ...(tools.lines.length ? { tools } : {}) };
+  return { lines, ...(sources ? { turnIds } : {}), ...(readPositions.length ? { readPositions } : {}), ...(tools.lines.length ? { tools } : {}) };
 }
 
 const SECTION_HEADER = "### Compacted conversation (oldest first)";
@@ -685,6 +691,7 @@ function collectBaseAndSpans(branchEntries: SessionEntry[]): {
         lines: sd.lines,
         tools: sd.tools,
         turnIds: sd.turnIds,
+        readPositions: sd.readPositions,
       });
   }
   return { base, spans };
@@ -744,15 +751,15 @@ function projectCheckpoint(messages: AgentMessage[], entries: SessionEntry[]): A
 
 // Match Pi's prepared messages to their source entries, including explicit
 // context replacements and generated custom messages. No raw bodies are stored.
-function preparedTurnOwners(entries: SessionEntry[], messages: AgentMessage[]): (string | null)[] {
+function preparedMessageSources(entries: SessionEntry[], messages: AgentMessage[]): (MessageSource | null)[] {
   const owners = turnOwners(entries);
-  const queues = new Map<string, (string | null)[]>();
+  const queues = new Map<string, MessageSource[]>();
   for (const projected of buildSessionProjection(entries).entries) {
     if (projected.sourceEntry.type === "compaction") continue;
     for (const message of projected.messages) {
       const key = JSON.stringify(message);
       const queue = queues.get(key) ?? [];
-      queue.push(owners.get(projected.sourceEntry.id) ?? null);
+      queue.push({ entryId: projected.sourceEntry.id, owner: owners.get(projected.sourceEntry.id) ?? null });
       queues.set(key, queue);
     }
   }
@@ -766,15 +773,12 @@ function filterChoices(entries: SessionEntry[], spans: TurnSpan[], excluded: Set
   const tailOwners = new Set(entries.slice(cut).filter((entry) => entry.type === "message" || entry.type === "custom_message" || entry.type === "branch_summary")
     .map((entry) => owners.get(entry.id)));
   const lines = new Map<string, string[]>();
-  for (const span of spans) span.lines.forEach((line, index) => {
+  const inline = retainReadSpans(spans, retained.filter((read) =>
+    entries.findIndex((entry) => entry.id === read.entryId) < cut && !fidelity[read.owner ?? ""]), excluded);
+  for (const span of inline.spans) span.lines.forEach((line, index) => {
     const owner = span.turnIds?.[index];
     if (owner) { const group = lines.get(owner) ?? []; group.push(line); lines.set(owner, group); }
   });
-  for (const read of retained) {
-    const owner = owners.get(read.entryId);
-    if (owner && entries.findIndex((entry) => entry.id === read.entryId) < cut)
-      lines.get(owner)?.push(`[Independently retained read: ${read.path}]\n${read.text.join("\n")}`);
-  }
   return entries.filter((entry) => entry.type === "message" && entry.message.role === "user").map((entry) => {
     const content = lines.get(entry.id) ?? [];
     const deferred = tailOwners.has(entry.id);
@@ -938,6 +942,7 @@ async function buildMechanicalSummary(opts: {
   spanTools?: ToolLines; // display records; no raw command/program payloads
   locations?: LocationEntry[];
   spanTurnIds?: (string | null)[];
+  spanReadPositions?: ReadPosition[];
   filteredTurnIds?: string[];
   fidelity?: TurnFidelities;
   slots?: TurnSlot[]; // generated output placements; no raw payloads
@@ -955,10 +960,15 @@ async function buildMechanicalSummary(opts: {
   const native = Object.keys(fidelity).length ? fidelityMessages(opts.branchEntries, fidelity, opts.firstKeptEntryId!) : new Map<string, AgentMessage[]>();
   const nativeMessages = [...native.values()].flat();
   const nativeChars = messageTokens(nativeMessages) * 4;
-  const rendered = fidelitySpans(filterSpans(opts.revisedAt ? spans : [...spans, {
+  const excluded = new Set(opts.filteredTurnIds);
+  const retained = retainedReadOutputs(readCatalog(opts.branchEntries, opts.cwd), opts.readRetention,
+    opts.branchEntries, opts.firstKeptEntryId, fidelity);
+  const inserted = retainReadSpans(opts.revisedAt ? spans : [...spans, {
     at: opts.now, reason: opts.reason, from: opts.spanFrom, to: opts.spanTo,
-    lines: opts.spanLines, tools: opts.spanTools, turnIds: opts.spanTurnIds,
-  }], new Set(opts.filteredTurnIds)), fidelity);
+    lines: opts.spanLines, tools: opts.spanTools, turnIds: opts.spanTurnIds, readPositions: opts.spanReadPositions,
+  }], retained, excluded);
+  if (inserted.unplaced.length) throw new Error(`Cannot retain read ${inserted.unplaced[0].entryId} (${inserted.unplaced[0].path}): its original position is not in a verbatim span. Choose another read or set it to OFF.`);
+  const rendered = fidelitySpans(filterSpans(inserted.spans, excluded), fidelity);
   const allSpans = rendered.spans;
   const locations = new Locations(opts.cwd, opts.locations ?? checkpointLocations(opts.branchEntries));
   const dictionary = (ids: string[]) => locations.render(new Set(ids));
@@ -966,13 +976,13 @@ async function buildMechanicalSummary(opts: {
   const allLocationIds = allSpans.flatMap((span) => span.tools?.lines.flatMap((line) => line.calls.flatMap((call) => call.locations ?? [])) ?? []);
   const coversOf = (s: { from?: string; to?: string }): string | undefined => (s.from && s.to ? `${s.from} → ${s.to}` : undefined);
 
-  // Size guard: the budget covers the conversation section plus retained reads.
-  // The base and retained reads are fixed overhead, never trimmed. Either can
-  // exceed the budget by itself; warn rather than silently dropping evidence.
+  // Inline reads count in span size exactly once and are structurally protected
+  // from capping. The opaque base and native messages remain fixed overhead.
   const baseOpen = base ? `<compacted-base kind="${base.kind}" compacted-at="${base.at}">` : "";
-  const retainedReads = renderRetainedReads(readCatalog(opts.branchEntries, opts.cwd), opts.readRetention,
-    opts.branchEntries, opts.firstKeptEntryId, new Set(opts.filteredTurnIds), fidelity);
-  let overhead = nativeChars + SECTION_HEADER.length + 2 + (retainedReads ? retainedReads.length + 2 : 0);
+  const retainedChars = allSpans.reduce((total, span) => total + (span.protectedLines ?? [])
+    .filter((index) => !rendered.markers.has(span.turnIds?.[index] ?? ""))
+    .reduce((n, index) => n + span.lines[index].length + 1, 0), 0);
+  let overhead = nativeChars + SECTION_HEADER.length + 2;
   if (base) overhead += baseOpen.length + 1 + BASE_CLOSE.length + 2 + base.summary.length;
   overhead += allSpans.reduce(
     (a, s, i) => a + spanOpen(i + 1, s.at, s.reason, coversOf(s)).length + SPAN_TRIMMED_ATTR.length + TIGHTENED_ATTR.length + 2 + SPAN_TRIMMED_NOTE.length + 1 + SPAN_CLOSE.length + 2,
@@ -994,8 +1004,8 @@ async function buildMechanicalSummary(opts: {
   if (maxChars === null) return undefined;
   if (maxChars !== undefined && base && base.summary.length > maxChars)
     opts.notify(`transparent-compact: the base block alone is ${base.summary.length.toLocaleString()} chars (budget ${maxChars.toLocaleString()}); it is kept un-capped`);
-  if (maxChars !== undefined && retainedReads.length > maxChars)
-    opts.notify(`transparent-compact: retained reads alone are ${retainedReads.length.toLocaleString()} chars (budget ${maxChars.toLocaleString()}); they are kept un-capped`);
+  if (maxChars !== undefined && retainedChars > maxChars)
+    opts.notify(`transparent-compact: retained reads alone are ${retainedChars.toLocaleString()} chars (budget ${maxChars.toLocaleString()}); they are kept un-capped`);
   if (maxChars !== undefined && nativeChars > maxChars)
     opts.notify(`transparent-compact: full-fidelity turns alone are ~${nativeChars.toLocaleString()} estimated chars (budget ${maxChars.toLocaleString()}); they are kept un-capped. Only PROSE can be trimmed.`);
   const capped = capSpans(allSpans, maxChars === undefined ? undefined : Math.max(500, maxChars - overhead), dictionaryCost);
@@ -1041,9 +1051,8 @@ async function buildMechanicalSummary(opts: {
   parts.push(SECTION_HEADER);
   parts.push("");
   parts.push(blocks.length > 0 ? blocks.join("\n\n") : "(no user or assistant prose in these spans — use context_lookup)");
-  // Retained reads and the location dictionary describe compacted history,
-  // above the LAST checkpoint line; everything after it is Pi's verbatim tail.
-  if (retainedReads) parts.push("", retainedReads);
+  // The location dictionary stays above the LAST checkpoint line; everything
+  // after that line is Pi's verbatim tail.
   const locationTable = dictionary(capped.locationIds);
   if (locationTable) parts.push("", locationTable);
   parts.push("");
@@ -1909,6 +1918,32 @@ export default function (pi: ExtensionAPI) {
     description: "Choose retained file reads: off, first or latest; preview full outputs",
     handler: (args, ctx) => filterTurns.handler(args, ctx, true),
   });
+  pi.registerCommand("export-checkpoint", {
+    description: "Export the saved checkpoint text, including manual revisions: [path]",
+    handler: async (args, ctx) => {
+      const argument = args.trim();
+      const match = argument.match(/^(?:"([^"]+)"|'([^']+)'|([^\s"']+))$/);
+      if (argument && !match) {
+        ctx.ui.notify("Usage: /export-checkpoint [path] (quote paths containing spaces)", "error"); return;
+      }
+      const entries = ctx.sessionManager.getBranch();
+      const compaction = entries.findLast((entry) => entry.type === "compaction");
+      if (!compaction) {
+        ctx.ui.notify("No checkpoint in this branch. Use /compact first.", "info"); return;
+      }
+      const filename = match?.[1] ?? match?.[2] ?? match?.[3] ?? `pi-checkpoint-${ctx.sessionManager.getSessionId()}.txt`;
+      const outputPath = path.resolve(ctx.cwd, filename.replace(/^~(?=$|[/\\])/, () => homedir()));
+      // Export the frozen text, not a reconstruction from newer reads or spans.
+      // Native turn expansions are separate context messages, not summary text.
+      const summary = latestFilterRevision(entries)?.data.summary ?? compaction.summary;
+      try {
+        fs.writeFileSync(outputPath, summary, { encoding: "utf8", mode: 0o600 });
+        ctx.ui.notify(`Checkpoint exported to: ${outputPath}`, "info");
+      } catch (error) {
+        ctx.ui.notify(`Failed to export checkpoint: ${errMsg(error)}`, "error");
+      }
+    },
+  });
 
   pi.on("session_start", (_event, ctx) => {
     clearAsideSubmission();
@@ -1986,6 +2021,7 @@ export default function (pi: ExtensionAPI) {
 
     // 1) Cumulative file lists: pi only carries lists from pi-generated
     //    compactions (fromHook=false), so we carry our own forward.
+    let retainingReads = false;
     try {
       const fileOps = preparation.fileOps as { read: Set<string>; written: Set<string>; edited: Set<string> } | undefined;
       if (fileOps) {
@@ -2025,12 +2061,13 @@ export default function (pi: ExtensionAPI) {
       const spanFrom = toIso(msgTs(allMessages[0]));
       const spanTo = toIso(msgTs(allMessages[allMessages.length - 1]));
       const renderer = new ToolRenderer(ctx.cwd, { entries: checkpointLocations(branchEntries) });
-      const span = await summarizeMessages(allMessages, renderer, preparedTurnOwners(branchEntries, allMessages));
+      const span = await summarizeMessages(allMessages, renderer, preparedMessageSources(branchEntries, allMessages));
       const spanLines = span.lines;
 
       // 3) Explicit read choices apply independently after whole-turn filtering.
       const catalog = readCatalog(branchEntries, ctx.cwd);
       const canonicalRetained = readRetentionState(branchEntries, ctx, catalog);
+      retainingReads = selectedReads(catalog, canonicalRetained).length > 0;
       const excluded = new Set(filteredTurns(branchEntries));
       const keptAsides = new Set(keptAsideTurns(branchEntries));
       const fidelity = { ...turnFidelities(branchEntries) }, slots: TurnSlot[] = [];
@@ -2054,6 +2091,7 @@ export default function (pi: ExtensionAPI) {
         spanTools: span.tools,
         locations: renderer.locations.entries,
         spanTurnIds: span.turnIds,
+        spanReadPositions: span.readPositions,
         filteredTurnIds, fidelity, slots,
         spanFrom,
         spanTo,
@@ -2090,13 +2128,14 @@ export default function (pi: ExtensionAPI) {
             // Only this compaction's own span (un-capped lines). Earlier spans
             // are re-rendered from the earlier entries' details — no nesting.
             span: { at: nowIso, from: spanFrom, to: spanTo, reason, tokensBefore: preparation.tokensBefore,
-              lines: spanLines, turnIds: span.turnIds, ...(span.tools ? { tools: span.tools } : {}) },
+              lines: spanLines, turnIds: span.turnIds, ...(span.readPositions ? { readPositions: span.readPositions } : {}),
+              ...(span.tools ? { tools: span.tools } : {}) },
           },
         },
       };
     } catch (err) {
-      // Never replace a filtered checkpoint with an unfiltered model summary.
-      const preserveFiltering = automaticFiltering || filteredTurns(branchEntries).length > 0 || Object.keys(turnFidelities(branchEntries)).length > 0;
+      // Fail closed rather than discard explicit filtering/fidelity/retention.
+      const preserveFiltering = automaticFiltering || retainingReads || filteredTurns(branchEntries).length > 0 || Object.keys(turnFidelities(branchEntries)).length > 0;
       ctx.ui?.notify?.(`transparent-compact: failed to build checkpoint (${errMsg(err)}); ${preserveFiltering ? "compaction cancelled" : "falling back to Pi's summary compaction"}`, "error");
       return preserveFiltering ? { cancel: true } : undefined;
     }

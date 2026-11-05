@@ -7,6 +7,7 @@ module.exports = async function ({ factory, load, SessionManager, root, makeCont
   console.log("== Explicit read retention: defaults, episodes, edits, tail/native deduplication and independent turn filtering ==");
   const { readCatalog, episodeCoverage, readMode } = await jiti.import(path.resolve(__dirname, "../extensions/lib/read-retention.ts"));
   const { visibleWidth } = await jiti.import("@earendil-works/pi-tui");
+  const { buildSessionProjection } = await jiti.import("@earendil-works/pi-coding-agent");
   const cwd = path.join(root, "retained-reads"); fs.mkdirSync(cwd);
   const declaration = "Mentioned.md is merely mentioned.\n<retain-reads>\ndocs/SPEC.md\nlatest: GUIDE.md\na guide.md\nREPLACED.md\nOMIT.md\nFAILED.md\nIMAGE.md\nDUP.md\nWRONG.md\nUNKNOWN.md\nCALL-OMITTED.md\n</retain-reads>";
   const sources = [{ path: path.join(cwd, "AGENTS.md"), content: declaration }];
@@ -27,7 +28,9 @@ module.exports = async function ({ factory, load, SessionManager, root, makeCont
       const start = previous ? entries.findIndex((e) => e.id === previous.firstKeptEntryId) : 0;
       const end = entries.findIndex((e) => e.id === kept);
       const response = await ext.handlers.session_before_compact({ branchEntries: entries, reason: "manual", signal: new AbortController().signal,
-        preparation: { messagesToSummarize: entries.slice(start, end).filter((e) => e.type === "message").map((e) => e.message),
+        preparation: { messagesToSummarize: buildSessionProjection(entries).entries
+          .filter(({ sourceEntry }) => sourceEntry.type !== "compaction" && entries.indexOf(sourceEntry) >= start && entries.indexOf(sourceEntry) < end)
+          .flatMap(({ messages }) => messages),
           turnPrefixMessages: [], firstKeptEntryId: kept, tokensBefore: 90000,
           fileOps: { read: new Set(), written: new Set(), edited: new Set() } } }, ctx);
       assert(response?.compaction, JSON.stringify(notices));
@@ -103,8 +106,13 @@ module.exports = async function ({ factory, load, SessionManager, root, makeCont
   for (const value of ["SPEC_LATER", "GUIDE_FIRST", "NOT_EXPLICITLY_RETAINED", "OMITTED_CONTENT", "OLD_CONTENT", "FAILED_CONTENT", "UNKNOWN_CONTENT", "IMAGE_CONTENT", "IMAGE_BYTES", "AMBIGUOUS_CONTENT", "WRONG_TOOL_CONTENT", "OMITTED_CALL_CONTENT"])
     assert(!first.summary.includes(value), value);
   assert(!JSON.stringify(first.details.readRetention).includes(page1), "selection metadata does not duplicate raw outputs");
-  assert(first.summary.indexOf("### Retained reads") > first.summary.lastIndexOf("</compacted-span>"));
-  assert(first.summary.indexOf("### Retained reads") < first.summary.indexOf("**Evidence boundary:**"));
+  assert(!JSON.stringify(first.details.span).includes(page1), "canonical spans keep read positions, not retained payload copies");
+  assert(first.details.span.readPositions.some((position) => position.entryId === p1));
+  assert(first.summary.indexOf(page1) < first.summary.indexOf("[Assistant]: Continue reading the document."));
+  assert(first.summary.indexOf(page2) > first.summary.indexOf("[Assistant]: Continue reading the document."));
+  assert(first.summary.indexOf(page2) < first.summary.indexOf("[User]: Second task"));
+  assert(first.summary.indexOf("GUIDE_LATEST") > first.summary.indexOf("[User]: Second task"));
+  assert(first.summary.indexOf("GUIDE_LATEST") < first.summary.indexOf("</compacted-span>"));
 
   const file = path.join(root, "read-retention-resume.jsonl"); saveSession(r.manager, file);
   const resumed = rig(SessionManager.open(file));
@@ -133,12 +141,49 @@ module.exports = async function ({ factory, load, SessionManager, root, makeCont
   assert(!latestCheckpoint.summary.includes("GUIDE_OLDER_SNAPSHOT") && !latestCheckpoint.summary.includes("GUIDE_IN_TAIL"));
   assert.equal(JSON.stringify(latestTail.project()).split("GUIDE_IN_TAIL").length - 1, 1, "LATEST follows a read into the tail without retaining an older extra snapshot");
 
+  // FIRST/LATEST chooses outputs, not where they appear. A file first seen
+  // earlier must not pull its LATEST output ahead of another file's read.
+  const ordered = rig(); ordered.append(user("Chronological reads"));
+  ordered.read("GUIDE.md", "OLDER_GUIDE_OFF");
+  ordered.read("docs/SPEC.md", "SPEC_IN_PLACE");
+  ordered.append(assistant([text("BETWEEN_SPEC_AND_LATEST")]));
+  ordered.read("GUIDE.md", "GUIDE_IN_PLACE");
+  ordered.append(assistant([text("AFTER_LATEST_GUIDE")]));
+  const orderedTail = ordered.append(user("Tail")), orderedCheckpoint = await ordered.compact(orderedTail);
+  assert(orderedCheckpoint.summary.indexOf("SPEC_IN_PLACE") < orderedCheckpoint.summary.indexOf("BETWEEN_SPEC_AND_LATEST"));
+  assert(orderedCheckpoint.summary.indexOf("BETWEEN_SPEC_AND_LATEST") < orderedCheckpoint.summary.indexOf("GUIDE_IN_PLACE"));
+  assert(orderedCheckpoint.summary.indexOf("GUIDE_IN_PLACE") < orderedCheckpoint.summary.indexOf("AFTER_LATEST_GUIDE"));
+
+  const batched = rig(); batched.append(user("Batched reads"));
+  batched.append(assistant([toolCall("read", { path: "docs/SPEC.md" }, "batch-spec"),
+    toolCall("read", { path: "GUIDE.md" }, "batch-guide")], "toolUse"));
+  batched.result("batch-guide", "BATCH_GUIDE_RESULT_FIRST");
+  batched.result("batch-spec", "BATCH_SPEC_RESULT_SECOND");
+  const batchedTail = batched.append(user("Tail")), batchedCheckpoint = await batched.compact(batchedTail);
+  assert(batchedCheckpoint.summary.indexOf("BATCH_GUIDE_RESULT_FIRST") < batchedCheckpoint.summary.indexOf("BATCH_SPEC_RESULT_SECOND"),
+    "batch outputs stay in recorded result order, not catalog order");
+
   const fallback = rig(undefined, []);
   delete fallback.ctx.getSystemPromptOptions;
   fallback.ctx.getSystemPrompt = () => `<project_instructions path="${path.join(cwd, "AGENTS.override.md")}">\n<retain-reads>\nGUIDE.md\n</retain-reads>\n</project_instructions>`;
   fallback.append(user("Read")); fallback.read("GUIDE.md", "FALLBACK_EXPLICIT_CONTENT");
   const fallbackTail = fallback.append(user("Tail"));
   assert((await fallback.compact(fallbackTail)).summary.includes("FALLBACK_EXPLICIT_CONTENT"));
+
+  // Opaque model summaries have no original prose/read insertion points. Do
+  // not silently move a selected read or fall back to another model summary.
+  const opaque = rig(); opaque.append(user("Before model summary"));
+  opaque.read("docs/SPEC.md", "OPAQUE_READ_OUTPUT");
+  const opaqueTail = opaque.append(user("Previous tail"));
+  opaque.manager.appendCompaction("Opaque model summary", opaqueTail, 10000, {}, false);
+  const afterOpaque = opaque.append(user("New tail"));
+  const opaqueBefore = JSON.stringify(opaque.manager.getBranch());
+  const opaqueResult = await opaque.ext.handlers.session_before_compact({ branchEntries: opaque.manager.getBranch(), reason: "manual", signal: new AbortController().signal,
+    preparation: { messagesToSummarize: [opaque.manager.getEntry(opaqueTail).message], turnPrefixMessages: [], firstKeptEntryId: afterOpaque,
+      tokensBefore: 10000, fileOps: { read: new Set(), written: new Set(), edited: new Set() } } }, opaque.ctx);
+  assert.deepEqual(opaqueResult, { cancel: true });
+  assert.equal(JSON.stringify(opaque.manager.getBranch()), opaqueBefore);
+  assert(opaque.notices.some((notice) => notice.includes("original position is not in a verbatim span")));
 
   console.log("== Read episodes: adjacency, gaps, overlaps, mutations, errors and actual coverage ==");
   const e = rig(undefined, []); e.append(user("Ranges"));
@@ -189,6 +234,26 @@ module.exports = async function ({ factory, load, SessionManager, root, makeCont
       assert(done, "interaction completes"); return result;
     } finally { component.dispose(); }
   };
+  // All pages of a pruned turn follow its one marker, even if the original
+  // read episode crossed a compaction boundary. Restoring moves them back.
+  const splitSources = JSON.stringify(split.manager.getBranch().filter((entry) => entry.type === "compaction"));
+  split.ctx.ui.custom = interact([" ", "enter", "enter"]);
+  await split.ext.commands["filter-turns"].handler("", split.ctx);
+  const prunedSplit = split.manager.getBranch().at(-1).data.summary;
+  const marker = "\n[Turn manually filtered]\n";
+  const afterMarker = prunedSplit.slice(prunedSplit.indexOf(marker) + marker.length);
+  assert(afterMarker.startsWith("<retained-read "));
+  assert(afterMarker.indexOf(page1) < afterMarker.indexOf(page2));
+  assert(afterMarker.indexOf(page2) < afterMarker.indexOf("</compacted-span>"), "later-span reads move directly after the first marker");
+  assert.equal(prunedSplit.split(page1).length - 1, 1);
+  assert.equal(prunedSplit.split(page2).length - 1, 1);
+  assert.equal(JSON.stringify(split.manager.getBranch().filter((entry) => entry.type === "compaction")), splitSources);
+  split.ctx.ui.custom = interact([" ", "enter", "enter"]);
+  await split.ext.commands["filter-turns"].handler("", split.ctx);
+  const restoredSplit = split.manager.getBranch().at(-1).data.summary;
+  assert(restoredSplit.indexOf(page1) < restoredSplit.indexOf("</compacted-span>"));
+  assert(restoredSplit.indexOf(page2) > restoredSplit.indexOf("</compacted-span>"), "restoring a turn restores its original read positions");
+
   const following = rig(); following.append(user("Follow latest"));
   following.read("GUIDE.md", "OLD_SELECTED_GUIDE");
   const followingTail = following.append(user("Tail")); await following.compact(followingTail);
@@ -256,5 +321,10 @@ module.exports = async function ({ factory, load, SessionManager, root, makeCont
   const cappedTail = capped.append(user("Second")), cap = await capped.compact(cappedTail);
   assert(cap.summary.includes(large) && !cap.summary.includes("Trimmable prose."));
   assert(capped.notices.some((s) => s.includes("retained reads alone") && s.includes("kept un-capped")));
+  capped.ctx.ui.custom = interact([" ", "enter", "enter"]);
+  await capped.ext.commands["filter-turns"].handler("", capped.ctx);
+  const cappedPruned = capped.manager.getBranch().at(-1).data.summary;
+  assert(cappedPruned.includes(large));
+  assert(cappedPruned.slice(cappedPruned.indexOf(marker) + marker.length).startsWith("<retained-read "));
   assert.deepEqual(fs.readdirSync(cwd), [], "retention only uses prompt/session data, never source-file IO");
 };

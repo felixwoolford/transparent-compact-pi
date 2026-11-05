@@ -34,16 +34,28 @@ export function preflaggedTurns(entries: SessionEntry[]): Set<string> {
   return flagged;
 }
 export const FILTER_EXPLANATION = "`[Turn manually filtered]` marks a user turn and its following agent/tool activity that the user chose to exclude as low-value context. Its contents remain retrievable from the full history. Do not recover filtered turns unless needed for the current task.";
-export interface TurnSpan extends SpanContent { turnIds?: (string | null)[] }
+export interface ReadPosition { entryId: string; index: number }
+export interface TurnSpan extends SpanContent {
+  turnIds?: (string | null)[];
+  /** Read-result entry IDs at boundaries between canonical prose/tool lines. */
+  readPositions?: ReadPosition[];
+}
 
 /** Drop canonical lines before capping, retaining tool-record indices exactly.
- * A turn can cross compaction spans; emit only one marker at its first position.
+ * A turn can cross spans; its protected reads follow its single first marker.
  */
 export function filterSpans<T extends TurnSpan>(spans: T[], excluded: Set<string>): T[] {
   if (excluded.size === 0) return spans;
+  const retained = new Map<string, string[]>();
+  for (const span of spans) for (const index of span.protectedLines ?? []) {
+    const owner = span.turnIds?.[index];
+    if (owner && excluded.has(owner)) {
+      const lines = retained.get(owner) ?? []; lines.push(span.lines[index]); retained.set(owner, lines);
+    }
+  }
   const marked = new Set<string>();
   return spans.map((span) => {
-    const lines: string[] = [], turnIds: (string | null)[] = [];
+    const lines: string[] = [], turnIds: (string | null)[] = [], protectedLines: number[] = [];
     const indices = new Map<number, number>();
     span.lines.forEach((line, index) => {
       const owner = span.turnIds?.[index] ?? null;
@@ -52,9 +64,13 @@ export function filterSpans<T extends TurnSpan>(spans: T[], excluded: Set<string
           marked.add(owner);
           lines.push(FILTER_MARKER);
           turnIds.push(owner);
+          for (const read of retained.get(owner) ?? []) {
+            protectedLines.push(lines.length); lines.push(read); turnIds.push(owner);
+          }
         }
       } else {
         indices.set(index, lines.length);
+        if (span.protectedLines?.includes(index)) protectedLines.push(lines.length);
         lines.push(line);
         turnIds.push(owner);
       }
@@ -62,7 +78,7 @@ export function filterSpans<T extends TurnSpan>(spans: T[], excluded: Set<string
     const tools: ToolLines | undefined = span.tools && { ...span.tools, lines: span.tools.lines
       .filter((record) => indices.has(record.index))
       .map((record) => ({ ...record, index: indices.get(record.index)! })) };
-    return { ...span, lines, turnIds, tools };
+    return { ...span, lines, turnIds, tools, protectedLines };
   });
 }
 

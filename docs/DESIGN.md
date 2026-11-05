@@ -167,13 +167,14 @@ individually selectable.
 
 One `[Turn manually filtered]` marker replaces each excluded group at its original
 position, even across spans. Markers survive the size cap. Explicitly retained reads
-remain separately labelled; location definitions used only by excluded turns are removed.
+follow their turn's marker directly, in recorded order, even across spans; location
+definitions used only by excluded turns are removed.
 Filtering does not undo filesystem mutations. The checkpoint introduction and
 persistent reorientation conditionally explain that the user excluded low-value
 context, which remains retrievable from the full raw history. Recovery tools are
 unchanged. Cancelling or failing a turn edit saves no revision. Mechanical compaction
-with existing pruning or fidelity choices cancels on build failure rather than
-falling through to a model summary that would lose those choices.
+with existing pruning, fidelity or read-retention choices cancels on build failure
+rather than falling through to a model summary that would lose those choices.
 
 Standalone updates append a non-context `transparent-compact:filter-revision`
 entry containing the source compaction ID, rendered checkpoint, exclusions and
@@ -238,7 +239,7 @@ non-vision image handling; no unavailable reasoning or nested outputs are invent
 
 Native turns replace their compacted prose and retained-read duplicates, not the
 canonical source data. PROSE restoration makes separately selected reads visible
-in the retained-read section again. Mode choices inherit through
+at their original read positions again. Mode choices inherit through
 reload/resume, tree navigation and later verbatim compactions; explicit fidelity
 choices also override aside pre-flags. An empty revision clears old fidelity rather
 than falling back to the source checkpoint's map. Explicit summary compaction gets
@@ -341,9 +342,20 @@ also refreshes changed read candidates without requiring a mode toggle; no-op
 checks compare generated retained copies against the previous revision's branch
 inputs, never parsed checkpoint text.
 
-Retention applies after turn pruning and survives it, with `filtered-turn="true"`
-on separately retained outputs from pruned turns. OFF does not remove normal tool
-content. Tail/native outputs are not duplicated. Repeated compactions select
+Canonical spans record `readPositions`: result entry IDs and insertion boundaries
+between prose/tool lines, including reads currently OFF. They contain no read bodies.
+Rendering inserts selected original outputs at those positions, with structural
+protection from trimming and remapped tool-record indices. There is no separate
+retained-read section or introduction. Batched results keep recorded result order;
+episode grouping/selection still uses call order.
+
+Retention survives turn pruning: protected read rows from a pruned turn, including
+later-span rows, move directly after its single first marker, with
+`filtered-turn="true"`. Restoration returns them to their original positions.
+Native expansion preserves protection on other turns' reads. An unplaceable selected
+read (such as one covered only by an opaque model summary) rejects the rebuild rather
+than silently dropping or moving it to an invented location. OFF does not remove
+normal tool content. Tail/native outputs are not duplicated. Repeated compactions select
 original projected outputs again (FIRST stays first; LATEST follows later reads),
 not text parsed from earlier checkpoints. Reload, resume and tree navigation use
 the active branch's choices and candidates.
@@ -388,7 +400,7 @@ opaque and use the conservative omission fallback. They are not regex-parsed or
 reconstructed from current raw history, which might differ from the projected
 content originally compacted. Inherited model-summary/opaque bases remain fixed.
 
-Explicitly retained reads count as fixed budget overhead and are never trimmed.
+Explicitly retained reads count once in the span budget as protected rows and are never trimmed.
 Like an inherited base, they can exceed the budget by themselves; in that case
 the extension warns and preserves them. The conversation-line budget still has
 a 500-character minimum. Space for span annotations is reserved in the size guard.
@@ -533,7 +545,7 @@ instructions that must be prominent at the actual point of resumption:
 
 ```text
 Checkpoint introduction: what was removed + full recovery instructions
-All compacted spans (oldest first), then retained reads and location dictionary
+All compacted spans (oldest first, with retained reads in place), then location dictionary
 One evidence-boundary warning + start-of-verbatim-tail marker
 Retained verbatim tail
 Any pending new user input

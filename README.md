@@ -105,6 +105,12 @@ Use one literal path per line, relative to the instruction file. Plain paths def
 
 ## Control compaction
 
+### Export the checkpoint
+
+Use `/export-checkpoint [path]` to save the current checkpoint as plain text. Without a path, it writes `pi-checkpoint-<session-id>.txt` in the working directory; quote paths containing spaces.
+
+This exports the saved text, including confirmed filtering and read-retention edits, without rebuilding or changing context. Recent messages and separately reinserted PROSE+TOOLS/FULL messages are not included.
+
 ### Choose the method
 
 ```text

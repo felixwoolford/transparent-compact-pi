@@ -88,7 +88,11 @@ export function fidelitySpans<T extends TurnSpan>(spans: T[], fidelity: TurnFide
           const marker = `[Full-fidelity turn ${owner}: ${MODE_LABELS[fidelity[owner]]}; slot ${uuidv7()}]`;
           markers.set(owner, marker); protectedLines.push(lines.length); lines.push(marker); turnIds.push(owner);
         }
-      } else { indices.set(index, lines.length); lines.push(line); turnIds.push(owner); }
+      } else {
+        indices.set(index, lines.length);
+        if (span.protectedLines?.includes(index)) protectedLines.push(lines.length);
+        lines.push(line); turnIds.push(owner);
+      }
     });
     const tools = span.tools && { ...span.tools, lines: span.tools.lines.filter((r) => indices.has(r.index))
       .map((r) => ({ ...r, index: indices.get(r.index)! })) };

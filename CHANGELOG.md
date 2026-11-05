@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.11.3
 
 - Replace heuristic startup-read retention with explicit `<retain-reads>` declarations
   in AGENTS/CLAUDE files: default to the first read, or use `latest:`.
@@ -10,7 +10,13 @@
   filtering without duplicating recent-tail or native-turn outputs. Choices persist
   in the session branch; confirmed edits can revise an existing checkpoint without
   additional compaction.
+- Keep retained read outputs at their original positions, or directly after their
+  filtered-turn marker, without a separate retained-read section. Preserve placement
+  through restoration and repeated compactions; keep inline outputs untrimmed.
 - Document the potential next-request prompt-cache cost of manual context edits.
+- Add `/export-checkpoint [path]` to export the current branch's saved checkpoint
+  as plain text, including confirmed manual revisions, without rebuilding it or
+  changing context.
 
 ## 0.11.2
 
