@@ -1,6 +1,6 @@
 {
   "name": "@foliox/transparent-compact-pi",
-  "version": "0.11.3",
+  "version": "0.11.4",
   "description": "Model-free, deterministic, and self-aware compaction; with session-backed subagent context recovery, and optional context pruning and fidelity controls.",
   "keywords": [
     "pi-package",
