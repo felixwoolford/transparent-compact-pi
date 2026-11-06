@@ -111,11 +111,8 @@ unchanged; their presentation in a later checkpoint may tighten under budget pre
 
 When omitted observations, payloads, or provenance are needed, prefer
 `context_lookup` with a specific historical question. Recovery results supply
-ENTRY ids for targeted follow-up. For a specific missing passage at a known ENTRY
-id, `context_show_entry` can read that entry directly; search or interpretation
-remains a `context_lookup` task.
-The list/grep tools remain fallbacks when lookup findings are incomplete. For
-current state, inspect files. There is no required-document reread checklist.
+ENTRY ids for targeted follow-up questions. For current state, inspect files.
+There is no required-document reread checklist.
 
 All newly compacted custom messages follow the same stub policy, regardless of
 extension, display setting, or content format. Long type names are abbreviated
@@ -431,9 +428,9 @@ attribution.
 
 The subagent uses three internal tools: `list_entries`, `grep`, and `show_entry`.
 These search the rendered lines directly, so no temporary file, second session
-copy, or cleanup is needed. They share the fallback tools' paginated search
-functions. Individual results and the final answer have size limits. Follow
-pages only when omitted content is needed, not to exhaust every match or entry.
+copy, or cleanup is needed. Individual results and the final answer have size
+limits. Follow pages only when omitted content is needed, not to exhaust every
+match or entry.
 
 The default substantive search budget is 25 turns. Valid continuation-only turns
 do not spend it; new queries, changed parameters, or replayed cursors do. A separate
@@ -442,7 +439,7 @@ ceiling caps all search-phase model calls at three times the configured turn bud
 search counts. When either budget ends searching, one final tool-free model call
 writes up partial findings; a failed write-up falls back to the latest text,
 explicitly labeled incomplete. A plain-text answer after the paging-only budget
-warning also carries an incomplete-findings marker and fallback guidance, without
+warning also carries an incomplete-findings marker, without
 an extra write-up call. Both normal-answer and forced-write-up instructions distinguish
 unreached evidence from absence: an incomplete search does not establish that the
 answer was never recorded. Lookup requests use normal provider caching
@@ -480,14 +477,11 @@ files through filesystem tools. This restriction does not apply to user-requeste
 session audits, debugging, or cross-session analysis, which can use ordinary file
 tools. Lookup itself still cannot search other sessions or abandoned branches.
 
-The extension registers a subagent lookup and three bounded direct-recovery tools:
+The extension registers one main-agent recovery tool:
 
 | Tool | Purpose |
 |---|---|
 | `context_lookup` | Recover outputs, findings, decisions, reasoning, and provenance hidden by compaction, including conflicts with new evidence. A subagent searches the raw branch and returns relevant findings. Accepts only `question`. |
-| `context_list_entries` | Post-compaction fallback: list raw session ENTRY headers and previews. |
-| `context_grep` | Post-compaction fallback: regex-search raw history, including thinking and tool outputs, with entry attribution. |
-| `context_show_entry` | Recover a specific detail hidden by compaction at a known ENTRY id, or after lookup. Optional `includeRelated` recovers matched call/result entries only when that counterpart is needed. |
 
 For example, ask the agent to recover the build error observed before compaction.
 It can call `context_lookup` with:
@@ -498,26 +492,18 @@ It can call `context_lookup` with:
 }
 ```
 
-ENTRY ids returned by recovery tools can narrow subsequent `context_lookup`
-questions or identify a specific passage for `context_show_entry`. Prefer lookup
-when search or interpretation is needed.
-Lookup, listing, and grep use concise capability-oriented advertisements. The
-`context_show_entry` advertisement retains small-first retrieval and continuation
-only while the requested detail is missing, incomplete, or needs more context to
-resolve ambiguity; stop once the question is answered. The skill retains bounded
-recovery guidance, including that a partial search does not establish absence.
-Advertisement changes do not change payload limits, defaults, or retrieval behavior,
-and do not guarantee small total responses. No automatic decision sweep or new
-re-orientation instruction is added.
+ENTRY ids returned by lookup can narrow subsequent `context_lookup` questions.
+The skill explains recovery scope and limitations, including that a partial
+search does not establish absence.
 
 Ordinary entry retrieval defaults to `includeRelated=false`. Related expansion
-remains available to the subagent and direct entry tool; it is one-hop and
-chronological: a result includes its originating assistant entry (including any
+is available to the subagent; it is one-hop and chronological: a result includes
+its originating assistant entry (including any
 sibling calls), not sibling outputs; an assistant includes its matched results.
 Relations come from raw call IDs and matching tool names, never transcript text.
 Ambiguous duplicate IDs, orphan results, and mismatched tool names do not establish
 relations. Sequential ID reuse is matched separately. Branch scoping and source
-overrides apply equally to both modes.
+overrides apply to both single-entry and related-entry retrieval.
 
 Related expansions share the usual character/line guards. Keep `includeRelated`
 unchanged when following an offset; changing it starts a different retrieval and
@@ -525,17 +511,15 @@ spends a substantive subagent search turn. An expansion of an unfinished call ma
 change if results arrive later; restart paging if its source changes.
 
 The subagent searches in its own context and returns findings with entry
-references. Its raw search results stay out of the main conversation. If findings
-are incomplete, the fallback tools run the same searches directly; their results
-enter the main context. Turn-limit write-ups include a note recommending these
-tools for further detail on the same query, even if the write-up fails.
+references. Its raw search results stay out of the main conversation.
+Budget-limited findings retain an incomplete marker even if the write-up fails.
 
-By default, only one `context_lookup` attempt is allowed until a user message,
-a bash execution, or a tool result outside these four recovery tools resets the
-limit. Fallback searches, assistant text, and thinking neither increase nor reset
-the count. Pending lookup calls in the same batch also count, preventing parallel
-calls from bypassing the limit. Blocked attempts return a short fallback note
-without launching a subagent; later lookups after other work remain available.
+By default, three consecutive `context_lookup` attempts are allowed until a user
+message, a bash execution, or another tool's result resets the limit. Assistant
+text and thinking neither increase nor reset the count. Pending lookup calls in
+the same batch also count, preventing parallel calls from bypassing the limit.
+Blocked attempts return a short limit notice without launching a subagent;
+later lookups after other work remain available.
 
 ### Instruction envelope and persistent re-orientation
 

@@ -10,11 +10,17 @@ function checkFilesystemScope(content) {
   assert(!/^Do not (?:read or grep|read) raw session JSONL files.*filesystem tools\./m.test(content),
     "no standalone global filesystem prohibition");
   checkCurrentRecoveryLanguage(content);
+  checkNoFallbackTools(content);
 }
 
 function checkCurrentRecoveryLanguage(content) {
   assert.doesNotMatch(content, /\bdump(?:s|dir)?\b|\bdump[-_]context\b|\bcontext[-_]dumps?\b/i,
     "current instructions and packaged resources must not advertise obsolete recovery interfaces");
+}
+
+function checkNoFallbackTools(content) {
+  assert.doesNotMatch(content, /context_(?:list_entries|grep|show_entry)|bounded fallback|bounded direct tools/i,
+    "main-agent guidance must not advertise removed recovery tools");
 }
 
 function checkRefFreeRecoveryLanguage(content) {
@@ -42,6 +48,7 @@ module.exports = function (h) {
   for (const tool of Object.values(ext.tools)) {
     const advertisement = JSON.stringify({ description: tool.description, promptSnippet: tool.promptSnippet, parameters: tool.parameters });
     checkCurrentRecoveryLanguage(advertisement);
+    checkNoFallbackTools(advertisement);
     checkRefFreeRecoveryLanguage(advertisement);
   }
   checkFilesystemScope(lookup.description);
@@ -54,7 +61,6 @@ module.exports = function (h) {
   assert.doesNotMatch(lookup.description, /before repeating the investigation/i,
     "advertising does not mandate lookup before ordinary investigation");
   assert.match(lookup.description, /subagent searches this conversation's full raw active branch in its own context/);
-  assert.match(lookup.description, /If findings are incomplete, use context_list_entries, context_grep, or context_show_entry, following pagination instructions/);
   assert.match(lookup.description, /returns relevant findings/);
   const scope = "Use the recovery tools for history established by this conversation or its checkpoint, not project discovery, requirements never supplied, other sessions, or abandoned branches.";
   assert(lookup.description.includes(scope));
@@ -68,32 +74,6 @@ module.exports = function (h) {
     assert.match(tool.promptSnippet, /compaction/, `${tool.name}: snippet explains compaction recovery`);
   }
 
-  for (const name of ["context_list_entries", "context_grep", "context_show_entry"]) {
-    const tool = ext.tools[name];
-    assert(tool.description.startsWith(name === "context_show_entry"
-      ? "Read a known raw session entry to recover a specific detail hidden by compaction."
-      : "Fallback after context_lookup, when its findings are incomplete; same scope as context_lookup."), name);
-    assert(!tool.description.includes(scope), `${name}: refer to lookup scope without repeating it`);
-    assert(tool.promptSnippet.includes("this conversation"), name);
-  }
-  assert(ext.tools.context_show_entry.parameters.properties.includeRelated);
-  assert.match(ext.tools.context_show_entry.description, /matched tool call\/result entries/);
-  assert.match(ext.tools.context_show_entry.description, /ENTRY id returned by context_lookup, context_grep, or context_list_entries/);
-  assert.match(ext.tools.context_show_entry.description, /Start with a small maxLines/);
-  assert.match(ext.tools.context_show_entry.description, /use it only if the counterpart is needed/);
-  assert.match(ext.tools.context_show_entry.description, /do not expand surrounding history by default/);
-  assert.match(ext.tools.context_show_entry.description, /Continue with the reported offset only if the requested detail is missing, incomplete, or needs more context to resolve ambiguity/);
-  assert.match(ext.tools.context_show_entry.description, /Stop once the question is answered/);
-  assert.match(ext.tools.context_show_entry.description, /a page may not contain the entire entry/);
-  assert.equal(ext.tools.context_show_entry.promptSnippet,
-    "Recover a specific detail hidden by compaction at a known ENTRY id in this conversation.");
-  assert.match(ext.tools.context_grep.description, /compacted thinking and tool outputs, with surrounding lines and entry attribution/);
-  assert.doesNotMatch(ext.tools.context_grep.description, /authoritative/);
-  assert.match(ext.tools.context_grep.description, /Follow all reported continuation parameters \(offset, charOffset, throughEntry\) for remaining matches or oversized lines/);
-  assert.equal(ext.tools.context_grep.promptSnippet, "Fallback: search this conversation's evidence hidden by compaction");
-  assert.match(ext.tools.context_list_entries.description, /List raw session ENTRY headers and previews/);
-  assert.match(ext.tools.context_list_entries.description, /Follow all reported continuation parameters \(offset and throughEntry\)/);
-  assert.equal(ext.tools.context_list_entries.promptSnippet, "Fallback: list this conversation's entries for post-compaction recovery");
   for (const tool of Object.values(ext.tools)) {
     assert.doesNotMatch(JSON.stringify({ description: tool.description, promptSnippet: tool.promptSnippet,
       parameters: tool.parameters }), /\blost\b|nothing is lost|retrieve anything/i,
@@ -112,12 +92,7 @@ module.exports = function (h) {
   assert.doesNotMatch(skill, /before repeating the\s+investigation/i,
     "skill does not mandate lookup before ordinary investigation");
   checkFilesystemScope(skill);
-  assert(skill.includes("**`context_lookup`** — the preferred first step"));
   assert.match(skill, /You may include an ENTRY id from an earlier recovery result/);
-  assert.match(skill, /already know the ENTRY id and only need a specific\s+passage/);
-  assert.match(skill, /stop once the question is answered/);
-  assert.match(skill, /For recovery of details hidden by compaction, these are the permitted direct tools/);
-  assert.match(skill, /missing, incomplete, or\s+needs more context to resolve ambiguity/);
   assert.match(skill, /A partial search does not establish that something never happened/);
   assert.match(skill, /including recorded tool outputs and your reasoning/);
   assert.match(skill, /including downloaded sources/);
@@ -146,5 +121,6 @@ module.exports = function (h) {
 };
 module.exports.checkFilesystemScope = checkFilesystemScope;
 module.exports.checkCurrentRecoveryLanguage = checkCurrentRecoveryLanguage;
+module.exports.checkNoFallbackTools = checkNoFallbackTools;
 module.exports.checkRecoveryTriggers = checkRecoveryTriggers;
 module.exports.checkRecoveryChoices = checkRecoveryChoices;

@@ -82,11 +82,8 @@ module.exports = async function lookupPagingTests(h) {
     });
     assert.equal(soft.calls, continueFirst ? 4 : 3);
     assert(soft.answer.includes("[subagent reached the 2-turn limit; findings may be incomplete]"));
-    const note = "If more detail is needed for this query, use context_list_entries, context_grep, or context_show_entry rather than immediately repeating context_lookup.";
-    assert(soft.answer.endsWith(note));
-    assert.equal(soft.answer.split(note).length - 1, 1);
     const boundedPayload = soft.answer.replace(/\n…\[\+\d+ chars truncated\]/g, "");
-    assert(boundedPayload.length <= 12000, "findings, marker and fallback fit the budget, excluding truncation notices");
+    assert(boundedPayload.length <= 12000, "findings and marker fit the budget, excluding truncation notices");
     if (!answer) assert(soft.answer.includes("(subagent returned no answer)"));
   }
   const normal = await run(() => assistant([text("Normal complete answer.")]));
@@ -123,7 +120,7 @@ module.exports = async function lookupPagingTests(h) {
   });
   assert.equal(ceiling.calls, 7);
   assert(ceiling.answer.includes("6-call total limit"));
-  assert(ceiling.answer.endsWith("rather than immediately repeating context_lookup."));
+  assert(ceiling.answer.includes("partial findings"));
 
   // Changed effective parameters, missing boundaries and invented cursors
   // are searches, not exempt continuations. Mixed or duplicate batches too.

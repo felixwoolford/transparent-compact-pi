@@ -54,14 +54,10 @@ module.exports = async function runtimeLookupTests(h) {
       return assistant([text("Runtime findings.")]);
     };
     const lookup = (id) => toolCall("context_lookup", { question: "Recover prior evidence" }, id);
-    const grep = (id) => toolCall("context_grep", { pattern: "prior evidence", before: 0, after: 0 }, id);
     const work = (id) => toolCall("ordinary_work", {}, id);
     const scripted = [
       assistant([text("Not found yet, let me use the three lookup slots."), lookup("a"), lookup("a2"), lookup("a3"), lookup("b")], "toolUse"),
       assistant([text("Let me narrate and try again."), lookup("c")], "toolUse"),
-      assistant([grep("fallback")], "toolUse"),
-      assistant([lookup("d")], "toolUse"),
-      ...(sequential ? [assistant([grep("between"), lookup("e")], "toolUse")] : []),
       assistant([work("reset")], "toolUse"),
       assistant([lookup("f")], "toolUse"),
       ...(sequential ? [assistant([work("same-batch-reset"), lookup("g")], "toolUse")] : []),
@@ -79,7 +75,7 @@ module.exports = async function runtimeLookupTests(h) {
     const model = { id: "stub-model", provider: "stub", api: "test", name: "Test model", baseUrl: "http://127.0.0.1:1/never", reasoning: false, input: ["text"], contextWindow: 100000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
     const { session } = await createAgentSession({
       cwd: root, agentDir: root, modelRuntime: runtime, model, resourceLoader: loader,
-      sessionManager: manager, tools: ["context_lookup", "context_grep", "ordinary_work"], thinkingLevel: "off",
+      sessionManager: manager, tools: ["context_lookup", "ordinary_work"], thinkingLevel: "off",
       customTools: [{ name: "ordinary_work", label: "Ordinary work", description: "Test-only recovery boundary", parameters: Type.Object({}),
         execute: async () => ({ content: [text("Ordinary work done")], details: undefined }),
       }],
@@ -94,8 +90,6 @@ module.exports = async function runtimeLookupTests(h) {
       for (const id of ["a", "a2", "a3"]) assert.equal(results.get(id), "Runtime findings.");
       assert(results.get("b")?.includes("consecutive-call limit reached"));
       assert(results.get("c")?.includes("consecutive-call limit reached"), "narration cannot reset the cap");
-      assert(results.get("d")?.includes("consecutive-call limit reached"), "fallback result does not reset the recovery episode");
-      if (sequential) assert(results.get("e")?.includes("consecutive-call limit reached"), "same-message fallback search does not reset the streak either");
       assert.equal(results.get("f"), "Runtime findings.", "ordinary-work result resets the streak");
       if (sequential) assert.equal(results.get("g"), "Runtime findings.", "ordinary work between same-message calls is a boundary");
       assert.equal(subagentCalls, sequential ? 5 : 4);

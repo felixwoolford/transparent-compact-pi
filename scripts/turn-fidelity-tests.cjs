@@ -2,7 +2,7 @@
 const assert = require("node:assert/strict");
 const path = require("node:path");
 
-module.exports = async function ({ factory, load, SessionManager, root, makeContext, user, assistant, text, toolCall, jiti, piRoot, saveSession }) {
+module.exports = async function ({ factory, load, SessionManager, root, makeContext, user, assistant, text, toolCall, jiti, piRoot, saveSession, searchTool }) {
   console.log("== Turn fidelity: native ordered replay, thinking modes, caps, edits, budgets, persistence and request projection ==");
   const { PREFLAG_ENTRY, AUTO_FILTER_ENTRY, FILTER_REVISION_ENTRY } = await jiti.import(path.resolve(__dirname, "../extensions/lib/turn-filter.ts"));
   const { sessionEntryToContextMessages } = await jiti.import("@earendil-works/pi-coding-agent");
@@ -202,7 +202,7 @@ module.exports = async function ({ factory, load, SessionManager, root, makeCont
   assert.equal(JSON.stringify(manager.getBranch()), beforeOversize, "oversized selection saves no checkpoint revision");
   assert(notices.some(([message]) => message.includes("Nothing was silently shortened")));
   // The original thinking and images remain recoverable after every downgrade.
-  const recovered = await ext.tools.context_show_entry.execute("fidelity-recover", { id: a1 }, undefined, undefined, ctx);
+  const recovered = await searchTool(ext, ctx, "show_entry", { id: a1 });
   assert(JSON.stringify(recovered).includes("TOOLS_THINKING_SECRET"));
 
   console.log("== Actual Pi requests: full-fidelity messages, thinking markers, images and persistent choices ==");

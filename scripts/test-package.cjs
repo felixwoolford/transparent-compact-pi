@@ -28,10 +28,13 @@ async function main() {
   // npm 12 keys results by package name; earlier versions return an array.
   const [packed] = Array.isArray(packResult) ? packResult : Object.values(packResult);
   const packedPaths = new Set(packed.files.map((file) => file.path));
-  const { checkCurrentRecoveryLanguage } = require("./recovery-guidance-tests.cjs");
+  const { checkCurrentRecoveryLanguage, checkNoFallbackTools } = require("./recovery-guidance-tests.cjs");
   for (const file of packedPaths) {
-    if (/\.(?:md|ts)$/i.test(file))
-      checkCurrentRecoveryLanguage(fs.readFileSync(path.join(root, file), "utf8"));
+    if (/\.(?:md|ts)$/i.test(file)) {
+      const content = fs.readFileSync(path.join(root, file), "utf8");
+      checkCurrentRecoveryLanguage(content);
+      if (file !== "CHANGELOG.md") checkNoFallbackTools(content);
+    }
   }
   for (const resource of ["extensions/index.ts", "extensions/lib/checkpoint-cap.ts", "skills/context-retrieval/SKILL.md", "CHANGELOG.md"]) {
     assert(packedPaths.has(resource), `npm package includes ${resource}`);
@@ -64,7 +67,7 @@ async function main() {
     assert.deepEqual(loaded.errors, [], "real Pi extension loader reports no errors");
     assert.equal(loaded.extensions.length, 1);
     const extension = loaded.extensions[0];
-    assert.deepEqual([...extension.tools.keys()], ["context_list_entries", "context_grep", "context_show_entry", "context_lookup"], "session lookup and three direct fallback tools are registered");
+    assert.deepEqual([...extension.tools.keys()], ["context_lookup"], "only subagent lookup is registered for the main agent");
     assert.deepEqual([...extension.commands.keys()], ["compaction-method", "cap-compaction", "filter-later", "fl", "filter-auto", "compact-filtered", "filter-turns", "retain-reads", "export-checkpoint"], "compaction policy, context editing and checkpoint export commands are registered");
     const lookup = extension.tools.get("context_lookup");
     assert.deepEqual(Object.keys(lookup.definition.parameters.properties), ["question"], "lookup accepts only question");

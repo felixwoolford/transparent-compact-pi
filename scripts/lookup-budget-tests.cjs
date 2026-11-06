@@ -28,7 +28,7 @@ module.exports = async function lookupBudgetTests(h) {
     : writeup(context));
   assert.equal(substantive.calls, expected + 1);
   assert(substantive.answer.includes(`${expected}-turn limit`));
-  assert(substantive.answer.includes("context_show_entry"));
+  assert(substantive.answer.includes("partial findings"));
 
   // One substantive query followed only by legitimate continuation pages still
   // stops at 3x the configured budget, plus the single write-up call.
@@ -46,5 +46,5 @@ module.exports = async function lookupBudgetTests(h) {
   });
   assert.equal(paged.calls, expected * 3 + 1);
   assert(paged.answer.includes(`${expected * 3}-call total limit`));
-  assert(paged.answer.endsWith("rather than immediately repeating context_lookup."));
+  assert(paged.answer.includes("partial findings"));
 };

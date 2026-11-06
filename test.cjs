@@ -84,7 +84,7 @@ async function compact(ext, ctx, ids, kept, reason = "manual", fileOps) {
   assert(!c.summary.includes(ctx.cwd), "checkpoint does not disclose the transcript path");
   assert(c.summary.includes("kept in the session; use `context_lookup`"));
   for (const tool of ["context_list_entries", "context_grep", "context_show_entry"]) {
-    assert(c.summary.includes(tool), "checkpoint explicitly permits bounded fallback tools");
+    assert(!c.summary.includes(tool), "checkpoint does not advertise removed tools");
   }
   assert(c.summary.includes("**Compacted conversation follows.** The earlier part of this conversation has been compacted into the checkpoint below."));
   assert(c.summary.includes("**Recovering hidden details.**"));
@@ -108,7 +108,7 @@ async function search(ext, ctx, calls, verify = () => {}) {
   const signal = new AbortController().signal;
   const c = { ...ctx, modelRegistry: {
     complete: async (selectedModel, context, options) => {
-      assert.equal(selectedModel, model);
+      assert.equal(selectedModel, ctx.model);
       assert.equal(options.signal, signal);
       assert(!Object.hasOwn(options, "cacheRetention"), "provider caching defaults are not overridden");
       assert(options.sessionId);
@@ -131,6 +131,11 @@ async function search(ext, ctx, calls, verify = () => {}) {
   const result = await ext.tools.context_lookup.execute("lookup", { question: "Recover the exact old evidence." }, signal, undefined, c);
   assert.equal(toolText(result), "Verified findings with ENTRY citations.");
   assert.equal(count, 2);
+}
+async function searchTool(ext, ctx, name, args = {}) {
+  let result;
+  await search(ext, ctx, [toolCall(name, args)], ([output]) => { result = output; });
+  return result;
 }
 function saveSession(manager, file) {
   fs.writeFileSync(file, [manager.getHeader(), ...manager.getEntries()].map((e) => JSON.stringify(e)).join("\n") + "\n");
@@ -431,14 +436,14 @@ async function main() {
     const { SessionManager, loadSkillsFromDir } = await jiti.import("@earendil-works/pi-coding-agent");
     const { default: factory } = await jiti.import(path.join(__dirname, "extensions", "index.ts"));
     const ext = load(factory);
-    const hybridTests = require("./scripts/hybrid-tests.cjs");
-    const hybridHelpers = { ext, SessionManager, root, fixture, makeContext, assistant, text, toolCall, toolText, search, saveSession, output, thinking, argumentsText, user };
+    const lookupTests = require("./scripts/lookup-tests.cjs");
+    const helpers = { ext, SessionManager, root, fixture, makeContext, assistant, text, toolCall, toolText, search, searchTool, saveSession, output, thinking, argumentsText, user };
     if (mode === "lookupturns") {
-      await require("./scripts/lookup-budget-tests.cjs")({ ...hybridHelpers, expected: Number(process.argv[4]) });
+      await require("./scripts/lookup-budget-tests.cjs")({ ...helpers, expected: Number(process.argv[4]) });
       return;
     }
     if (mode === "lookupenv") {
-      await hybridTests.limitTests({ ...hybridHelpers, expected: Number(process.argv[4]) });
+      await lookupTests.limitTests({ ...helpers, expected: Number(process.argv[4]) });
       return;
     }
     const capPolicyTests = require("./scripts/cap-policy-tests.cjs");
@@ -455,27 +460,27 @@ async function main() {
       await capTests(ext, SessionManager, root, capBudget);
       return;
     }
-    assert.deepEqual(Object.keys(ext.tools), ["context_list_entries", "context_grep", "context_show_entry", "context_lookup"]);
-    await hybridTests(hybridHelpers);
-    require("./scripts/recovery-guidance-tests.cjs")({ ...hybridHelpers, factory, load });
-    await require("./scripts/pagination-tests.cjs")(hybridHelpers);
-    await require("./scripts/lookup-paging-tests.cjs")(hybridHelpers);
-    await require("./scripts/runtime-lookup-tests.cjs")({ ...hybridHelpers, jiti, piRoot });
-    await require("./scripts/reorientation-tests.cjs")({ ...hybridHelpers, factory, load, compact, jiti, piRoot });
-    await require("./scripts/read-retention-tests.cjs")({ ...hybridHelpers, factory, load, jiti });
+    assert.deepEqual(Object.keys(ext.tools), ["context_lookup"]);
+    await lookupTests(helpers);
+    require("./scripts/recovery-guidance-tests.cjs")({ ...helpers, factory, load });
+    await require("./scripts/pagination-tests.cjs")(helpers);
+    await require("./scripts/lookup-paging-tests.cjs")(helpers);
+    await require("./scripts/runtime-lookup-tests.cjs")({ ...helpers, jiti, piRoot });
+    await require("./scripts/reorientation-tests.cjs")({ ...helpers, factory, load, compact, jiti, piRoot });
+    await require("./scripts/read-retention-tests.cjs")({ ...helpers, factory, load, jiti });
     assert.deepEqual(Object.keys(ext.commands), ["compaction-method", "cap-compaction", "filter-later", "fl", "filter-auto", "compact-filtered", "filter-turns", "retain-reads", "export-checkpoint"]);
-    await require("./scripts/export-checkpoint-tests.cjs")({ ...hybridHelpers, factory, load });
+    await require("./scripts/export-checkpoint-tests.cjs")({ ...helpers, factory, load });
     await require("./scripts/turn-filter-ui-tests.cjs")({ jiti, piRoot });
-    await require("./scripts/turn-filter-tests.cjs")({ ...hybridHelpers, factory, load, jiti, piRoot });
-    await require("./scripts/turn-fidelity-tests.cjs")({ ...hybridHelpers, factory, load, jiti, piRoot });
-    await require("./scripts/context-readout-tests.cjs")({ ...hybridHelpers, factory, load, jiti, piRoot });
+    await require("./scripts/turn-filter-tests.cjs")({ ...helpers, factory, load, jiti, piRoot });
+    await require("./scripts/turn-fidelity-tests.cjs")({ ...helpers, factory, load, jiti, piRoot });
+    await require("./scripts/context-readout-tests.cjs")({ ...helpers, factory, load, jiti, piRoot });
     await methodTests(factory, SessionManager, root);
-    await require("./scripts/checkpoint-evidence-tests.cjs")({ ...hybridHelpers, compact });
-    await require("./scripts/file-evidence-tests.cjs")({ ...hybridHelpers, factory, load, compact, jiti, piRoot });
-    await require("./scripts/compaction-format-tests.cjs")({ ...hybridHelpers, compact });
-    await require("./scripts/tool-stub-tests.cjs")({ ...hybridHelpers, compact, jiti });
-    await require('./scripts/live-tool-stub-tests.cjs')({ ...hybridHelpers, factory, load, compact, jiti });
-    await require("./scripts/progressive-cap-tests.cjs")({ ...hybridHelpers, compact, jiti });
+    await require("./scripts/checkpoint-evidence-tests.cjs")({ ...helpers, compact });
+    await require("./scripts/file-evidence-tests.cjs")({ ...helpers, factory, load, compact, jiti, piRoot });
+    await require("./scripts/compaction-format-tests.cjs")({ ...helpers, compact });
+    await require("./scripts/tool-stub-tests.cjs")({ ...helpers, compact, jiti });
+    await require('./scripts/live-tool-stub-tests.cjs')({ ...helpers, factory, load, compact, jiti });
+    await require("./scripts/progressive-cap-tests.cjs")({ ...helpers, compact, jiti });
     await capPolicyTests(capHelpers);
     assert.deepEqual(Object.keys(ext.tools.context_lookup.parameters.properties), ["question"]);
 
@@ -490,7 +495,6 @@ async function main() {
     assert(skillText.includes("`@foliox/transparent-compact-pi` extension"));
     assert(!skillText.includes("extensions/index.ts"));
     assert(skillText.includes("only supply `question`"));
-    assert(skillText.includes("Bounded fallback and pagination"));
     assert(!skillText.includes("Always use `context_lookup`"));
     require("./scripts/recovery-guidance-tests.cjs").checkFilesystemScope(skillText);
     assert(skillText.includes("does **not** search abandoned branches"));
@@ -666,9 +670,8 @@ async function main() {
       assert(result.includes(failWriteup ? "Partial old evidence" : "Final partial findings"));
       if (failWriteup) assert(result.includes("findings may be incomplete"));
       if (writeupMode === "throw") assert(result.includes("write-up unavailable"));
-      const note = "If more detail is needed for this query, use context_list_entries, context_grep, or context_show_entry rather than immediately repeating context_lookup.";
-      assert(result.endsWith(note), "next-step guidance survives truncation and write-up failures");
-      assert.equal(result.split(note).length, 2, "fallback note is appended once");
+      assert.match(result, /\[subagent reached the 2-turn limit;[^\n]*\]$/, "incomplete marker survives truncation and write-up failures");
+      require("./scripts/recovery-guidance-tests.cjs").checkNoFallbackTools(result);
     }
     // Skip empty and cancelled compaction preparations without side effects.
     const skipped = await ext.handlers.session_before_compact({ preparation: { messagesToSummarize: [], turnPrefixMessages: [] }, branchEntries: [], signal: new AbortController().signal }, ctx);

@@ -855,12 +855,12 @@ const REORIENT_BLOCK = `**Post-compaction re-orientation.** ${RECOVERY_HISTORY_N
 const REVISION_NOTE_PREFIX = "- Checkpoint context revised: ";
 const CHECKPOINT_EXPLANATION = `**Compacted conversation follows.** The earlier part of this conversation has been compacted into the checkpoint below. This is not the full transcript. ${RECOVERY_HISTORY_NOTE}`;
 
-const RECOVERY_INSTRUCTIONS = `**Recovering hidden details.** Use \`context_lookup\` with a specific historical question: a subagent searches this conversation's full session history and returns relevant findings. Use the recovery tools for history established by this conversation or its checkpoint, not for project discovery or exploration of other sessions. If its findings are incomplete, use the bounded fallback tools \`context_list_entries\`, \`context_grep\`, and \`context_show_entry\`.`;
+const RECOVERY_INSTRUCTIONS = `**Recovering hidden details.** Use \`context_lookup\` with a specific historical question: a subagent searches this conversation's full session history and returns relevant findings. Use the recovery tools for history established by this conversation or its checkpoint, not for project discovery or exploration of other sessions.`;
 
 const EVIDENCE_BOUNDARY_RULE = "**Evidence boundary:** Tool stubs omit supporting details. Most output and detailed payloads are omitted. Inline observations are historical, not verification of unshown details or current state. Use `context_lookup` for omitted observations or provenance; inspect sources for current state.";
 
 const REORIENT_MESSAGE = "transparent-compact:reorient";
-const RECOVERY_RECAP = `**Recovery recap.** ${RECOVERY_SCOPE_RULE} For unfamiliar project details or missing requirements, inspect project files or ask the user instead. If lookup findings are incomplete, use \`context_list_entries\`, \`context_grep\`, or \`context_show_entry\`, following pagination instructions. ${RECOVERY_FILESYSTEM_RULE} Keep these evidence/recovery rules in force as work continues.`;
+const RECOVERY_RECAP = `**Recovery recap.** ${RECOVERY_SCOPE_RULE} For unfamiliar project details or missing requirements, inspect project files or ask the user instead. ${RECOVERY_FILESYSTEM_RULE} Keep these evidence/recovery rules in force as work continues.`;
 
 function latestVerbatimCompaction(entries: SessionEntry[]) {
   for (let i = entries.length - 1; i >= 0; i--) {
@@ -1246,8 +1246,7 @@ function showEntry(transcripts: Transcript[], opts: { id: string; includeRelated
   }) : `No entry with id "${opts.id}" found.`;
 }
 
-// Identical paging parameters in the subagent and direct tools; only the
-// subagent accepts a logical transcript name (not a filesystem path).
+// Subagent paging parameters use logical transcript names, not filesystem paths.
 const OFFSET_FIELD = Type.Optional(Type.Integer({ minimum: 0, description: "Character offset (UTF-16 units, default 0). Use the next offset reported by the previous page." }));
 const FILE_FIELD = Type.Optional(Type.String({ description: "Logical transcript name. Omit for all." }));
 const THROUGH_ENTRY_FIELD = Type.Optional(Type.String({ description: "Last ENTRY id included in this paginated listing/search. Keep the reported throughEntry on subsequent pages to exclude newly appended calls/results; omit to start a fresh search." }));
@@ -1268,15 +1267,12 @@ const SHOW_FIELDS = {
   offset: OFFSET_FIELD,
 };
 
-const LOOKUP_FALLBACK_NOTE =
-  "If more detail is needed for this query, use context_list_entries, context_grep, or context_show_entry rather than immediately repeating context_lookup.";
-
-// Append outside the truncated findings so the next-step guidance survives
-// even a long write-up. Normal successful answers remain unchanged.
+// Keep the incomplete-findings marker outside the truncated write-up.
+// Normal successful answers remain unchanged.
 function lookupPartialFindings(text: string, marker: string): string {
   const status = truncateHead(marker, 1_000); // Provider error messages can be large too.
-  const budget = cfg.lookupAnswerMaxChars - status.length - LOOKUP_FALLBACK_NOTE.length - 2;
-  return `${truncateHead(text, budget)}\n${status}\n${LOOKUP_FALLBACK_NOTE}`;
+  const budget = cfg.lookupAnswerMaxChars - status.length - 1;
+  return `${truncateHead(text, budget)}\n${status}`;
 }
 
 const LOOKUP_WRITEUP_PROMPT =
@@ -1509,13 +1505,11 @@ function sessionTranscript(ctx: { sessionManager: { getBranch: () => SessionEntr
 }
 
 // ============================================================================
-// Main-agent fallback: the same transcript search functions as the subagent
+// Main-agent lookup admission
 // ============================================================================
 
-const FALLBACK_TOOL_NAMES = new Set(["context_list_entries", "context_grep", "context_show_entry"]);
-
 /** Count prior lookup attempts since the last user/ordinary-work/bash boundary.
- * Fallback results, text, and thinking neither increase nor reset the count. Deduplicate call/result ids, and include
+ * Text and thinking neither increase nor reset the count. Deduplicate call/result ids, and include
  * earlier siblings in the current assistant message even before results exist:
  * two parallel lookups cannot both claim the first slot. Later siblings are
  * excluded. Raw branch state follows reload, resume, compaction, and forks. */
@@ -1528,11 +1522,10 @@ function consecutiveLookups(ctx: { sessionManager: { getBranch: () => SessionEnt
     const m = e.message;
     if (m.role === "user" || m.role === "bashExecution") break;
     if (m.role === "toolResult") {
-      if (FALLBACK_TOOL_NAMES.has(m.toolName)) continue;
       if (m.toolName !== "context_lookup") break;
       calls.add(m.toolCallId);
     } else if (m.role === "assistant") {
-      for (const b of m.content) {
+      for (const b of m.content ?? []) {
         if (b.type !== "toolCall") continue;
         if (b.id === toolCallId) break;
         if (b.name === "context_lookup") calls.add(b.id);
@@ -1540,49 +1533,6 @@ function consecutiveLookups(ctx: { sessionManager: { getBranch: () => SessionEnt
     }
   }
   return calls.size;
-}
-
-function registerDirectTools(pi: ExtensionAPI): void {
-  const pre = "Fallback after context_lookup, when its findings are incomplete; same scope as context_lookup. ";
-  const run = (ctx: { sessionManager: { getBranch: () => SessionEntry[] } }, f: (t: Transcript[]) => string) => {
-    try {
-      const transcript = sessionTranscript(ctx);
-      if (transcript.index.length === 0) return { content: [{ type: "text" as const, text: "No entries found on the session branch." }], details: undefined };
-      return { content: [{ type: "text" as const, text: f([transcript]) }], details: undefined };
-    } catch (err) {
-      return { content: [{ type: "text" as const, text: `Tool error: ${errMsg(err)}` }], details: undefined };
-    }
-  };
-  pi.registerTool({
-    name: "context_list_entries",
-    label: "Context: list entries",
-    description: pre + "List raw session ENTRY headers and previews, including compacted entries, in pages of up to 12000 payload characters, plus cursor notes. Follow all reported continuation parameters (offset and throughEntry).",
-    promptSnippet: "Fallback: list this conversation's entries for post-compaction recovery",
-    parameters: Type.Object(LIST_FIELDS),
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      return run(ctx, (t) => listEntries(t, params));
-    },
-  });
-  pi.registerTool({
-    name: "context_grep",
-    label: "Context: grep",
-    description: pre + "Regex-search the full raw session branch, including compacted thinking and tool outputs, with surrounding lines and entry attribution. pattern is a JS regex (case-insensitive). Up to 12000 payload characters per page, plus cursor notes. Follow all reported continuation parameters (offset, charOffset, throughEntry) for remaining matches or oversized lines. Historical thinking is not verified fact.",
-    promptSnippet: "Fallback: search this conversation's evidence hidden by compaction",
-    parameters: Type.Object(GREP_FIELDS),
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      return run(ctx, (t) => grepTranscript(t, params));
-    },
-  });
-  pi.registerTool({
-    name: "context_show_entry",
-    label: "Context: show entry",
-    description: "Read a known raw session entry to recover a specific detail hidden by compaction. Use an ENTRY id returned by context_lookup, context_grep, or context_list_entries. Prefer context_lookup when search or interpretation is needed; same scope as context_lookup. Start with a small maxLines. Optional includeRelated=true includes matched tool call/result entries; use it only if the counterpart is needed. Returns up to 24000 payload characters and maxLines lines per page, plus attribution/cursor notes; a page may not contain the entire entry. Continue with the reported offset only if the requested detail is missing, incomplete, or needs more context to resolve ambiguity, keeping includeRelated unchanged. Stop once the question is answered; do not expand surrounding history by default.",
-    promptSnippet: "Recover a specific detail hidden by compaction at a known ENTRY id in this conversation.",
-    parameters: Type.Object(SHOW_FIELDS),
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      return run(ctx, (t) => showEntry(t, params));
-    },
-  });
 }
 
 // ============================================================================
@@ -2144,13 +2094,12 @@ export default function (pi: ExtensionAPI) {
   // --------------------------------------------------------------------------
   // context_lookup tool: subagent research over the raw session branch
   // --------------------------------------------------------------------------
-  registerDirectTools(pi);
   pi.registerTool({
     name: "context_lookup",
     label: "Context lookup",
     executionMode: "sequential",
     description:
-      `Retrieve earlier outputs, findings, decisions, and reasoning hidden by compaction. Ask \`context_lookup\` where an earlier finding came from, what a command actually printed, or why you reached a conclusion, especially when earlier notes conflict with new evidence. A subagent searches this conversation's full raw active branch in its own context and returns relevant findings. ${RECOVERY_SOURCE_GUIDANCE} ${RECOVERY_SCOPE_RULE} If findings are incomplete, use context_list_entries, context_grep, or context_show_entry, following pagination instructions. ${RECOVERY_FILESYSTEM_RULE}`,
+      `Retrieve earlier outputs, findings, decisions, and reasoning hidden by compaction. Ask \`context_lookup\` where an earlier finding came from, what a command actually printed, or why you reached a conclusion, especially when earlier notes conflict with new evidence. A subagent searches this conversation's full raw active branch in its own context and returns relevant findings. ${RECOVERY_SOURCE_GUIDANCE} ${RECOVERY_SCOPE_RULE} ${RECOVERY_FILESYSTEM_RULE}`,
     promptSnippet: "Retrieve earlier outputs, findings, decisions, and reasoning hidden by compaction, including the provenance of earlier conclusions",
     parameters: Type.Object({
       question: Type.String({ description: "A specific question about earlier in this conversation: an output, source of a finding, reason for a decision, or evidence behind notes that conflict with new observations." }),
@@ -2158,7 +2107,7 @@ export default function (pi: ExtensionAPI) {
     async execute(toolCallId, params, signal, _onUpdate, ctx) {
       if (cfg.lookupMaxCalls > 0 && consecutiveLookups(ctx, toolCallId) >= cfg.lookupMaxCalls) {
         return {
-          content: [{ type: "text", text: `context_lookup consecutive-call limit reached (${cfg.lookupMaxCalls}). ${LOOKUP_FALLBACK_NOTE}` }],
+          content: [{ type: "text", text: `context_lookup consecutive-call limit reached (${cfg.lookupMaxCalls}).` }],
           details: undefined,
         };
       }

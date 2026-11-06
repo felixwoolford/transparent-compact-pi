@@ -26,7 +26,7 @@ function checkChecklist(content) {
     "If a task-relevant claim has uncertain provenance or conflicts with new evidence",
     "check its supporting output (using `context_lookup` if hidden) or the current source before treating it as established",
     "**Recovery recap.** Use the recovery tools for history established",
-    "**Recovery recap.**", "context_lookup", "context_list_entries", "context_grep", "context_show_entry",
+    "**Recovery recap.**", "context_lookup",
     "history established by this conversation or its checkpoint",
     "For unfamiliar project details or missing requirements, inspect project files or ask the user instead"])
     assert(content.includes(phrase), phrase);
@@ -59,7 +59,7 @@ function checkEnvelope(summary) {
   assert.equal(count(summary, "**Recovering hidden details.**"), 1);
   require("./recovery-guidance-tests.cjs").checkCurrentRecoveryLanguage(summary);
   const recovery = summary.slice(summary.indexOf("**Recovering hidden details.**")).split("\n\n")[0];
-  assert.equal(recovery, "**Recovering hidden details.** Use `context_lookup` with a specific historical question: a subagent searches this conversation's full session history and returns relevant findings. Use the recovery tools for history established by this conversation or its checkpoint, not for project discovery or exploration of other sessions. If its findings are incomplete, use the bounded fallback tools `context_list_entries`, `context_grep`, and `context_show_entry`.");
+  assert.equal(recovery, "**Recovering hidden details.** Use `context_lookup` with a specific historical question: a subagent searches this conversation's full session history and returns relevant findings. Use the recovery tools for history established by this conversation or its checkpoint, not for project discovery or exploration of other sessions.");
   assert(summary.indexOf("**Recovering hidden details.**") < summary.indexOf("### Compacted conversation"));
   assert.equal(count(summary, "**Evidence boundary:**"), 1);
   assert(summary.indexOf("**Evidence boundary:**") > summary.lastIndexOf("</compacted-span>"));

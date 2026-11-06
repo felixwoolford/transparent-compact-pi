@@ -51,7 +51,7 @@ checks local dependencies and global npm installations.
 - Empty/no-model, cancellation, provider-error, and exhausted write-up tests.
   Fresh-process lookup tests cover the 25-turn default, environment overrides,
   invalid-value fallbacks, and the 3× total-call ceiling. Soft-limit answers cover
-  incomplete markers, fallback guidance, pagination, and long/empty responses.
+  incomplete markers, pagination, and long/empty responses.
 - Default-budget retention, small-budget termination, and cross-span size guards.
   Pure progressive-cap tests cover every presentation rung before omission, early
   stopping, immutable canonical records, Unicode prefix boundaries, protected

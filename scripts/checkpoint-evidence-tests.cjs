@@ -5,7 +5,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { locationId } = require('./location-test-helpers.cjs');
 
-module.exports = async function ({ ext, SessionManager, root, compact, makeContext, assistant, toolCall, text, user }) {
+module.exports = async function ({ ext, SessionManager, root, compact, makeContext, assistant, toolCall, text, user, searchTool }) {
   console.log("== Checkpoint evidence: per-call outcomes, removed document contents, and closing rule ==");
   const cwd = path.join(root, "checkpoint-evidence");
   fs.mkdirSync(cwd);
@@ -125,9 +125,7 @@ module.exports = async function ({ ext, SessionManager, root, compact, makeConte
       assert(!checkpoint.includes(secret), secret);
   }
   assert.deepEqual(customIds.map((id) => custom.getEntry(id)), originals, "original session entries remain intact");
-  const raw = await ext.tools.context_show_entry.execute("recover-custom", { id: customIds[0], maxLines: 1000 },
-    new AbortController().signal, undefined, customCtx);
-  const recovered = raw.content.map((b) => b.text ?? "").join("");
+  const recovered = await searchTool(ext, customCtx, "show_entry", { id: customIds[0], maxLines: 1000 });
   assert(recovered.includes(cases[0].content), "the full custom body remains recoverable from raw history");
   assert(custom.buildSessionContext().messages.some((m) => m.role === "custom" && m.content === "CUSTOM_TAIL_VERBATIM"),
     "custom messages in Pi's retained tail remain verbatim");

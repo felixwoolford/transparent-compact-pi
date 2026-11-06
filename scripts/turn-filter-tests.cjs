@@ -2,7 +2,7 @@
 const assert = require("node:assert/strict");
 const path = require("node:path");
 
-module.exports = async function ({ factory, load, SessionManager, root, makeContext, user, assistant, text, toolCall, jiti, piRoot, saveSession }) {
+module.exports = async function ({ factory, load, SessionManager, root, makeContext, user, assistant, text, toolCall, jiti, piRoot, saveSession, searchTool }) {
   console.log("== Compact-filtered: ordinary compaction first, shared editor, no-op fallback and independent cancellation ==");
   const { FILTER_MARKER, FILTER_EXPLANATION, PREFLAG_ENTRY, FILTER_REVISION_ENTRY, preflaggedTurns, autoFilterEnabled, filterSpans } = await jiti.import(path.resolve(__dirname, "../extensions/lib/turn-filter.ts"));
   const { capSpans } = await jiti.import(path.resolve(__dirname, "../extensions/lib/checkpoint-cap.ts"));
@@ -180,7 +180,7 @@ module.exports = async function ({ factory, load, SessionManager, root, makeCont
   const file = path.join(root, "filtered-session.jsonl"); saveSession(manager, file);
   const reopened = SessionManager.open(file), resumed = load(factory, { current: reopened });
   assert(project(resumed, reopened).find((m) => m.role === "compactionSummary").summary.includes("LOW_VALUE_STARTUP_OUTPUT"));
-  const recovered = await resumed.tools.context_show_entry.execute("recover", { id: read }, undefined, undefined, { ...ctx, sessionManager: reopened });
+  const recovered = await searchTool(resumed, { ...ctx, sessionManager: reopened }, "show_entry", { id: read });
   assert(JSON.stringify(recovered).includes("LOW_VALUE_STARTUP_OUTPUT"));
   manager.branch(older.id); assert(!ext.handlers.before_agent_start({}, ctx).message.content.includes(FILTER_EXPLANATION));
   manager.branch(restoredHead);

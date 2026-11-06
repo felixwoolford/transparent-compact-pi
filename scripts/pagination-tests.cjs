@@ -2,11 +2,11 @@
 const assert = require("node:assert/strict");
 
 module.exports = async function paginationTests(h) {
-  const { ext, SessionManager, root, makeContext, user, text, toolText, search, toolCall } = h;
-  console.log("== Bounded retrieval: exact continuation, all matches, long entries/lines, and subagent parity ==");
+  const { ext, SessionManager, root, makeContext, user, text, searchTool } = h;
+  console.log("== Subagent retrieval: exact continuation, all matches, and long entries/lines ==");
   const manager = SessionManager.inMemory(root);
   const ctx = makeContext(manager, root);
-  const call = async (name, args) => toolText(await ext.tools[name].execute("page", args, undefined, undefined, ctx));
+  const call = (name, args) => searchTool(ext, ctx, name, args);
   const strip = (result) => result.replace(/^\[Continuation: [^\n]*\]\n/, "").split("\n[Page limited:")[0];
   const collect = async (name, args, budget) => {
     let offset = 0, throughEntry, reconstructed = "", pages = 0;
@@ -24,7 +24,7 @@ module.exports = async function paginationTests(h) {
       assert(result.includes("characters remain"));
       offset = Number(next[1]);
       throughEntry = next[2];
-      if (name === "context_list_entries") {
+      if (name === "list_entries") {
         assert(throughEntry, "listing cursors pin the source boundary");
         manager.appendMessage(user("PAGE_APPENDED_ONLY must not appear in this listing"));
       }
@@ -36,59 +36,55 @@ module.exports = async function paginationTests(h) {
   const id = manager.appendMessage({ role: "toolResult", toolName: "read", toolCallId: "huge-read", content: [text(huge)], isError: false, timestamp: Date.now() });
   const entry = manager.getEntry(id);
   const expected = `### session\n${"=".repeat(78)}\nENTRY ${id}  toolResult (read, isError=false)  ${entry.timestamp}\n${huge}\n`;
-  const shown = await collect("context_show_entry", { id, maxLines: 17 }, 24000);
+  const shown = await collect("show_entry", { id, maxLines: 17 }, 24000);
   assert.equal(shown.reconstructed, expected, "every character survives both line and character pagination");
   assert(shown.pages > 3);
-  assert((await call("context_show_entry", { id, offset: expected.length })).startsWith("No more content"));
+  assert((await call("show_entry", { id, offset: expected.length })).startsWith("No more content"));
 
-  const first = await call("context_show_entry", { id });
+  const first = await call("show_entry", { id });
   const secondOffset = Number(/and offset=(\d+)\.\]$/.exec(first)[1]);
-  const second = await call("context_show_entry", { id, offset: secondOffset });
+  const second = await call("show_entry", { id, offset: secondOffset });
   assert(second.includes(`ENTRY ${id}  toolResult`), "continuation repeats authoritative attribution even inside a single line");
-  await search(ext, ctx, [
-    toolCall("show_entry", { id }),
-    toolCall("show_entry", { id, offset: secondOffset }),
-  ], (results) => assert.deepEqual(results, [first, second], "subagent and fallback share cursors and payloads"));
 
   // Character boundaries have no gaps or duplicate payload, even exactly at the cap.
   for (const length of [24000, 24001, 48000]) {
     const boundaryId = manager.appendMessage({ role: "toolResult", toolName: "read", toolCallId: `boundary-${length}`, content: [text("x")], isError: false, timestamp: Date.now() });
-    const small = await call("context_show_entry", { id: boundaryId });
+    const small = await call("show_entry", { id: boundaryId });
     manager.getEntry(boundaryId).message.content[0].text = "x".repeat(length - small.length + 1);
-    const boundary = await collect("context_show_entry", { id: boundaryId }, 24000);
+    const boundary = await collect("show_entry", { id: boundaryId }, 24000);
     assert.equal(boundary.reconstructed.length, length);
     assert.equal(boundary.pages, Math.ceil(length / 24000));
   }
 
   const unicodeId = manager.appendMessage({ role: "toolResult", toolName: "read", toolCallId: "unicode", content: [text("x")], isError: false, timestamp: Date.now() });
-  const overhead = (await call("context_show_entry", { id: unicodeId })).length - 2; // payload and trailing newline
+  const overhead = (await call("show_entry", { id: unicodeId })).length - 2; // payload and trailing newline
   const unicode = "x".repeat(24000 - overhead - 1) + "😀".repeat(14000);
   manager.getEntry(unicodeId).message.content[0].text = unicode;
-  const unicodeFirst = await call("context_show_entry", { id: unicodeId });
+  const unicodeFirst = await call("show_entry", { id: unicodeId });
   assert.equal(strip(unicodeFirst).length, 23999, "a high surrogate at the cap is deferred to the next page");
-  const unicodePages = await collect("context_show_entry", { id: unicodeId }, 24000);
+  const unicodePages = await collect("show_entry", { id: unicodeId }, 24000);
   assert(unicodePages.reconstructed.includes(unicode), "Unicode characters survive pagination intact");
 
   for (let i = 0; i < 500; i++) manager.appendMessage(user(`LIST_ROW_${i} ` + "p".repeat(100)));
   const listedEntries = manager.getBranch();
-  const listing = await collect("context_list_entries", {}, 12000);
+  const listing = await collect("list_entries", {}, 12000);
   assert(listing.pages > 1);
   for (const e of listedEntries) assert(listing.reconstructed.includes(`ENTRY ${e.id} `));
   assert.equal((listing.reconstructed.match(/^ENTRY /gm) ?? []).length, listedEntries.length, "no entry disappears or duplicates across pages");
   assert(!listing.reconstructed.includes("PAGE_APPENDED_ONLY"), "newly appended calls/results do not move the listing boundary or count header");
-  const firstList = await call("context_list_entries", {});
+  const firstList = await call("list_entries", {});
   const listCursor = /and offset=(\d+), throughEntry="([^"]+)"\.\]$/.exec(firstList);
   const listArgs = { offset: Number(listCursor[1]), throughEntry: listCursor[2] };
-  const laterList = await call("context_list_entries", listArgs);
-  await search(ext, ctx, [toolCall("list_entries", listArgs)], ([result]) => assert.equal(result, laterList));
-  assert((await call("context_list_entries", { throughEntry: "not-on-this-branch" })).includes("Restart at offset=0"));
+  const laterList = await call("list_entries", listArgs);
+  assert(laterList.startsWith("[Continuation:"));
+  assert((await call("list_entries", { throughEntry: "not-on-this-branch" })).includes("Restart at offset=0"));
 
   const matchId = manager.appendMessage(user(Array.from({ length: 37 }, (_, i) => `BATCH_MATCH_${i}`).join("\n")));
   const pattern = "^BATCH_MATCH_[0-9]+$";
   let offset = 0, pages = 0, throughEntry;
   const found = [];
   for (;;) {
-    const result = await call("context_grep", { pattern, before: 0, after: 0, maxMatches: 5, offset, throughEntry });
+    const result = await call("grep", { pattern, before: 0, after: 0, maxMatches: 5, offset, throughEntry });
     assert(result.includes(`ENTRY ${matchId}  user`));
     found.push(...[...result.matchAll(/^>> (BATCH_MATCH_\d+)$/gm)].map((m) => m[1]));
     pages++;
@@ -103,8 +99,8 @@ module.exports = async function paginationTests(h) {
   }
   assert.equal(pages, 8);
   assert.deepEqual(found, Array.from({ length: 37 }, (_, i) => `BATCH_MATCH_${i}`));
-  assert((await call("context_grep", { pattern, offset: 37, throughEntry })).startsWith("No more matches"));
-  const invalidCursor = await call("context_grep", { pattern, charOffset: 999999 });
+  assert((await call("grep", { pattern, offset: 37, throughEntry })).startsWith("No more matches"));
+  const invalidCursor = await call("grep", { pattern, charOffset: 999999 });
   assert(invalidCursor.startsWith("Invalid charOffset"));
   assert(invalidCursor.includes("same pattern, file, before/after, and throughEntry"));
   assert(invalidCursor.includes("Restart this match at offset=0 with charOffset=0"));
@@ -114,7 +110,7 @@ module.exports = async function paginationTests(h) {
   let charOffset = 0, joined = "";
   for (let page = 0; ; page++) {
     assert(page < 10);
-    const result = await call("context_grep", { pattern: "^ONE_GIANT_MATCH_", before: 0, after: 0, offset: 0, charOffset });
+    const result = await call("grep", { pattern: "^ONE_GIANT_MATCH_", before: 0, after: 0, offset: 0, charOffset });
     assert(result.includes(`ENTRY ${giantId}  user`), "every partial-match page preserves trusted attribution");
     const payload = result.slice(result.indexOf("\n") + 1).split("\n[Page limited:")[0];
     joined += payload;
@@ -130,17 +126,12 @@ module.exports = async function paginationTests(h) {
   // A charOffset into a large context is invalid after shrinking before/after.
   manager.appendMessage(user("q".repeat(20000) + "\nSMALL_CONTEXT_MATCH"));
   const contextArgs = { pattern: "^SMALL_CONTEXT_MATCH$", before: 1, after: 0 };
-  const contextPage = await call("context_grep", contextArgs);
+  const contextPage = await call("grep", contextArgs);
   const contextCursor = /offset=(\d+), charOffset=(\d+), throughEntry="([^"]+)"\.\]$/.exec(contextPage);
   assert(contextCursor);
   const staleArgs = { ...contextArgs, before: 0, offset: Number(contextCursor[1]), charOffset: Number(contextCursor[2]), throughEntry: contextCursor[3] };
-  const stale = await call("context_grep", staleArgs);
+  const stale = await call("grep", staleArgs);
   assert(stale.includes("before/after") && stale.includes("offset=0 with charOffset=0"));
-  const repaired = await call("context_grep", { ...staleArgs, charOffset: 0 });
+  const repaired = await call("grep", { ...staleArgs, charOffset: 0 });
   assert(repaired.includes(">> SMALL_CONTEXT_MATCH"), "the suggested repair works in one step");
-  await search(ext, ctx, [toolCall("grep", staleArgs)], ([result]) => assert.equal(result, stale, "subagent cursor errors offer the same repair"));
-
-  const grepArgs = { pattern, before: 0, after: 0, maxMatches: 3, offset: 15 };
-  const directGrep = await call("context_grep", grepArgs);
-  await search(ext, ctx, [toolCall("grep", grepArgs)], ([result]) => assert.equal(result, directGrep));
 };
