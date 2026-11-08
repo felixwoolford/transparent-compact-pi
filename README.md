@@ -1,8 +1,8 @@
 # transparent-compact-pi
 
-[Context compaction](#control-compaction) and pruning for [Pi](https://pi.dev/) that keeps conversation text verbatim instead of replacing it with a model-generated summary. It removes thinking and most tool output from the active context, while keeping user messages, assistant text, compact tool-call stubs and explicitly selected reads. The original session history remains available.
+Context compaction and pruning for [Pi](https://pi.dev/) that keeps conversation text verbatim instead of replacing it with a model-generated summary or truncation. It removes thinking and most tool output from the active context, while keeping user messages, assistant text, algorithmically compacted tool-call stubs and explicitly selected reads. 
 
-When the agent needs a detail that is no longer in context, it can use retrieval tools to search the recorded session with a subagent. Compaction itself does not make a model call.
+When the agent needs a detail that is no longer in context, it can use retrieval tools to search the recorded session history with a subagent. Compaction itself does not make a model call.
 
 The user can also [selectively manipulate which turns to hold in the current context](#filter-turns) in higher or lower fidelity, and [specify file reads to be retained in the context in full](#retain-reads), (e.g. a spec or plan).
 
@@ -182,6 +182,7 @@ Alternatively, launch with `MECH_COMPACT_MAIN_AGENT_LOOKUP=1 pi`. The environmen
 Opt-in requires a session with **no existing compactions**. Once enabled, the choice persists through compaction and resume; changing configuration does not switch that session back. Forks inherit the choice when their copied history includes it. Start another session to use a different mode.
 
 Direct recovery exposes listing, search, and entry-reading tools instead of `context_lookup`. It avoids a separate model call but puts retrieved pages into the main context. The subagent model and search-turn/call budgets do not apply to direct recovery.
+This is a second-class operational mode and has not been tested in practice as much as the subagent lookup.
 
 ### Local inference
 
