@@ -31,6 +31,7 @@ function load(factory, sessionRef) {
     on: (name, handler) => { handlers[name] = handler; },
     registerTool: (tool) => { tools[tool.name] = tool; },
     registerCommand: (name, command) => { commands[name] = command; },
+    getSettings: () => ({}),
     getActiveTools: () => Object.keys(tools),
     getAllTools: () => Object.values(tools),
     appendEntry: (type, data) => {
@@ -416,7 +417,7 @@ async function checkpointTests(ext, SessionManager, root) {
 
 async function main() {
   // Make all configuration deterministic and restore the caller's environment.
-  const keys = ["MECH_COMPACT_LOOKUP_MAX_CALLS", "MECH_COMPACT_LOOKUP_SESSION_FILE", "MECH_COMPACT_LOOKUP_MODEL", "MECH_COMPACT_LOOKUP_TURNS", "MECH_COMPACT_MAX_SUMMARY_CHARS", "MECH_COMPACT_MAX_SUMMARY_PERCENT", "MECH_COMPACT_DUMP_DIR", "MECH_COMPACT_WARN_GITIGNORE"];
+  const keys = ["MECH_COMPACT_MAIN_AGENT_LOOKUP", "MECH_COMPACT_LOOKUP_MAX_CALLS", "MECH_COMPACT_LOOKUP_SESSION_FILE", "MECH_COMPACT_LOOKUP_MODEL", "MECH_COMPACT_LOOKUP_TURNS", "MECH_COMPACT_MAX_SUMMARY_CHARS", "MECH_COMPACT_MAX_SUMMARY_PERCENT", "MECH_COMPACT_DUMP_DIR", "MECH_COMPACT_WARN_GITIGNORE"];
   const savedEnv = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
   keys.forEach((key) => { delete process.env[key]; });
   const mode = process.argv[2] ?? "full";

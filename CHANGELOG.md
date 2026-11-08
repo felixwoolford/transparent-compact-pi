@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.12.0
+
+- Add explicit main-agent context-recovery opt-in through
+  `transparentCompact.mainAgentLookup` in Pi settings or
+  `MECH_COMPACT_MAIN_AGENT_LOOKUP=1`. Only sessions without existing compactions
+  can adopt it; the choice persists through compaction, resume, and inherited
+  forks. The default subagent tools, instructions, and behavior are unchanged.
+
 ## 0.11.3
 
 - Replace heuristic startup-read retention with explicit `<retain-reads>` declarations

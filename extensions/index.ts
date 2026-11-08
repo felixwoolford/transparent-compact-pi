@@ -33,6 +33,7 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { buildSessionProjection, SessionManager } from "@earendil-works/pi-coding-agent";
 import type { ExtensionAPI, ExtensionContext, ModelRegistry, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { capSpans, renderToolLine, renderToolStub, NORMAL_PREVIEW_CHARS, TIGHTENED_ATTR } from "./lib/checkpoint-cap.js";
+import { recoveryText, startMainAgentLookup } from "./lib/main-agent-lookup.js";
 import { ToolRenderer, TOOL_DISPLAY_EXPLANATION } from "./lib/tool-stubs/renderer.mjs";
 import { checkpointPath } from "./lib/tool-stubs/display.mjs";
 import { Locations } from "./lib/tool-stubs/locations.mjs";
@@ -558,7 +559,7 @@ function bashOutputLabel(command: string, result: Record<string, any>): string {
 }
 
 interface MessageSource { entryId: string; owner: string | null }
-async function summarizeMessages(messages: AgentMessage[], renderer: ToolRenderer, sources?: (MessageSource | null)[]): Promise<TurnSpan> {
+async function summarizeMessages(messages: AgentMessage[], renderer: ToolRenderer, sources?: (MessageSource | null)[], guidance = (text: string) => text): Promise<TurnSpan> {
   const results = pairedToolResults(messages);
   const lines: string[] = [], turnIds: (string | null)[] = [], readPositions: ReadPosition[] = [];
   const tools: ToolLines = { version: 2, lines: [] };
@@ -611,7 +612,7 @@ async function summarizeMessages(messages: AgentMessage[], renderer: ToolRendere
         // Our instruction envelope is regenerated, not conversation prose.
         // Keep originals in raw history, but never carry old checklists into spans.
         if (m.customType !== REORIENT_MESSAGE)
-          lines.push(`[Custom message]: ${renderToolStub(await renderer.render("custom", { type: m.customType }))} [content removed — use context_lookup]`);
+          lines.push(`[Custom message]: ${renderToolStub(await renderer.render("custom", { type: m.customType }))} ${guidance("[content removed — use context_lookup]")}`);
         break;
       case "branchSummary":
       case "compactionSummary":
@@ -870,8 +871,8 @@ function latestVerbatimCompaction(entries: SessionEntry[]) {
   }
 }
 
-function reorientationMessage(compactionId: string, filtered = false, revisionId = compactionId, fidelity = false) {
-  return { customType: REORIENT_MESSAGE, content: `${REORIENT_BLOCK}${filtered ? `\n\n${FILTER_EXPLANATION}` : ""}${fidelity ? `\n\n${FIDELITY_EXPLANATION}` : ""}\n\n${RECOVERY_RECAP}`,
+function reorientationMessage(entries: SessionEntry[], compactionId: string, filtered = false, revisionId = compactionId, fidelity = false) {
+  return { customType: REORIENT_MESSAGE, content: `${recoveryText(entries, REORIENT_BLOCK)}${filtered ? `\n\n${FILTER_EXPLANATION}` : ""}${fidelity ? `\n\n${FIDELITY_EXPLANATION}` : ""}\n\n${RECOVERY_RECAP}`,
     display: false, details: { compactionId, ...(revisionId !== compactionId ? { revisionId } : {}) } };
 }
 
@@ -955,6 +956,7 @@ async function buildMechanicalSummary(opts: {
   notify: (msg: string) => void;
   chooseCap: (size: { overhead: number; lineChars: number }) => Promise<number | undefined | null>;
 }): Promise<string | undefined> {
+  const guidance = (text: string) => recoveryText(opts.branchEntries, text);
   const { base, spans } = collectBaseAndSpans(opts.branchEntries);
   const fidelity = opts.fidelity ?? {};
   const native = Object.keys(fidelity).length ? fidelityMessages(opts.branchEntries, fidelity, opts.firstKeptEntryId!) : new Map<string, AgentMessage[]>();
@@ -985,7 +987,7 @@ async function buildMechanicalSummary(opts: {
   let overhead = nativeChars + SECTION_HEADER.length + 2;
   if (base) overhead += baseOpen.length + 1 + BASE_CLOSE.length + 2 + base.summary.length;
   overhead += allSpans.reduce(
-    (a, s, i) => a + spanOpen(i + 1, s.at, s.reason, coversOf(s)).length + SPAN_TRIMMED_ATTR.length + TIGHTENED_ATTR.length + 2 + SPAN_TRIMMED_NOTE.length + 1 + SPAN_CLOSE.length + 2,
+    (a, s, i) => a + spanOpen(i + 1, s.at, s.reason, coversOf(s)).length + SPAN_TRIMMED_ATTR.length + TIGHTENED_ATTR.length + 2 + guidance(SPAN_TRIMMED_NOTE).length + 1 + SPAN_CLOSE.length + 2,
     0,
   );
   // Closing line: where the verbatim (uncompacted) tail begins. Spans end at
@@ -1008,7 +1010,7 @@ async function buildMechanicalSummary(opts: {
     opts.notify(`transparent-compact: retained reads alone are ${retainedChars.toLocaleString()} chars (budget ${maxChars.toLocaleString()}); they are kept un-capped`);
   if (maxChars !== undefined && nativeChars > maxChars)
     opts.notify(`transparent-compact: full-fidelity turns alone are ~${nativeChars.toLocaleString()} estimated chars (budget ${maxChars.toLocaleString()}); they are kept un-capped. Only PROSE can be trimmed.`);
-  const capped = capSpans(allSpans, maxChars === undefined ? undefined : Math.max(500, maxChars - overhead), dictionaryCost);
+  const capped = capSpans(allSpans, maxChars === undefined ? undefined : Math.max(500, maxChars - overhead), dictionaryCost, guidance);
   if (opts.presentation) opts.presentation.shortened = capped.trimmed.some(Boolean) || capped.tightened.some(Boolean);
 
   const blocks: string[] = [];
@@ -1020,7 +1022,7 @@ async function buildMechanicalSummary(opts: {
     const attributes = (capped.tightened[i] ? TIGHTENED_ATTR : "") + (trimmed ? SPAN_TRIMMED_ATTR : "");
     blocks.push([
       attributes ? `${open.slice(0, -1)}${attributes}>` : open,
-      ...(trimmed ? [SPAN_TRIMMED_NOTE] : []),
+      ...(trimmed ? [guidance(SPAN_TRIMMED_NOTE)] : []),
       ...lines,
       SPAN_CLOSE,
     ].join("\n"));
@@ -1033,30 +1035,30 @@ async function buildMechanicalSummary(opts: {
   if (opts.filteredTurnIds?.length) parts.push(FILTER_EXPLANATION);
   if (native.size) parts.push(FIDELITY_EXPLANATION);
   if (base?.kind === "model-summary") {
-    parts.push(MIXED_CONTEXT_WARNING);
-    opts.notify(MIXED_CONTEXT_WARNING);
+    parts.push(guidance(MIXED_CONTEXT_WARNING));
+    opts.notify(guidance(MIXED_CONTEXT_WARNING));
   }
   parts.push(`- Latest: ${opts.now} (trigger: ${opts.reason}, ~${opts.tokensBefore.toLocaleString()} tokens before compaction)`);
   if (opts.revisedAt) parts.push(`${REVISION_NOTE_PREFIX}${opts.revisedAt}. No additional history was compacted; the verbatim boundary is unchanged.`);
   parts.push(TOOL_DISPLAY_EXPLANATION);
   parts.push("- [tool error] means the result was flagged as an error; [unknown] means no safely matched result/status. Unlabelled does NOT establish exit 0 or passing tests. → exit N is a reported shell status; output: quotes/extracts selected output, not an inferred verdict. Everything shown is historical. Legacy [ok] only means not flagged as a tool error; legacy calls without status are unknown.");
-  parts.push("- Newly compacted custom messages are kept only as type stubs (long types abbreviated); their content is removed and remains recoverable in the session through context_lookup. Stored canonical spans are unchanged; their presentation may tighten under the cap.");
+  parts.push(guidance("- Newly compacted custom messages are kept only as type stubs (long types abbreviated); their content is removed and remains recoverable in the session through context_lookup. Stored canonical spans are unchanged; their presentation may tighten under the cap."));
   parts.push(
     "- pi keeps the most recent part of the conversation verbatim (its `keepRecentTokens` setting). The spans below cover only what came *before* that. The retained verbatim conversation begins after the explicit boundary marker at the end of this checkpoint.",
   );
-  parts.push("- The full transcript before this point is kept in the session; use `context_lookup` to recover details (including thinking and tool outputs).");
+  parts.push(guidance("- The full transcript before this point is kept in the session; use `context_lookup` to recover details (including thinking and tool outputs)."));
   parts.push("");
-  parts.push(RECOVERY_INSTRUCTIONS);
+  parts.push(guidance(RECOVERY_INSTRUCTIONS));
   parts.push("");
   parts.push(SECTION_HEADER);
   parts.push("");
-  parts.push(blocks.length > 0 ? blocks.join("\n\n") : "(no user or assistant prose in these spans — use context_lookup)");
+  parts.push(blocks.length > 0 ? blocks.join("\n\n") : guidance("(no user or assistant prose in these spans — use context_lookup)"));
   // The location dictionary stays above the LAST checkpoint line; everything
   // after that line is Pi's verbatim tail.
   const locationTable = dictionary(capped.locationIds);
   if (locationTable) parts.push("", "The following location dictionary resolves `@N` references above; it is not part of the conversation.", locationTable);
   parts.push("");
-  parts.push(EVIDENCE_BOUNDARY_RULE);
+  parts.push(guidance(EVIDENCE_BOUNDARY_RULE));
   parts.push("");
   parts.push(closingLine);
 
@@ -1572,7 +1574,7 @@ export default function (pi: ExtensionAPI) {
       const details = e.details as { compactionId?: string; revisionId?: string } | undefined;
       return details?.compactionId === compaction.id && (details.revisionId ?? details.compactionId) === revisionId;
     });
-    if (!found) return { message: reorientationMessage(compaction.id, filteredTurns(entries).length > 0, revisionId, Object.keys(turnFidelities(entries)).length > 0) };
+    if (!found) return { message: reorientationMessage(entries, compaction.id, filteredTurns(entries).length > 0, revisionId, Object.keys(turnFidelities(entries)).length > 0) };
   });
 
   // Between-turn compaction and overflow continuation do not necessarily pass
@@ -1582,7 +1584,7 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_compact", (event, ctx) => {
     if ((event.compactionEntry.details as { kind?: string } | undefined)?.kind !== MECH_KIND) return;
     if (event.willRetry || ctx.signal)
-      pi.sendMessage(reorientationMessage(event.compactionEntry.id,
+      pi.sendMessage(reorientationMessage(ctx.sessionManager.getBranch(), event.compactionEntry.id,
         ((event.compactionEntry.details as { filteredTurnIds?: string[] }).filteredTurnIds?.length ?? 0) > 0, event.compactionEntry.id,
         Object.keys((event.compactionEntry.details as { fidelity?: TurnFidelities }).fidelity ?? {}).length > 0), { deliverAs: "steer" });
   });
@@ -1621,8 +1623,8 @@ export default function (pi: ExtensionAPI) {
       const changed = method !== previous;
       if (changed) pi.appendEntry(METHOD_ENTRY, { method });
       ctx.ui.notify(`Compaction method: ${method} (manual, automatic, and overflow recovery).`, "info");
-      if (changed && method === "summary") ctx.ui.notify(SUMMARY_COMPACTION_WARNING, "warning");
-      else if (changed && collectBaseAndSpans(entries).base?.kind === "model-summary") ctx.ui.notify(MIXED_CONTEXT_WARNING, "warning");
+      if (changed && method === "summary") ctx.ui.notify(recoveryText(entries, SUMMARY_COMPACTION_WARNING), "warning");
+      else if (changed && collectBaseAndSpans(entries).base?.kind === "model-summary") ctx.ui.notify(recoveryText(entries, MIXED_CONTEXT_WARNING), "warning");
     },
   });
 
@@ -1767,7 +1769,7 @@ export default function (pi: ExtensionAPI) {
             .map(({ name, description, parameters }) => ({ name, description, parameters })) };
         const tailTokens = messageTokens(retainedTailMessages(entries, compaction.firstKeptEntryId));
         const measure = (summary: string, placements: TurnSlot[], modes: TurnFidelities, pruned: Set<string>, shortening?: ContextEstimate["shortening"]): ContextEstimate => {
-          const reminder: AgentMessage = { ...reorientationMessage(compaction.id, pruned.size > 0,
+          const reminder: AgentMessage = { ...reorientationMessage(entries, compaction.id, pruned.size > 0,
             revisionId ?? compaction.id, Object.keys(modes).length > 0), role: "custom", timestamp: 0 };
           const messages = checkpointContextMessages(summary, placements, modes, entries, compaction.firstKeptEntryId);
           return { ...estimateContext([system, ...messages, reminder], ctx), tailTokens,
@@ -1896,10 +1898,15 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("session_start", (_event, ctx) => {
+    startMainAgentLookup(pi, ctx, {
+      list: { parameters: Type.Object(LIST_FIELDS), run: (context, params) => listEntries([sessionTranscript(context)], params) },
+      search: { parameters: Type.Object(GREP_FIELDS), run: (context, params) => grepTranscript([sessionTranscript(context)], params as GrepOptions) },
+      show: { parameters: Type.Object(SHOW_FIELDS), run: (context, params) => showEntry([sessionTranscript(context)], params as { id: string }) },
+    }, `${RECOVERY_SOURCE_GUIDANCE} ${RECOVERY_SCOPE_RULE}`);
     clearAsideSubmission();
     const entries = ctx.sessionManager.getBranch();
     if (compactionMethod(entries) === "verbatim" && collectBaseAndSpans(entries).base?.kind === "model-summary") {
-      ctx.ui.notify(MIXED_CONTEXT_WARNING, "warning");
+      ctx.ui.notify(recoveryText(entries, MIXED_CONTEXT_WARNING), "warning");
     }
 
     // Amend the built-in command's autocomplete description, not its handler.
@@ -2011,7 +2018,7 @@ export default function (pi: ExtensionAPI) {
       const spanFrom = toIso(msgTs(allMessages[0]));
       const spanTo = toIso(msgTs(allMessages[allMessages.length - 1]));
       const renderer = new ToolRenderer(ctx.cwd, { entries: checkpointLocations(branchEntries) });
-      const span = await summarizeMessages(allMessages, renderer, preparedMessageSources(branchEntries, allMessages));
+      const span = await summarizeMessages(allMessages, renderer, preparedMessageSources(branchEntries, allMessages), (text) => recoveryText(branchEntries, text));
       const spanLines = span.lines;
 
       // 3) Explicit read choices apply independently after whole-turn filtering.

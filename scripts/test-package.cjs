@@ -33,10 +33,10 @@ async function main() {
     if (/\.(?:md|ts)$/i.test(file)) {
       const content = fs.readFileSync(path.join(root, file), "utf8");
       checkCurrentRecoveryLanguage(content);
-      if (file !== "CHANGELOG.md") checkNoFallbackTools(content);
+      if (file === "extensions/index.ts" || file === "skills/context-retrieval/SKILL.md") checkNoFallbackTools(content);
     }
   }
-  for (const resource of ["extensions/index.ts", "extensions/lib/checkpoint-cap.ts", "skills/context-retrieval/SKILL.md", "CHANGELOG.md"]) {
+  for (const resource of ["extensions/index.ts", "extensions/lib/checkpoint-cap.ts", "extensions/lib/main-agent-lookup.ts", "extensions/lib/main-agent-retrieval.md", "skills/context-retrieval/SKILL.md", "CHANGELOG.md"]) {
     assert(packedPaths.has(resource), `npm package includes ${resource}`);
   }
 
@@ -83,7 +83,8 @@ async function main() {
         ...['LICENSE.Go', 'LICENSE.mvdan-sh', 'NOTICE.md', 'PATENTS.Go', 'build.json', 'go.mod', 'go.sum', 'main.go', 'shell.wasm', 'wasm_exec.js']
           .map(file => `extensions/lib/tool-stubs/parser/${file}`),
         'extensions/lib/turn-context.ts', 'extensions/lib/turn-filter.ts',
-        'extensions/lib/read-retention.ts', 'extensions/lib/read-retention-ui.ts'].sort(), 'package ships the live renderer, parser, source, and licenses');
+        'extensions/lib/read-retention.ts', 'extensions/lib/read-retention-ui.ts',
+        'extensions/lib/main-agent-lookup.ts', 'extensions/lib/main-agent-retrieval.md'].sort(), 'package ships the live renderer, parser, source, and licenses');
     assert.deepEqual([...packedPaths].filter(p => /^(?:source|experiments|scripts|stub-overhaul|node_modules)\//.test(p) || p === 'test.cjs'), [],
       'package excludes development harnesses, tests, dependencies, and obsolete source');
 

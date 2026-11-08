@@ -154,6 +154,7 @@ No configuration file is needed. Set these environment variables before starting
 | `MECH_COMPACT_LOOKUP_TURNS` | `25` | Maximum substantive search turns per lookup. |
 | `MECH_COMPACT_LOOKUP_MAX_CALLS` | `3` | Maximum consecutive lookup attempts; `0` means unlimited. |
 | `MECH_COMPACT_LOOKUP_SESSION_FILE` | Unset | Absolute path to a full session JSONL to search instead of the current branch, for harnesses using pruned forks. Leave unset for ordinary use. |
+| `MECH_COMPACT_MAIN_AGENT_LOOKUP` | Unset | `1` opts into direct recovery; `0` overrides the file setting for sessions without a recorded choice. |
 
 For example:
 
@@ -163,6 +164,24 @@ MECH_COMPACT_LOOKUP_MODEL=provider/modelId pi
 ```
 
 A session setting from `/cap-compaction` takes precedence over the environment defaults. Restart Pi after changing its launching environment; `/reload` cannot change inherited environment variables.
+
+### Optional direct recovery
+
+Subagent lookup is the default. To let the main agent search and read history directly instead, add this to Pi's `~/.pi/agent/settings.json` or trusted project `.pi/settings.json`:
+
+```json
+{
+  "transparentCompact": {
+    "mainAgentLookup": true
+  }
+}
+```
+
+Alternatively, launch with `MECH_COMPACT_MAIN_AGENT_LOOKUP=1 pi`. The environment variable overrides the file setting. Run `/reload` after editing settings.
+
+Opt-in requires a session with **no existing compactions**. Once enabled, the choice persists through compaction and resume; changing configuration does not switch that session back. Forks inherit the choice when their copied history includes it. Start another session to use a different mode.
+
+Direct recovery exposes listing, search, and entry-reading tools instead of `context_lookup`. It avoids a separate model call but puts retrieved pages into the main context. The subagent model and search-turn/call budgets do not apply to direct recovery.
 
 ### Local inference
 

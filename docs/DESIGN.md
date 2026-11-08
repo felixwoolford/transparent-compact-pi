@@ -477,7 +477,7 @@ files through filesystem tools. This restriction does not apply to user-requeste
 session audits, debugging, or cross-session analysis, which can use ordinary file
 tools. Lookup itself still cannot search other sessions or abandoned branches.
 
-The extension registers one main-agent recovery tool:
+By default, the extension registers one main-agent recovery tool:
 
 | Tool | Purpose |
 |---|---|
@@ -520,6 +520,42 @@ text and thinking neither increase nor reset the count. Pending lookup calls in
 the same batch also count, preventing parallel calls from bypassing the limit.
 Blocked attempts return a short limit notice without launching a subagent;
 later lookups after other work remain available.
+
+### Explicit direct-recovery opt-in
+
+Subagent recovery remains the primary path. Its tool definition, model loop,
+admission limits, prompts, skill, and default checkpoint/reminder wording are
+unchanged. `extensions/lib/main-agent-lookup.ts` owns the optional direct adapter.
+It receives the existing retrieval schemas and callbacks, without copying or
+moving the subagent backend.
+
+The adapter reads `transparentCompact.mainAgentLookup` from Pi's effective merged
+settings; `MECH_COMPACT_MAIN_AGENT_LOOKUP=1|0` overrides that initial preference.
+Without an opt-in or saved choice it does not change tools, skills, messages, or
+session state. An unassigned session with any existing compaction (including on
+another branch or from summary mode) cannot adopt direct recovery.
+
+An accepted opt-in writes a non-model-facing custom entry before compaction.
+That saved choice wins over later configuration. It is session-wide for tree
+navigation; the adapter ensures a marker is present on each visited branch so
+forks copying that history inherit it. Sessions without a marker keep the normal
+subagent behavior. No checkpoint migration or mixed-mode compatibility is needed.
+
+Direct mode withdraws `context_lookup` with hidden exposure, preventing both direct
+calls and discovery through codemode/tool search. It registers only its three
+replacement tools: `context_list_entries`, `context_search`, and
+`context_show_entry`. They reuse session source validation, indexed attribution,
+related-entry matching, output limits, and pagination. Each call renders the raw
+current branch afresh; listing/search continuation boundaries exclude newly
+appended recovery calls. There is no nested model call or subagent search budget.
+
+Small presentation seams adapt only extension-authored guidance, including custom
+message and truncation suffixes. Historical prose and retained outputs are never
+rewritten. Adaptation precedes size/placement accounting. The default guidance is
+returned verbatim; the direct adapter supplies its own recovery paragraph and
+replaces generated references to the unavailable tool. It also replaces this
+package's advertised retrieval skill and explicit skill-command expansion in direct
+sessions only. The ordinary bundled skill stays unchanged.
 
 ### Instruction envelope and persistent re-orientation
 

@@ -5,7 +5,7 @@ const { spawnSync } = require("node:child_process");
 const root = path.resolve(__dirname, "..");
 const env = { ...process.env };
 // User settings must not alter the default-budget / default-turn regressions.
-for (const key of ["MECH_COMPACT_MAX_SUMMARY_CHARS", "MECH_COMPACT_MAX_SUMMARY_PERCENT", "MECH_COMPACT_LOOKUP_MODEL", "MECH_COMPACT_LOOKUP_TURNS", "MECH_COMPACT_LOOKUP_MAX_CALLS", "MECH_COMPACT_LOOKUP_SESSION_FILE"]) {
+for (const key of ["MECH_COMPACT_MAX_SUMMARY_CHARS", "MECH_COMPACT_MAX_SUMMARY_PERCENT", "MECH_COMPACT_LOOKUP_MODEL", "MECH_COMPACT_LOOKUP_TURNS", "MECH_COMPACT_LOOKUP_MAX_CALLS", "MECH_COMPACT_LOOKUP_SESSION_FILE", "MECH_COMPACT_MAIN_AGENT_LOOKUP"]) {
   delete env[key];
 }
 for (const args of [
@@ -27,6 +27,7 @@ for (const args of [
   ...[
     ["default", "25"], ["7", "7"], ["0", "25"], ["not-a-number", "25"],
   ].map((args) => ["test.cjs", "lookupturns", ...args]),
+  ["scripts/main-agent-lookup-tests.cjs"],
   ["scripts/test-package.cjs"],
   ["--test", "scripts/shell-parser-tests.mjs"],
   ["--test", "scripts/tool-renderer-tests.mjs"],

@@ -83,7 +83,8 @@ interface Row {
  * tool-only prefixes, and finally the historical destructive cap.
  * Every rung walks oldest first, across all spans (not just the new one).
  */
-export function capSpans(spans: SpanContent[], budget = Infinity, extraChars: (ids: string[]) => number = () => 0): CappedSpans {
+export function capSpans(spans: SpanContent[], budget = Infinity, extraChars: (ids: string[]) => number = () => 0,
+  guidance: (text: string) => string = (text) => text): CappedSpans {
   const tightened = spans.map(() => false), trimmed = spans.map(() => false);
   const records = spans.map(toolRecords);
   const references = (calls: ToolStub[]) => [...new Set(calls.flatMap((call) => call.locations ?? []))];
@@ -163,7 +164,7 @@ export function capSpans(spans: SpanContent[], budget = Infinity, extraChars: (i
       if (row.protected || !line.startsWith("[User]:") || line.length <= 120) continue;
       let end = 120;
       if (/[\uD800-\uDBFF]/.test(line[end - 1])) end--;
-      const stub = `${line.slice(0, end)}…[truncated +${line.length - end} chars — use context_lookup]`;
+      const stub = `${line.slice(0, end)}${guidance(`…[truncated +${line.length - end} chars — use context_lookup]`)}`;
       if (stub.length >= line.length) continue;
       row.text = stub;
       trimmed[span] = true;
