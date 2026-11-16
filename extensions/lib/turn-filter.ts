@@ -3,6 +3,8 @@ import { matchesKey, Key, truncateToWidth, visibleWidth, wrapTextWithAnsi } from
 import type { ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { FILTER_MARKER } from "./checkpoint-cap.js";
 import type { SpanContent, ToolLines } from "./checkpoint-cap.js";
+import { remapExpansionAnchors } from "./context-expansion.js";
+import type { ExpansionAnchor } from "./context-expansion.js";
 export { FILTER_MARKER } from "./checkpoint-cap.js";
 export { turnOwners } from "./turn-context.js";
 import { MODE_LABELS, MODE_SYMBOLS } from "./turn-context.js";
@@ -37,6 +39,8 @@ export const FILTER_EXPLANATION = "`[Turn manually filtered]` marks a user turn 
 export interface ReadPosition { entryId: string; index: number }
 export interface TurnSpan extends SpanContent {
   turnIds?: (string | null)[];
+  /** Internal provenance only; never rendered into checkpoint text. */
+  expansionAnchors?: ExpansionAnchor[];
   /** Read-result entry IDs at boundaries between canonical prose/tool lines. */
   readPositions?: ReadPosition[];
 }
@@ -78,7 +82,8 @@ export function filterSpans<T extends TurnSpan>(spans: T[], excluded: Set<string
     const tools: ToolLines | undefined = span.tools && { ...span.tools, lines: span.tools.lines
       .filter((record) => indices.has(record.index))
       .map((record) => ({ ...record, index: indices.get(record.index)! })) };
-    return { ...span, lines, turnIds, tools, protectedLines };
+    return { ...span, lines, turnIds, tools, protectedLines,
+      expansionAnchors: remapExpansionAnchors(span.expansionAnchors, indices) };
   });
 }
 

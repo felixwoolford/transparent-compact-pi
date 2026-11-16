@@ -12,6 +12,7 @@ const { assistant, text, call } = require("./reorientation-fixture.cjs");
 const root = path.resolve(__dirname, "..");
 const modeEntry = "transparent-compact:main-agent-lookup";
 const directNames = ["context_list_entries", "context_search", "context_show_entry"];
+const normalNames = ["context_lookup", "context_expand"];
 const epoch = Date.parse("2026-01-01T00:00:00Z");
 const user = (content) => ({ role: "user", content, timestamp: epoch });
 const toolText = (result) => result.content.map((b) => b.text ?? "").join("");
@@ -43,7 +44,8 @@ async function main() {
     let turn = 0;
     runtime.streamSimple = (_model, context) => {
       requests.push(structuredClone(context));
-      const message = scripted[turn++] ?? assistant([text("Done.")]);
+      const step = scripted[turn++] ?? assistant([text("Done.")]);
+      const message = typeof step === "function" ? step(context) : step;
       const stream = new AssistantMessageEventStream();
       if (message.stopReason === "error") stream.push({ type: "error", reason: "error", error: message });
       else stream.push({ type: "done", reason: message.stopReason, message });
@@ -70,7 +72,7 @@ async function main() {
   const recoveryNames = (run) => run.session.getActiveToolNames().filter((name) => name.startsWith("context_"));
   const assertDirect = (run) => {
     assert.deepEqual(recoveryNames(run), directNames);
-    assert.equal(run.session.getAllTools().find((t) => t.name === "context_lookup").exposure, "hidden");
+    for (const name of normalNames) assert.equal(run.session.getAllTools().find((t) => t.name === name).exposure, "hidden");
   };
   const invoke = async (run, manager, name, args, signal) => {
     const definition = run.loaded.extensions[0].tools.get(name).definition;
@@ -91,12 +93,13 @@ async function main() {
   try {
     console.log("== Direct recovery: exclusive real-Pi loadout, skill selection, and explicit opt-in ==");
     const normalManager = SessionManager.inMemory(cwd);
-    const normal = await boot(normalManager);
+    const normalScript = [assistant([text("Done.")])];
+    const normal = await boot(normalManager, {}, normalScript);
     try {
-      assert.deepEqual(recoveryNames(normal), ["context_lookup"]);
+      assert.deepEqual(recoveryNames(normal), normalNames);
       assert(!normalManager.getEntries().some((e) => e.type === "custom" || e.type === "custom_message" || e.type === "message"), "default startup writes no extension state or messages");
       await normal.session.prompt("Ordinary work.");
-      assert.deepEqual(getCurrentTools(normal.requests[0].messages).filter((t) => t.name.startsWith("context_")).map((t) => t.name), ["context_lookup"]);
+      assert.deepEqual(getCurrentTools(normal.requests[0].messages).filter((t) => t.name.startsWith("context_")).map((t) => t.name), normalNames);
       const prompt = getCurrentSystemPrompt(normal.requests[0].messages);
       assert(prompt.includes(skills.skills[0].description));
       assert(prompt.includes(skills.skills[0].filePath));
@@ -104,6 +107,29 @@ async function main() {
       assert(!normalManager.getEntries().some((e) => e.customType === modeEntry));
       assert.deepEqual(normal.notices, [], "no default-mode selection or startup notices");
       assert.equal(recoveryText(normalManager.getBranch(), "use `context_lookup`"), "use `context_lookup`");
+
+      // Actual default-mode provider turns, tool dispatch and a copied continuation.
+      // Only the main model transport is scripted; expansion must never launch a subagent.
+      const normalIds = seed(normalManager);
+      await normal.session.compact();
+      const checkpoint = normalManager.getBranch().findLast((entry) => entry.type === "compaction");
+      const target = checkpoint.details.expansionTargets.find((entry) => entry.source.entryId === normalIds.a && entry.source.kind === "tool");
+      assert(target);
+      normalScript.push(assistant([call("context_expand", { text: target.text }, "expand-first")], "toolUse"));
+      normalScript.push((context) => {
+        const result = context.messages.findLast((message) => message.role === "toolResult" && message.toolName === "context_expand");
+        const cursor = /^cursor: ([\w-]+)$/m.exec(toolText(result))?.[1];
+        assert(cursor, "actual tool response provides a usable cursor");
+        return assistant([call("context_expand", { text: target.text, cursor }, "expand-next")], "toolUse");
+      });
+      normalScript.push(assistant([text("Recovered the requested page.")]));
+      await normal.session.prompt("Expand the visible read stub.");
+      const expanded = normalManager.getBranch().filter((entry) => entry.type === "message" && entry.message.role === "toolResult" && entry.message.toolName === "context_expand");
+      assert.equal(expanded.length, 2);
+      assert(expanded.every((entry) => !entry.message.isError && toolText(entry.message).startsWith("Historical expansion (ENTRY ")));
+      assert(toolText(expanded[0].message).includes("EVIDENCE_BEGIN"));
+      assert(!toolText(expanded[0].message).includes("OLD_REASONING"), "expansion does not pull sibling thinking");
+      assert.equal(normal.nestedCalls(), 0);
     } finally { normal.session.dispose(); }
 
     // File settings use Pi's trusted, merged configuration rather than a second config parser.
@@ -163,6 +189,7 @@ async function main() {
       assert(compaction.summary.includes("[Assistant]: Historical assistant prose context_lookup."));
       assert(!compaction.summary.includes("a subagent searches"));
       assert(!compaction.summary.includes("use context_lookup]"));
+      assert(!compaction.summary.includes("context_expand"), "direct mode does not advertise the hidden expansion tool");
       await run.session.prompt("Continue after compaction.");
       const reminder = manager.getBranch().findLast((e) => e.type === "custom_message" && e.customType === "transparent-compact:reorient");
       assert(reminder && !reminder.content.includes("context_lookup"));
@@ -198,7 +225,7 @@ async function main() {
       old.branch(first);
       const late = await boot(old, optIn);
       try {
-        assert.deepEqual(recoveryNames(late), ["context_lookup"]);
+        assert.deepEqual(recoveryNames(late), normalNames);
         assert(late.notices.some((notice) => notice.includes("already has compactions")));
         assert(!old.getEntries().some((e) => e.customType === modeEntry));
         await late.session.prompt("Continue without changing recovery.");
@@ -211,7 +238,7 @@ async function main() {
     try { assertDirect(envRun); } finally { envRun.session.dispose(); }
     process.env.MECH_COMPACT_MAIN_AGENT_LOOKUP = "0";
     const envOff = await boot(SessionManager.inMemory(cwd), optIn);
-    try { assert.deepEqual(recoveryNames(envOff), ["context_lookup"]); } finally { envOff.session.dispose(); }
+    try { assert.deepEqual(recoveryNames(envOff), normalNames); } finally { envOff.session.dispose(); }
     delete process.env.MECH_COMPACT_MAIN_AGENT_LOOKUP;
 
     console.log("== Direct pagination excludes newly appended entries; source errors fail closed ==");

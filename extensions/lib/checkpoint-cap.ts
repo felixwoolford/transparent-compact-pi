@@ -27,6 +27,8 @@ export interface ToolLine {
 export interface ToolLines { version: 2; lines: ToolLine[] }
 export interface SpanContent { lines: string[]; tools?: ToolLines; protectedLines?: number[] }
 export interface CappedSpans { lines: string[][]; tightened: boolean[]; trimmed: boolean[]; locationIds: string[] }
+/** Observe final rows without adding identifiers or changing presentation. */
+export type CapRowObserver = (span: number, index: number, text: string, calls?: { index: number; text: string }[]) => void;
 export function renderCommand(preview: CommandPreview, max = NORMAL_PREVIEW_CHARS): string {
   return headPrefix(preview.head, max) + (preview.truncated || preview.head.length > max ? "…" : "");
 }
@@ -84,13 +86,17 @@ interface Row {
  * Every rung walks oldest first, across all spans (not just the new one).
  */
 export function capSpans(spans: SpanContent[], budget = Infinity, extraChars: (ids: string[]) => number = () => 0,
-  guidance: (text: string) => string = (text) => text): CappedSpans {
+  guidance: (text: string) => string = (text) => text, observe?: CapRowObserver): CappedSpans {
   const tightened = spans.map(() => false), trimmed = spans.map(() => false);
   const records = spans.map(toolRecords);
   const references = (calls: ToolStub[]) => [...new Set(calls.flatMap((call) => call.locations ?? []))];
   const initialIds = references(records.flatMap((map) => [...map.values()].flatMap((record) => record.calls)));
   let size = spans.reduce((n, span) => n + span.lines.reduce((s, line) => s + line.length + 1, 0), 0) + extraChars(initialIds);
-  if (size <= budget) return { lines: spans.map((s) => s.lines.slice()), tightened, trimmed, locationIds: initialIds };
+  if (size <= budget) {
+    if (observe) spans.forEach((span, n) => span.lines.forEach((text, index) => observe(n, index, text,
+      records[n].get(index)?.calls.map((call, index) => ({ index, text: renderToolStub(call) })))));
+    return { lines: spans.map((s) => s.lines.slice()), tightened, trimmed, locationIds: initialIds };
+  }
   const states = spans.map((span, spanIndex) => {
     const ownRecords = records[spanIndex];
     return span.lines.map((text, index): Row => {
@@ -109,6 +115,9 @@ export function capSpans(spans: SpanContent[], budget = Infinity, extraChars: (i
       const lines: string[] = [];
       for (let i = 0; i < rows.length; i++) {
         const row = rows[i];
+        observe?.(span, row.index, row.text, row.calls?.map((call) => ({
+          index: records[span].get(row.index)!.calls.indexOf(call), text: renderToolStub(call, row.preview),
+        })));
         if (joined(rows, i)) lines[lines.length - 1] += `; ${row.text.slice(TOOL_PREFIX.length)}`;
         else lines.push(row.text);
         if (row.tightened || joined(rows, i)) tightened[span] = true;
@@ -164,7 +173,7 @@ export function capSpans(spans: SpanContent[], budget = Infinity, extraChars: (i
       if (row.protected || !line.startsWith("[User]:") || line.length <= 120) continue;
       let end = 120;
       if (/[\uD800-\uDBFF]/.test(line[end - 1])) end--;
-      const stub = `${line.slice(0, end)}${guidance(`…[truncated +${line.length - end} chars — use context_lookup]`)}`;
+      const stub = `${line.slice(0, end)}${guidance(`…[truncated +${line.length - end} chars — use context_expand to expand, or context_lookup to ask a question]`)}`;
       if (stub.length >= line.length) continue;
       row.text = stub;
       trimmed[span] = true;

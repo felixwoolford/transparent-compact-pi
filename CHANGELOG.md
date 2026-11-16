@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.13.0
+
+- Add `context_expand` to recover the original call and matched result behind a
+  quoted visible tool stub, or the full text of a size-truncated passage, without
+  a subagent. Ambiguous matches return nearby prose and selection handles;
+  large results and candidate lists are paginated.
+- Track expansion provenance in session metadata without adding visible checkpoint
+  references. Preserve it through repeated compaction, read retention, filtering,
+  and checkpoint revisions. Checkpoints without expansion provenance still use
+  `context_lookup` for recovery.
+- Simplify repeated recovery guidance while keeping `context_lookup` favoured for
+  historical questions and broader recovery. Selection and pagination instructions
+  appear in tool responses only when needed.
+  opt-in direct-recovery mode retains its existing tools and excludes expansion.
+
 ## 0.12.0
 
 - Add explicit main-agent context-recovery opt-in through

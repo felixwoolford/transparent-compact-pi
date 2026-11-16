@@ -79,7 +79,7 @@ async function compact(ext, ctx, ids, kept, reason = "manual", fileOps) {
   assert.equal(c.firstKeptEntryId, kept);
   assert.equal(c.tokensBefore, preparation.tokensBefore);
   assert.equal(c.details.kind, "mech-compact");
-  assert.deepEqual(Object.keys(c.details), ["kind", "readFiles", "modifiedFiles", "readRetention", "locations", "span"],
+  assert.deepEqual(Object.keys(c.details), ["kind", "readFiles", "modifiedFiles", "readRetention", "locations", "expansionTargets", "span"],
     "checkpoint metadata contains only the current session-backed contract");
   assert(!c.summary.includes("conversation.md"));
   assert(!c.summary.includes(ctx.cwd), "checkpoint does not disclose the transcript path");
@@ -461,8 +461,9 @@ async function main() {
       await capTests(ext, SessionManager, root, capBudget);
       return;
     }
-    assert.deepEqual(Object.keys(ext.tools), ["context_lookup"]);
+    assert.deepEqual(Object.keys(ext.tools), ["context_lookup", "context_expand"]);
     await lookupTests(helpers);
+    await require("./scripts/context-expansion-tests.cjs")({ ...helpers, factory, load, compact, jiti });
     require("./scripts/recovery-guidance-tests.cjs")({ ...helpers, factory, load });
     await require("./scripts/pagination-tests.cjs")(helpers);
     await require("./scripts/lookup-paging-tests.cjs")(helpers);
@@ -497,7 +498,6 @@ async function main() {
     assert(!skillText.includes("extensions/index.ts"));
     assert(skillText.includes("only supply `question`"));
     assert(!skillText.includes("Always use `context_lookup`"));
-    require("./scripts/recovery-guidance-tests.cjs").checkFilesystemScope(skillText);
     assert(skillText.includes("does **not** search abandoned branches"));
     assert(!skillText.includes("Before a long, tool-heavy task"), "ordinary task startup is not a recovery trigger");
     assert.match(loadedSkills.skills[0].description, /using context_lookup after compaction.*target earlier evidence.*phrase effective lookup questions.*handle incomplete findings/);

@@ -18,7 +18,7 @@
  *   MECH_COMPACT_LOOKUP_MAX_CALLS     consecutive lookup limit (default 3;
  *                                    0 = unlimited). Non-recovery tool results,
  *                                    bash executions, or user messages reset it.
- *                                    Fallback tools neither count nor reset it.
+ *                                    Expansion calls neither count nor reset it.
  *   MECH_COMPACT_LOOKUP_SESSION_FILE  absolute session JSONL path to search
  *                                    instead of the current branch (study override)
  */
@@ -34,6 +34,8 @@ import { buildSessionProjection, SessionManager } from "@earendil-works/pi-codin
 import type { ExtensionAPI, ExtensionContext, ModelRegistry, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { capSpans, renderToolLine, renderToolStub, NORMAL_PREVIEW_CHARS, TIGHTENED_ATTR } from "./lib/checkpoint-cap.js";
 import { recoveryText, startMainAgentLookup } from "./lib/main-agent-lookup.js";
+import { expandTargets, expansionDigest, formatExpansionResult, pairedToolResults } from "./lib/context-expansion.js";
+import type { ExpansionAnchor, ExpansionQuery, ExpansionResult, ExpansionTarget } from "./lib/context-expansion.js";
 import { ToolRenderer, TOOL_DISPLAY_EXPLANATION } from "./lib/tool-stubs/renderer.mjs";
 import { checkpointPath } from "./lib/tool-stubs/display.mjs";
 import { Locations } from "./lib/tool-stubs/locations.mjs";
@@ -308,28 +310,6 @@ interface TranscriptIndexSection {
   startLine: number;
 }
 
-// Pair only selected messages, by call id AND tool name. Ambiguous concurrent
-// ids stay unknown; sequential reuse is allowed after consuming a result.
-function pairedToolResults(messages: AgentMessage[]): Map<object, Record<string, any>> {
-  const results = new Map<object, Record<string, any>>();
-  const pending = new Map<string, { block: object; name: string } | null>();
-  for (const message of messages) {
-    const m = message as unknown as Record<string, any>;
-    if (m.role === "assistant") {
-      for (const block of m.content ?? []) {
-        if (block.type !== "toolCall" || typeof block.id !== "string" || !block.id) continue;
-        pending.set(block.id, pending.has(block.id) ? null : { block, name: block.name });
-      }
-    } else if (m.role === "toolResult") {
-      const call = pending.get(m.toolCallId);
-      if (!call || call.name !== m.toolName) continue;
-      results.set(call.block, m);
-      pending.delete(m.toolCallId);
-    }
-  }
-  return results;
-}
-
 interface TranscriptIndexEntry {
   id: string;
   type: string;
@@ -563,19 +543,25 @@ async function summarizeMessages(messages: AgentMessage[], renderer: ToolRendere
   const results = pairedToolResults(messages);
   const lines: string[] = [], turnIds: (string | null)[] = [], readPositions: ReadPosition[] = [];
   const tools: ToolLines = { version: 2, lines: [] };
+  const expansionAnchors: ExpansionAnchor[] = [];
   for (const [messageIndex, msg] of messages.entries()) {
     const start = lines.length;
+    const entryId = sources?.[messageIndex]?.entryId;
     const m = msg as unknown as Record<string, any>;
     switch (msg.role) {
       case "user": {
         const { text, images } = textOf(m.content);
-        if (text.trim() || images > 0) lines.push(`[User]: ${text}`);
+        if (text.trim() || images > 0) {
+          if (entryId) expansionAnchors.push({ index: lines.length, source: { kind: "prose", entryId, digest: expansionDigest(m.content) } });
+          lines.push(`[User]: ${text}`);
+        }
         break;
       }
       case "assistant": {
         let prose = "";
         const calls: ToolStub[] = [];
-        for (const block of m.content ?? []) {
+        const callAnchors: Omit<ExpansionAnchor, "index">[] = [];
+        for (const [blockIndex, block] of (m.content ?? []).entries()) {
           if (block.type === "text") prose += (prose ? "\n" : "") + String(block.text ?? "");
           else if (block.type === "toolCall") {
             const name = String(block.name), args = block.arguments ?? {};
@@ -583,12 +569,18 @@ async function summarizeMessages(messages: AgentMessage[], renderer: ToolRendere
             const status = typeof result?.isError !== "boolean" ? " [unknown]" : result.isError ? " [tool error]" : "";
             const command = name === "bash" && typeof args.command === "string" ? args.command : undefined;
             const label = result && command !== undefined ? bashOutputLabel(command, result) : "";
+            if (entryId && typeof block.id === "string") callAnchors.push({ callIndex: calls.length,
+              source: { kind: "tool", entryId, blockIndex, callId: block.id, name, digest: expansionDigest([name, block.id, args]) } });
             calls.push(await renderer.render(name, args, status + (label ? ` → ${label}` : "")));
           }
           // thinking blocks: removed by design (kept in the session)
         }
-        if (prose.trim()) lines.push(`[Assistant]: ${prose.trim()}`);
+        if (prose.trim()) {
+          if (entryId) expansionAnchors.push({ index: lines.length, source: { kind: "prose", entryId, digest: expansionDigest(prose.trim()) } });
+          lines.push(`[Assistant]: ${prose.trim()}`);
+        }
         if (calls.length > 0) {
+          expansionAnchors.push(...callAnchors.map((anchor) => ({ ...anchor, index: lines.length })));
           tools.lines.push({ index: lines.length, calls, mergeable: !prose.trim() });
           lines.push(renderToolLine(calls));
         }
@@ -604,6 +596,8 @@ async function summarizeMessages(messages: AgentMessage[], renderer: ToolRendere
       case "bashExecution": {
         const calls = [await renderer.render("bash", { command: String(m.command ?? "") }, " [output removed]")];
         const prefix = "[BashExecution]: ";
+        if (entryId) expansionAnchors.push({ index: lines.length, callIndex: 0,
+          source: { kind: "bash", entryId, digest: expansionDigest([m.command ?? "", m.output ?? ""]) } });
         tools.lines.push({ index: lines.length, calls, mergeable: false, prefix });
         lines.push(renderToolLine(calls, NORMAL_PREVIEW_CHARS, prefix));
         break;
@@ -623,7 +617,8 @@ async function summarizeMessages(messages: AgentMessage[], renderer: ToolRendere
     }
     for (let i = start; i < lines.length; i++) turnIds.push(sources?.[messageIndex]?.owner ?? null);
   }
-  return { lines, ...(sources ? { turnIds } : {}), ...(readPositions.length ? { readPositions } : {}), ...(tools.lines.length ? { tools } : {}) };
+  return { lines, ...(sources ? { turnIds } : {}), ...(readPositions.length ? { readPositions } : {}), ...(tools.lines.length ? { tools } : {}),
+    ...(expansionAnchors.length ? { expansionAnchors } : {}) };
 }
 
 const SECTION_HEADER = "### Compacted conversation (oldest first)";
@@ -693,6 +688,7 @@ function collectBaseAndSpans(branchEntries: SessionEntry[]): {
         tools: sd.tools,
         turnIds: sd.turnIds,
         readPositions: sd.readPositions,
+        expansionAnchors: sd.expansionAnchors,
       });
   }
   return { base, spans };
@@ -706,6 +702,7 @@ interface FilterRevision {
   fidelity?: TurnFidelities;
   slots?: TurnSlot[];
   readRetention: ReadRetention;
+  expansionTargets: ExpansionTarget[];
 }
 
 function checkpointLocations(entries: SessionEntry[]): LocationEntry[] {
@@ -846,7 +843,6 @@ function checkpointEvidence(entries: SessionEntry[], firstKeptEntryId: string, c
 const RECOVERY_HISTORY_NOTE = "Compaction hides earlier details from your current view. The original conversation history, including recorded tool outputs and your reasoning, is preserved in the session and can be retrieved.";
 const RECOVERY_SOURCE_GUIDANCE = "Re-read project files for their current contents. Prefer lookup for what was observed earlier or to avoid repeating slow external research or expensive computations; cheap local rereads and recomputations remain reasonable.";
 const RECOVERY_SCOPE_RULE = "Use the recovery tools for history established by this conversation or its checkpoint, not project discovery, requirements never supplied, other sessions, or abandoned branches.";
-const RECOVERY_FILESYSTEM_RULE = "For recovery of details hidden by compaction, do not read or grep raw session JSONL files through filesystem tools; use the recovery tools instead.";
 
 const REORIENT_BLOCK = `**Post-compaction re-orientation.** ${RECOVERY_HISTORY_NOTE} Selected retained reads and the uncompacted tail remain available as evidence. Recover only hidden information needed for the current task.
 1. **Restore only information needed to continue.** Re-read project files when you need their current contents; cheap local rereads and recomputations are reasonable. If you need an earlier observation, the source of a finding, or the reason for a conclusion that compaction hid, use \`context_lookup\`. This can avoid repeating slow or unreliable research. Restore inputs, not completed actions: do not redo writes, edits, or other state-changing actions merely because their results are hidden. **Before using \`write\` to replace an existing file, re-read it unless its current contents are already visible in context. Do not reconstruct unchanged sections from memory.**
@@ -856,12 +852,11 @@ const REORIENT_BLOCK = `**Post-compaction re-orientation.** ${RECOVERY_HISTORY_N
 const REVISION_NOTE_PREFIX = "- Checkpoint context revised: ";
 const CHECKPOINT_EXPLANATION = `**Compacted conversation follows.** The earlier part of this conversation has been compacted into the checkpoint below. This is not the full transcript. ${RECOVERY_HISTORY_NOTE}`;
 
-const RECOVERY_INSTRUCTIONS = `**Recovering hidden details.** Use \`context_lookup\` with a specific historical question: a subagent searches this conversation's full session history and returns relevant findings. Use the recovery tools for history established by this conversation or its checkpoint, not for project discovery or exploration of other sessions.`;
+const RECOVERY_INSTRUCTIONS = `**Recovering hidden details.** Use \`context_lookup\` with a specific historical question: a subagent searches this conversation's full session history and returns relevant findings.`;
 
-const EVIDENCE_BOUNDARY_RULE = "**Evidence boundary:** Tool stubs omit supporting details. Most output and detailed payloads are omitted. Inline observations are historical, not verification of unshown details or current state. Use `context_lookup` for omitted observations or provenance; inspect sources for current state.";
+const EVIDENCE_BOUNDARY_RULE = "**Evidence boundary:** Tool stubs omit supporting details. Most output and detailed payloads are omitted. Inline observations are historical, not verification of unshown details or current state. Prefer `context_lookup` for omitted observations or provenance. To expand a specific visible tool stub directly, quote it to `context_expand`. Inspect sources for current state.";
 
 const REORIENT_MESSAGE = "transparent-compact:reorient";
-const RECOVERY_RECAP = `**Recovery recap.** ${RECOVERY_SCOPE_RULE} For unfamiliar project details or missing requirements, inspect project files or ask the user instead. ${RECOVERY_FILESYSTEM_RULE} Keep these evidence/recovery rules in force as work continues.`;
 
 function latestVerbatimCompaction(entries: SessionEntry[]) {
   for (let i = entries.length - 1; i >= 0; i--) {
@@ -872,7 +867,7 @@ function latestVerbatimCompaction(entries: SessionEntry[]) {
 }
 
 function reorientationMessage(entries: SessionEntry[], compactionId: string, filtered = false, revisionId = compactionId, fidelity = false) {
-  return { customType: REORIENT_MESSAGE, content: `${recoveryText(entries, REORIENT_BLOCK)}${filtered ? `\n\n${FILTER_EXPLANATION}` : ""}${fidelity ? `\n\n${FIDELITY_EXPLANATION}` : ""}\n\n${RECOVERY_RECAP}`,
+  return { customType: REORIENT_MESSAGE, content: `${recoveryText(entries, REORIENT_BLOCK)}${filtered ? `\n\n${FILTER_EXPLANATION}` : ""}${fidelity ? `\n\n${FIDELITY_EXPLANATION}` : ""}`,
     display: false, details: { compactionId, ...(revisionId !== compactionId ? { revisionId } : {}) } };
 }
 
@@ -944,6 +939,8 @@ async function buildMechanicalSummary(opts: {
   locations?: LocationEntry[];
   spanTurnIds?: (string | null)[];
   spanReadPositions?: ReadPosition[];
+  spanExpansionAnchors?: ExpansionAnchor[];
+  expansionTargets?: ExpansionTarget[]; // output: final visible fragments and internal provenance
   filteredTurnIds?: string[];
   fidelity?: TurnFidelities;
   slots?: TurnSlot[]; // generated output placements; no raw payloads
@@ -968,6 +965,7 @@ async function buildMechanicalSummary(opts: {
   const inserted = retainReadSpans(opts.revisedAt ? spans : [...spans, {
     at: opts.now, reason: opts.reason, from: opts.spanFrom, to: opts.spanTo,
     lines: opts.spanLines, tools: opts.spanTools, turnIds: opts.spanTurnIds, readPositions: opts.spanReadPositions,
+    expansionAnchors: opts.spanExpansionAnchors,
   }], retained, excluded);
   if (inserted.unplaced.length) throw new Error(`Cannot retain read ${inserted.unplaced[0].entryId} (${inserted.unplaced[0].path}): its original position is not in a verbatim span. Choose another read or set it to OFF.`);
   const rendered = fidelitySpans(filterSpans(inserted.spans, excluded), fidelity);
@@ -1010,7 +1008,21 @@ async function buildMechanicalSummary(opts: {
     opts.notify(`transparent-compact: retained reads alone are ${retainedChars.toLocaleString()} chars (budget ${maxChars.toLocaleString()}); they are kept un-capped`);
   if (maxChars !== undefined && nativeChars > maxChars)
     opts.notify(`transparent-compact: full-fidelity turns alone are ~${nativeChars.toLocaleString()} estimated chars (budget ${maxChars.toLocaleString()}); they are kept un-capped. Only PROSE can be trimmed.`);
-  const capped = capSpans(allSpans, maxChars === undefined ? undefined : Math.max(500, maxChars - overhead), dictionaryCost, guidance);
+  const anchors = allSpans.map((span) => {
+    const rows = new Map<number, ExpansionAnchor[]>();
+    for (const anchor of span.expansionAnchors ?? []) {
+      const group = rows.get(anchor.index) ?? []; group.push(anchor); rows.set(anchor.index, group);
+    }
+    return rows;
+  });
+  const capped = capSpans(allSpans, maxChars === undefined ? undefined : Math.max(500, maxChars - overhead), dictionaryCost, guidance,
+    opts.expansionTargets && ((span, index, text, calls) => {
+      for (const anchor of anchors[span].get(index) ?? []) {
+        if (anchor.source.kind === "prose" && text === allSpans[span].lines[index]) continue;
+        const display = anchor.callIndex === undefined ? text : calls?.find((call) => call.index === anchor.callIndex)?.text;
+        if (display) opts.expansionTargets!.push({ text: display, source: anchor.source });
+      }
+    }));
   if (opts.presentation) opts.presentation.shortened = capped.trimmed.some(Boolean) || capped.tightened.some(Boolean);
 
   const blocks: string[] = [];
@@ -1487,7 +1499,7 @@ async function runLookupSubagent(opts: {
 // Session-backed transcript (rendered only when a recovery tool is called)
 // ============================================================================
 
-function sessionTranscript(ctx: { sessionManager: { getBranch: () => SessionEntry[] } }): Transcript {
+function sessionEntries(ctx: { sessionManager: { getBranch: () => SessionEntry[] } }): SessionEntry[] {
   const override = process.env.MECH_COMPACT_LOOKUP_SESSION_FILE?.trim();
   let entries: SessionEntry[];
   if (override) {
@@ -1502,8 +1514,22 @@ function sessionTranscript(ctx: { sessionManager: { getBranch: () => SessionEntr
     // and context edits never remove earlier thinking or tool results here.
     entries = ctx.sessionManager.getBranch();
   }
-  const { lines, index } = branchToTranscript(entries);
+  return entries;
+}
+
+function sessionTranscript(ctx: { sessionManager: { getBranch: () => SessionEntry[] } }): Transcript {
+  const { lines, index } = branchToTranscript(sessionEntries(ctx));
   return { name: "session", file: "session", lines, index };
+}
+
+/** Read only the active checkpoint's generated expansion index. */
+export function expandCheckpointText(ctx: { sessionManager: { getBranch: () => SessionEntry[] } }, query: ExpansionQuery): ExpansionResult {
+  const branch = ctx.sessionManager.getBranch(), compaction = latestVerbatimCompaction(branch);
+  if (!compaction) return { status: "not-found" };
+  const revision = latestFilterRevision(branch);
+  const targets = revision ? revision.data.expansionTargets :
+    (compaction.details as { expansionTargets?: ExpansionTarget[] }).expansionTargets;
+  return expandTargets(sessionEntries(ctx), targets ?? [], query);
 }
 
 // ============================================================================
@@ -1511,7 +1537,7 @@ function sessionTranscript(ctx: { sessionManager: { getBranch: () => SessionEntr
 // ============================================================================
 
 /** Count prior lookup attempts since the last user/ordinary-work/bash boundary.
- * Text and thinking neither increase nor reset the count. Deduplicate call/result ids, and include
+ * Expansion results, text, and thinking neither increase nor reset the count. Deduplicate call/result ids, and include
  * earlier siblings in the current assistant message even before results exist:
  * two parallel lookups cannot both claim the first slot. Later siblings are
  * excluded. Raw branch state follows reload, resume, compaction, and forks. */
@@ -1524,6 +1550,7 @@ function consecutiveLookups(ctx: { sessionManager: { getBranch: () => SessionEnt
     const m = e.message;
     if (m.role === "user" || m.role === "bashExecution") break;
     if (m.role === "toolResult") {
+      if (m.toolName === "context_expand") continue;
       if (m.toolName !== "context_lookup") break;
       calls.add(m.toolCallId);
     } else if (m.role === "assistant") {
@@ -1749,9 +1776,9 @@ export default function (pi: ExtensionAPI) {
           kept.size === previousKept.length && previousKept.every((id) => kept.has(id)) &&
           JSON.stringify(Object.entries(modes).sort()) === JSON.stringify(Object.entries(previousFidelity).sort());
         const cap = capSettings(entries);
-        const renderCheckpoint = (pruned: Set<string>, modes: TurnFidelities, placements: TurnSlot[], preview: boolean, presentation?: { shortened: boolean }) => buildMechanicalSummary({
+        const renderCheckpoint = (pruned: Set<string>, modes: TurnFidelities, placements: TurnSlot[], preview: boolean, presentation?: { shortened: boolean }, expansionTargets?: ExpansionTarget[]) => buildMechanicalSummary({
           reason: canonical.span.reason, tokensBefore: compaction.tokensBefore, branchEntries: entries,
-          now: canonical.span.at, revisedAt: new Date().toISOString(), spanLines: [], filteredTurnIds: [...pruned], fidelity: modes, slots: placements, presentation,
+          now: canonical.span.at, revisedAt: new Date().toISOString(), spanLines: [], filteredTurnIds: [...pruned], fidelity: modes, slots: placements, presentation, expansionTargets,
           firstKeptEntryId: compaction.firstKeptEntryId,
           ...checkpointEvidence(entries, compaction.firstKeptEntryId, ctx.cwd,
             retention, canonical.readFiles, canonical.modifiedFiles, pruned),
@@ -1808,7 +1835,8 @@ export default function (pi: ExtensionAPI) {
         if (unchanged(excluded, keptAsides, fidelity) && sameRetention()) {
           ctx.ui.notify("No checkpoint context changes.", "info"); return;
         }
-        const summary = await renderCheckpoint(excluded, fidelity, slots, false);
+        const expansionTargets: ExpansionTarget[] = [];
+        const summary = await renderCheckpoint(excluded, fidelity, slots, false, undefined, expansionTargets);
         if (summary === undefined) return;
         checkCheckpointBudget(summary, slots, fidelity, entries, compaction.firstKeptEntryId, ctx);
         const current = ctx.sessionManager.getBranch();
@@ -1816,7 +1844,7 @@ export default function (pi: ExtensionAPI) {
             latestFilterRevision(current)?.id !== revisionId || ctx.sessionManager.getLeafId() !== entries.at(-1)?.id || !ctx.isIdle() || ctx.hasPendingMessages()) {
           ctx.ui.notify("Session/checkpoint changed; filtering update cancelled.", "warning"); return;
         }
-        pi.appendEntry(FILTER_REVISION_ENTRY, { compactionId: compaction.id, summary, readRetention: retention,
+        pi.appendEntry(FILTER_REVISION_ENTRY, { compactionId: compaction.id, summary, readRetention: retention, expansionTargets,
           filteredTurnIds: [...excluded], keptAsideTurnIds: [...keptAsides],
           ...(Object.keys(fidelity).length ? { fidelity, slots } : {}) } satisfies FilterRevision);
         ctx.ui.notify("Checkpoint context updated. No additional history compacted; recent messages and boundary unchanged.", "info");
@@ -2020,6 +2048,7 @@ export default function (pi: ExtensionAPI) {
       const renderer = new ToolRenderer(ctx.cwd, { entries: checkpointLocations(branchEntries) });
       const span = await summarizeMessages(allMessages, renderer, preparedMessageSources(branchEntries, allMessages), (text) => recoveryText(branchEntries, text));
       const spanLines = span.lines;
+      const expansionTargets: ExpansionTarget[] = [];
 
       // 3) Explicit read choices apply independently after whole-turn filtering.
       const catalog = readCatalog(branchEntries, ctx.cwd);
@@ -2049,6 +2078,7 @@ export default function (pi: ExtensionAPI) {
         locations: renderer.locations.entries,
         spanTurnIds: span.turnIds,
         spanReadPositions: span.readPositions,
+        spanExpansionAnchors: span.expansionAnchors, expansionTargets,
         filteredTurnIds, fidelity, slots,
         spanFrom,
         spanTo,
@@ -2079,6 +2109,7 @@ export default function (pi: ExtensionAPI) {
             modifiedFiles: canonicalModifiedFiles,
             readRetention: canonicalRetained,
             locations: renderer.locations.entries,
+            expansionTargets,
             ...(filteredTurnIds.length ? { filteredTurnIds } : {}),
             ...(keptAsides.size ? { keptAsideTurnIds: [...keptAsides] } : {}),
             ...(Object.keys(fidelity).length ? { fidelity, slots } : {}),
@@ -2086,7 +2117,8 @@ export default function (pi: ExtensionAPI) {
             // are re-rendered from the earlier entries' details — no nesting.
             span: { at: nowIso, from: spanFrom, to: spanTo, reason, tokensBefore: preparation.tokensBefore,
               lines: spanLines, turnIds: span.turnIds, ...(span.readPositions ? { readPositions: span.readPositions } : {}),
-              ...(span.tools ? { tools: span.tools } : {}) },
+              ...(span.tools ? { tools: span.tools } : {}),
+              ...(span.expansionAnchors ? { expansionAnchors: span.expansionAnchors } : {}) },
           },
         },
       };
@@ -2106,7 +2138,7 @@ export default function (pi: ExtensionAPI) {
     label: "Context lookup",
     executionMode: "sequential",
     description:
-      `Retrieve earlier outputs, findings, decisions, and reasoning hidden by compaction. Ask \`context_lookup\` where an earlier finding came from, what a command actually printed, or why you reached a conclusion, especially when earlier notes conflict with new evidence. A subagent searches this conversation's full raw active branch in its own context and returns relevant findings. ${RECOVERY_SOURCE_GUIDANCE} ${RECOVERY_SCOPE_RULE} ${RECOVERY_FILESYSTEM_RULE}`,
+      `Retrieve earlier outputs, findings, decisions, and reasoning hidden by compaction. Ask \`context_lookup\` where an earlier finding came from, what a command actually printed, or why you reached a conclusion, especially when earlier notes conflict with new evidence. A subagent searches this conversation's full raw active branch in its own context and returns relevant findings. ${RECOVERY_SOURCE_GUIDANCE} ${RECOVERY_SCOPE_RULE}`,
     promptSnippet: "Retrieve earlier outputs, findings, decisions, and reasoning hidden by compaction, including the provenance of earlier conclusions",
     parameters: Type.Object({
       question: Type.String({ description: "A specific question about earlier in this conversation: an output, source of a finding, reason for a decision, or evidence behind notes that conflict with new observations." }),
@@ -2137,6 +2169,26 @@ export default function (pi: ExtensionAPI) {
         return { content: [{ type: "text", text: answer }], details: undefined };
       } catch (err) {
         return { content: [{ type: "text", text: `context_lookup failed: ${errMsg(err)}` }], details: undefined };
+      }
+    },
+  });
+
+  pi.registerTool({
+    name: "context_expand",
+    label: "Context expansion",
+    description: "Use `context_expand` to expand one visible compacted tool stub or truncated passage by quoting it. Ambiguous matches return candidates; large results are paginated. Use for focused recovery rather than exploration; prefer `context_lookup` for historical questions, locating relevant evidence, or broader recovery.",
+    parameters: Type.Object({
+      text: Type.String({ minLength: 1, maxLength: 4000, description: "Literal text copied from the compacted stub or truncated passage to expand." }),
+      selector: Type.Optional(Type.String({ description: "Candidate selector returned by an ambiguous response. Repeat the original text unchanged." })),
+      cursor: Type.Optional(Type.String({ description: "Continuation cursor returned by a limited response. Keep text and selector unchanged." })),
+    }),
+    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+      if (signal?.aborted) return { content: [{ type: "text", text: "Context expansion cancelled." }], details: undefined, isError: true };
+      try {
+        const result = expandCheckpointText(ctx, params);
+        return { content: [{ type: "text", text: formatExpansionResult(result) }], details: undefined, isError: result.status === "invalid" };
+      } catch (error) {
+        return { content: [{ type: "text", text: `context_expand failed: ${errMsg(error)}` }], details: undefined, isError: true };
       }
     },
   });

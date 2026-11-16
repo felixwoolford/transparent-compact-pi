@@ -3,6 +3,7 @@ import { buildSessionProjection, estimateTokens } from "@earendil-works/pi-codin
 import type { ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { TurnSpan } from "./turn-filter.js";
+import { remapExpansionAnchors } from "./context-expansion.js";
 
 export type Fidelity = "tools" | "full";
 export type TurnMode = "pruned" | "prose" | Fidelity;
@@ -96,7 +97,8 @@ export function fidelitySpans<T extends TurnSpan>(spans: T[], fidelity: TurnFide
     });
     const tools = span.tools && { ...span.tools, lines: span.tools.lines.filter((r) => indices.has(r.index))
       .map((r) => ({ ...r, index: indices.get(r.index)! })) };
-    return { ...span, lines, turnIds, tools, protectedLines };
+    return { ...span, lines, turnIds, tools, protectedLines,
+      expansionAnchors: remapExpansionAnchors(span.expansionAnchors, indices) };
   });
   for (const id of Object.keys(fidelity)) if (!markers.has(id)) throw new Error(`Turn ${id} has no editable checkpoint position.`);
   return { spans: result, markers };

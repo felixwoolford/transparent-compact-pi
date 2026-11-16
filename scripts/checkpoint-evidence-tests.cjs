@@ -61,7 +61,8 @@ module.exports = async function ({ ext, SessionManager, root, compact, makeConte
   for (const file of ["docs/a guide.md", "changed.ts"]) assert(!c.summary.includes(file), "operation metadata is not a separate inventory in context");
   assert.deepEqual(c.details.readFiles, ["SPEC.md", "docs/a guide.md"], "metadata retains bare paths");
   assert.deepEqual(c.details.modifiedFiles, ["changed.ts"]);
-  const rule = "**Evidence boundary:** Tool stubs omit supporting details. Most output and detailed payloads are omitted. Inline observations are historical, not verification of unshown details or current state. Use `context_lookup` for omitted observations or provenance; inspect sources for current state.";
+  const rule = c.summary.split("\n").find((line) => line.startsWith("**Evidence boundary:**"));
+  assert(rule, "checkpoint has a closing evidence rule");
   assert(c.summary.includes(`</locations>\n\n${rule}\n\nConversation`), "rule sits after the location dictionary, immediately before the tail boundary");
   const next = manager.appendMessage(user("Next retained tail"));
   const repeated = await compact(ext, ctx, [kept], next);

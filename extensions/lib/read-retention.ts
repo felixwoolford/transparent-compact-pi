@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import type { ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { originalProjection, turnOwners } from "./turn-context.js";
 import type { TurnSpan } from "./turn-filter.js";
+import { remapExpansionAnchors } from "./context-expansion.js";
 
 export type ReadMode = "off" | "first" | "latest";
 export interface ReadRetention {
@@ -222,7 +223,8 @@ export function retainReadSpans<T extends TurnSpan>(spans: T[], reads: ReadOutpu
       lines.push(span.lines[index]); turnIds.push(span.turnIds?.[index] ?? null);
     }
     const tools = span.tools && { ...span.tools, lines: span.tools.lines.map((record) => ({ ...record, index: indices.get(record.index)! })) };
-    return { ...span, lines, turnIds, tools, protectedLines };
+    return { ...span, lines, turnIds, tools, protectedLines,
+      expansionAnchors: remapExpansionAnchors(span.expansionAnchors, indices) };
   });
   return { spans: rendered, unplaced: reads.filter((read) => !placed.has(read.entryId)) };
 }

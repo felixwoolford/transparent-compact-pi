@@ -20,7 +20,10 @@ function selected(entries: readonly SessionEntry[]): boolean {
 export function recoveryText(entries: readonly SessionEntry[], text: string): string {
   if (!selected(entries)) return text;
   if (text.startsWith("**Recovering hidden details.**")) return DIRECT_INSTRUCTIONS;
-  return text.replaceAll("`context_lookup`", "the context-recovery tools")
+  return text
+    .replace(" To expand a specific visible tool stub directly, quote it to `context_expand`.", "")
+    .replace("use context_expand to expand, or context_lookup to ask a question", "use context_lookup")
+    .replaceAll("`context_lookup`", "the context-recovery tools")
     .replaceAll("context_lookup", "the context-recovery tools");
 }
 
@@ -53,11 +56,13 @@ export function startMainAgentLookup(pi: ExtensionAPI, ctx: ExtensionContext, ba
 
   // Hidden, not just inactive: neither codemode nor tool search may offer the
   // alternative implementation. Leave the original registration alone otherwise.
-  pi.registerTool({
-    name: "context_lookup", label: "Context lookup", description: "", exposure: "hidden",
-    parameters: Type.Object({}),
-    async execute() { throw new Error("This session uses direct context recovery."); },
-  });
+  for (const [name, label] of [["context_lookup", "Context lookup"], ["context_expand", "Context expansion"]]) {
+    pi.registerTool({
+      name, label, description: "", exposure: "hidden",
+      parameters: Type.Object({}),
+      async execute() { throw new Error("This session uses direct context recovery."); },
+    });
+  }
   const tools = [
     { ...backend.list, name: "context_list_entries", label: "Context entries",
       description: "List compacted session history ENTRY headers and previews in bounded pages. Follow the reported offset and throughEntry only when needed." },

@@ -24,16 +24,11 @@ function checkChecklist(content) {
     "If you need an earlier observation, the source of a finding, or the reason for a conclusion that compaction hid, use `context_lookup`.",
     "This can avoid repeating slow or unreliable research",
     "If a task-relevant claim has uncertain provenance or conflicts with new evidence",
-    "check its supporting output (using `context_lookup` if hidden) or the current source before treating it as established",
-    "**Recovery recap.** Use the recovery tools for history established",
-    "**Recovery recap.**", "context_lookup",
-    "history established by this conversation or its checkpoint",
-    "For unfamiliar project details or missing requirements, inspect project files or ask the user instead"])
+    "check its supporting output (using `context_lookup` if hidden) or the current source before treating it as established"])
     assert(content.includes(phrase), phrase);
   const guidance = require("./recovery-guidance-tests.cjs");
-  guidance.checkFilesystemScope(content);
-  assert(content.includes("Keep these evidence/recovery rules in force as work continues."),
-    "recap's final sentence includes its full stop");
+  guidance.checkCurrentRecoveryLanguage(content);
+  guidance.checkNoFallbackTools(content);
   assert(content.indexOf("Re-read project files") < content.indexOf("use `context_lookup`"),
     "ordinary restoration comes before conditional lookup, not shared advertising text");
   assert(!content.includes("Ask `context_lookup` where an earlier finding came from"),
@@ -59,7 +54,7 @@ function checkEnvelope(summary) {
   assert.equal(count(summary, "**Recovering hidden details.**"), 1);
   require("./recovery-guidance-tests.cjs").checkCurrentRecoveryLanguage(summary);
   const recovery = summary.slice(summary.indexOf("**Recovering hidden details.**")).split("\n\n")[0];
-  assert.equal(recovery, "**Recovering hidden details.** Use `context_lookup` with a specific historical question: a subagent searches this conversation's full session history and returns relevant findings. Use the recovery tools for history established by this conversation or its checkpoint, not for project discovery or exploration of other sessions.");
+  assert(recovery.includes("Use `context_lookup` with a specific historical question"));
   assert(summary.indexOf("**Recovering hidden details.**") < summary.indexOf("### Compacted conversation"));
   assert.equal(count(summary, "**Evidence boundary:**"), 1);
   assert(summary.indexOf("**Evidence boundary:**") > summary.lastIndexOf("</compacted-span>"));
@@ -291,7 +286,6 @@ async function runtimeTests(h) {
       assert.equal(count(JSON.stringify(secondRequest), heading), 1);
       assert.equal(count(JSON.stringify(secondRequest), "**Recovering hidden details.**"), 1);
       assert.equal(count(JSON.stringify(secondRequest), "**Evidence boundary:**"), 1);
-      assert.equal(count(JSON.stringify(secondRequest), "**Recovery recap.**"), 1);
       checkChecklist(JSON.stringify(secondRequest.messages.at(-1)));
       assert.equal(count(JSON.stringify(secondRequest), fixture.token), retain ? 1 : 0);
       assert.deepEqual(c2.details.readRetention, c.details.readRetention,

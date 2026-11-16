@@ -3,16 +3,6 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 
-function checkFilesystemScope(content) {
-  assert.match(content,
-    /For recovery of details hidden by compaction, do not read or grep raw session JSONL files through filesystem tools/,
-    "filesystem restriction is conditional on compaction recovery, not session analysis");
-  assert(!/^Do not (?:read or grep|read) raw session JSONL files.*filesystem tools\./m.test(content),
-    "no standalone global filesystem prohibition");
-  checkCurrentRecoveryLanguage(content);
-  checkNoFallbackTools(content);
-}
-
 function checkCurrentRecoveryLanguage(content) {
   assert.doesNotMatch(content, /\bdump(?:s|dir)?\b|\bdump[-_]context\b|\bcontext[-_]dumps?\b/i,
     "current instructions and packaged resources must not advertise obsolete recovery interfaces");
@@ -51,7 +41,6 @@ module.exports = function (h) {
     checkNoFallbackTools(advertisement);
     checkRefFreeRecoveryLanguage(advertisement);
   }
-  checkFilesystemScope(lookup.description);
   assert(lookup.description.startsWith("Retrieve earlier outputs, findings, decisions, and reasoning hidden by compaction."),
     "restore the concise compaction-aware opening");
   checkRecoveryTriggers(lookup.description);
@@ -71,7 +60,7 @@ module.exports = function (h) {
     "A specific question about earlier in this conversation: an output, source of a finding, reason for a decision, or evidence behind notes that conflict with new observations.");
   for (const tool of Object.values(ext.tools)) {
     assert.match(tool.description, /compaction|compacted/, `${tool.name}: description explains compaction recovery`);
-    assert.match(tool.promptSnippet, /compaction/, `${tool.name}: snippet explains compaction recovery`);
+    if (tool.promptSnippet) assert.match(tool.promptSnippet, /compaction/, `${tool.name}: snippet explains compaction recovery`);
   }
 
   for (const tool of Object.values(ext.tools)) {
@@ -91,7 +80,8 @@ module.exports = function (h) {
   assert.doesNotMatch(skill, /Under size pressure|tools-tightened|trimmed/, "skill omits presentation-tightening guidance");
   assert.doesNotMatch(skill, /before repeating the\s+investigation/i,
     "skill does not mandate lookup before ordinary investigation");
-  checkFilesystemScope(skill);
+  checkCurrentRecoveryLanguage(skill);
+  checkNoFallbackTools(skill);
   assert.match(skill, /You may include an ENTRY id from an earlier recovery result/);
   assert.match(skill, /A partial search does not establish that something never happened/);
   assert.match(skill, /including recorded tool outputs and your reasoning/);
@@ -119,7 +109,6 @@ module.exports = function (h) {
     assert(!fresh.handlers.tool_call, "recovery guidance does not install a filesystem access gate");
   }
 };
-module.exports.checkFilesystemScope = checkFilesystemScope;
 module.exports.checkCurrentRecoveryLanguage = checkCurrentRecoveryLanguage;
 module.exports.checkNoFallbackTools = checkNoFallbackTools;
 module.exports.checkRecoveryTriggers = checkRecoveryTriggers;

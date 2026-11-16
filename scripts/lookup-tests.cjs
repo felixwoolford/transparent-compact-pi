@@ -35,8 +35,13 @@ module.exports.limitTests = async function limitTests(h) {
     c.sessionManager.appendMessage({ role: "toolResult", toolCallId: id, toolName: "context_lookup", content: result.content, isError: false, timestamp: Date.now() });
     return toolText(result);
   };
+  const expandResult = (id, isError = false) => manager.appendMessage({ role: "toolResult", toolName: "context_expand", toolCallId: id,
+    content: [text("Historical expansion")], isError, timestamp: Date.now() });
   const allowed = expected === 0 ? 4 : expected;
-  for (let i = 0; i < allowed; i++) assert.equal(await invoke(), "Normal findings.");
+  for (let i = 0; i < allowed; i++) {
+    expandResult(`between-${i}`);
+    assert.equal(await invoke(), "Normal findings.", "expansion neither consumes nor resets lookup slots");
+  }
   if (expected === 0) {
     assert.equal(modelCalls, 4, "zero means unlimited");
     return;
@@ -46,6 +51,7 @@ module.exports.limitTests = async function limitTests(h) {
   manager.appendCompaction("A checkpoint does not reset the streak", request, 100, {}, true);
   const beforeBlocked = modelCalls;
   for (let i = 0; i < 3; i++) {
+    expandResult(`blocked-${i}`, i === 1);
     const result = await invoke({ ...ctx, model: undefined, modelRegistry: {} });
     assert.equal(result, `context_lookup consecutive-call limit reached (${expected}).`);
   }
@@ -94,7 +100,7 @@ module.exports.limitTests = async function limitTests(h) {
     const ids = Array.from({ length: expected + 2 }, (_, i) => `batch-${i}`);
     batchManager.appendMessage(assistant([
       text("Narration beside the lookup calls must not bypass the cap."),
-      ...ids.map((id) => toolCall("context_lookup", { question: "Evidence" }, id)),
+      ...ids.flatMap((id) => [toolCall("context_expand", { text: "stub" }, `expand-${id}`), toolCall("context_lookup", { question: "Evidence" }, id)]),
     ], "toolUse"));
     const order = reverse ? [...ids].reverse() : ids;
     const batchResults = await Promise.all(order.map(async (id) => [id, toolText(await ext.tools.context_lookup.execute(id, { question: "Evidence" }, undefined, undefined, { ...ctx, sessionManager: batchManager }))]));

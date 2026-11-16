@@ -67,7 +67,7 @@ async function main() {
     assert.deepEqual(loaded.errors, [], "real Pi extension loader reports no errors");
     assert.equal(loaded.extensions.length, 1);
     const extension = loaded.extensions[0];
-    assert.deepEqual([...extension.tools.keys()], ["context_lookup"], "only subagent lookup is registered for the main agent");
+    assert.deepEqual([...extension.tools.keys()], ["context_lookup", "context_expand"], "lookup and focused expansion are registered for the main agent");
     assert.deepEqual([...extension.commands.keys()], ["compaction-method", "cap-compaction", "filter-later", "fl", "filter-auto", "compact-filtered", "filter-turns", "retain-reads", "export-checkpoint"], "compaction policy, context editing and checkpoint export commands are registered");
     const lookup = extension.tools.get("context_lookup");
     assert.deepEqual(Object.keys(lookup.definition.parameters.properties), ["question"], "lookup accepts only question");
@@ -84,7 +84,8 @@ async function main() {
           .map(file => `extensions/lib/tool-stubs/parser/${file}`),
         'extensions/lib/turn-context.ts', 'extensions/lib/turn-filter.ts',
         'extensions/lib/read-retention.ts', 'extensions/lib/read-retention-ui.ts',
-        'extensions/lib/main-agent-lookup.ts', 'extensions/lib/main-agent-retrieval.md'].sort(), 'package ships the live renderer, parser, source, and licenses');
+        'extensions/lib/main-agent-lookup.ts', 'extensions/lib/main-agent-retrieval.md',
+        'extensions/lib/context-expansion.ts'].sort(), 'package ships the live renderer, parser, source, and licenses');
     assert.deepEqual([...packedPaths].filter(p => /^(?:source|experiments|scripts|stub-overhaul|node_modules)\//.test(p) || p === 'test.cjs'), [],
       'package excludes development harnesses, tests, dependencies, and obsolete source');
 
