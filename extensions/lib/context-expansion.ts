@@ -65,6 +65,16 @@ function head(text: string, length: number): string {
   if (end < text.length && /[\uD800-\uDBFF]/.test(text[end - 1]) && /[\uDC00-\uDFFF]/.test(text[end])) end--;
   return text.slice(0, end);
 }
+// A quoted count, location or range must not join digits from a larger number.
+function containsQuote(text: string, quote: string): boolean {
+  const numericStart = /^\d/.test(quote), numericEnd = /\d$/.test(quote);
+  for (let at = text.indexOf(quote); at >= 0; at = text.indexOf(quote, at + 1)) {
+    if ((numericStart && /\d/.test(text[at - 1] ?? "")) ||
+      (numericEnd && /\d/.test(text[at + quote.length] ?? ""))) continue;
+    return true;
+  }
+  return false;
+}
 function preview(entry: SessionEntry): string {
   if (entry.type !== "message" || (entry.message.role !== "user" && entry.message.role !== "assistant")) return "";
   const value = textContent(entry.message.content, "\n").trim();
@@ -110,7 +120,7 @@ export function expandTargets(entries: readonly SessionEntry[], targets: readonl
   const matches: { target: ExpansionTarget; candidate: ExpansionCandidate }[] = [];
   const seen = new Set<string>();
   for (const target of targets) {
-    if (!target.text.includes(quote)) continue;
+    if (!containsQuote(target.text, quote)) continue;
     const adjacent = neighbours(entries, positions.get(target.source.entryId) ?? -1);
     const selector = hash([quote, target.source]);
     if (seen.has(selector)) continue;

@@ -88,6 +88,32 @@ module.exports = async function (h) {
 
   // A checkpoint may repeat an alias of the same underlying source. Count the source once.
   const targets = checkpoint.details.expansionTargets;
+
+  // Keep numeric counts, references and ranges distinct, including when no exact
+  // match exists. Partial quotes and matches followed by status labels still work.
+  for (const [display, quote, status] of [
+    ["edit @1 ×12", "edit @1 ×1", "not-found"],
+    ["edit @1 ×13", "edit @1 ×1", "not-found"],
+    ["edit @12 ×1", "edit @1", "not-found"],
+    ["read @1:1-120", "read @1:1-12", "not-found"],
+    ["read @1:11-20", "1-20", "not-found"],
+    ["read @1:11-20; read @1:1-20", "1-20", "expanded"],
+    ["edit @1 ×1 [tool error]", "edit @1 ×1", "expanded"],
+    ["read @1:1-120", "read @1", "expanded"],
+    ["edit @1 ×12", "edit", "expanded"],
+  ]) {
+    assert.equal(expandTargets(manager.getBranch(), [{ ...targets[0], text: display }], { text: quote }).status,
+      status, `${JSON.stringify(quote)} in ${JSON.stringify(display)}`);
+  }
+  const numericTargets = [
+    { ...targets[0], text: "edit @1 ×1" },
+    { ...targets[1], text: "edit @1 ×12" },
+    { ...targets[2], text: "edit @1 ×13" },
+  ];
+  const numericMatch = expandTargets(manager.getBranch(), numericTargets, { text: "edit @1 ×1" });
+  assert.equal(numericMatch.status, "expanded");
+  assert.deepEqual(numericMatch.entryIds, [first, firstResult]);
+
   const unique = expandTargets(manager.getBranch(), [...targets, targets[0]], query);
   assert.equal(unique.status, "ambiguous"); assert.equal(unique.total, 2); assert.equal(unique.candidates.length, 2);
   const pagedMatches = expandTargets(manager.getBranch(), targets, query, { maxCandidates: 1 });
