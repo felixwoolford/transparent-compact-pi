@@ -11,13 +11,7 @@ import { MODE_LABELS, MODE_SYMBOLS } from "./turn-context.js";
 import type { ContextEstimate, ContextEstimator, Fidelity, TurnFidelities, TurnMode, TurnSelection } from "./turn-context.js";
 
 export const PREFLAG_ENTRY = "transparent-compact:aside-turn";
-export const AUTO_FILTER_ENTRY = "transparent-compact:auto-filter";
 export const FILTER_REVISION_ENTRY = "transparent-compact:filter-revision";
-
-export function autoFilterEnabled(entries: SessionEntry[]): boolean {
-  const entry = entries.findLast((entry) => entry.type === "custom" && entry.customType === AUTO_FILTER_ENTRY);
-  return entry?.type === "custom" && (entry.data as { enabled?: boolean })?.enabled === true;
-}
 
 /** Written immediately before the aside's user message is persisted. Consume
  * once at that raw boundary; the timestamp guards against an interrupted append.

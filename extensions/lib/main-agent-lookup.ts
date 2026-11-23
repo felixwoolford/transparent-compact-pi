@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { Type } from "typebox";
 import type { TSchema } from "typebox";
 import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
+import { sessionPreferences } from "./config.js";
 
 const MODE_ENTRY = "transparent-compact:main-agent-lookup";
 const SKILL_PATH = fileURLToPath(new URL("./main-agent-retrieval.md", import.meta.url));
@@ -37,9 +38,7 @@ interface Backend { list: Retrieval; search: Retrieval; show: Retrieval }
 export function startMainAgentLookup(pi: ExtensionAPI, ctx: ExtensionContext, backend: Backend, scope: string): void {
   const entries = ctx.sessionManager.getEntries();
   const saved = selected(entries);
-  const env = process.env.MECH_COMPACT_MAIN_AGENT_LOOKUP?.trim() || undefined;
-  const settings = pi.getSettings() as { transparentCompact?: { mainAgentLookup?: boolean } };
-  const requested = env === undefined ? settings.transparentCompact?.mainAgentLookup === true : env === "1";
+  const requested = sessionPreferences(pi.getSettings(), ctx.sessionManager.getBranch()).mainAgentLookup;
   if (!saved && !requested) return;
   if (!saved && entries.some((entry) => entry.type === "compaction")) {
     ctx.ui.notify("Main-agent context lookup was not enabled: this session already has compactions. Its subagent lookup is unchanged. Start a new session to opt in.", "warning");

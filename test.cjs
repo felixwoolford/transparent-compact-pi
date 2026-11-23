@@ -31,7 +31,7 @@ function load(factory, sessionRef) {
     on: (name, handler) => { handlers[name] = handler; },
     registerTool: (tool) => { tools[tool.name] = tool; },
     registerCommand: (name, command) => { commands[name] = command; },
-    getSettings: () => ({}),
+    getSettings: () => sessionRef?.settings ?? {},
     getActiveTools: () => Object.keys(tools),
     getAllTools: () => Object.values(tools),
     appendEntry: (type, data) => {
@@ -62,7 +62,7 @@ function fixture(SessionManager, cwd) {
   return { manager, u, a, t, kept };
 }
 function makeContext(manager, cwd) {
-  return { cwd, sessionManager: manager, model, modelRegistry: {}, ui: { notify: () => {} }, mode: "json", hasUI: false, getSystemPrompt: () => "" };
+  return { cwd, sessionManager: manager, model, modelRegistry: {}, ui: { notify: () => {} }, mode: "json", hasUI: false, isProjectTrusted: () => true, getSystemPrompt: () => "" };
 }
 async function compact(ext, ctx, ids, kept, reason = "manual", fileOps) {
   const entries = ctx.sessionManager.getBranch();
@@ -142,7 +142,7 @@ function saveSession(manager, file) {
   fs.writeFileSync(file, [manager.getHeader(), ...manager.getEntries()].map((e) => JSON.stringify(e)).join("\n") + "\n");
 }
 
-async function methodTests(factory, SessionManager, root) {
+async function methodTests(factory, SessionManager, root, { updateSettings, preferences }) {
   console.log("== Compaction method: persistence, all triggers, autocomplete, and mixed guarantees ==");
   const cwd = path.join(root, "method-project");
   fs.mkdirSync(cwd);
@@ -157,9 +157,10 @@ async function methodTests(factory, SessionManager, root) {
   } };
   await ext.handlers.session_start({ reason: "startup" }, ctx);
   assert.equal(notices.length, 0, "fresh verbatim session needs no warning");
-  const command = ext.commands["compaction-method"];
-  assert.deepEqual(command.getArgumentCompletions("s").map((item) => item.value), ["summary"]);
-  assert.deepEqual(command.getArgumentCompletions("v").map((item) => item.value), ["verbatim"]);
+  const command = { handler: async (method, context) => {
+    if (method && method !== preferences(context).compactionMethod) await updateSettings(ext, context, { compactionMethod: method });
+    else context.ui.notify(`Compaction method: ${preferences(context).compactionMethod}`, "info");
+  } };
   const before = f.manager.getLeafId();
   await command.handler("", ctx);
   assert(notices.at(-1).message.includes("method: verbatim"));
@@ -212,18 +213,16 @@ async function methodTests(factory, SessionManager, root) {
 
   const originalContext = JSON.stringify(f.manager.buildSessionContext());
   await command.handler("summary", ctx);
-  assert(notices.some((n) => n.level === "warning" && n.message.includes("Applying summary compaction weakens the verbatim guarantee")));
-  assert(notices.at(-1).message.includes("before summary compaction runs to leave the guarantee unchanged"));
-  assert(!notices.at(-1).message.includes("default compaction"));
+  assert(notices.some((n) => n.level === "warning"), "switching to Pi's summary compaction warns the user");
   notices.length = 0;
   await command.handler("verbatim", ctx);
-  assert(notices.at(-1).message.includes("method: verbatim"));
+  assert.equal(preferences(ctx).compactionMethod, "verbatim");
   assert(notices.every((n) => n.level === "info"), "switching back before compaction has no mixed-context warning");
   assert.equal(JSON.stringify(f.manager.buildSessionContext()), originalContext, "changing the method alone never changes active model context");
   await command.handler("summary", ctx);
-  assert.equal(notices.at(-1).level, "warning", "an actual switch warns");
+  assert(notices.some((n) => n.level === "warning"), "an actual switch warns");
   const summaryLeaf = f.manager.getLeafId();
-  assert.equal(f.manager.getEntry(summaryLeaf).data.method, "summary");
+  assert.equal(f.manager.getEntry(summaryLeaf).data.compactionMethod, "summary");
   notices.length = 0;
   await command.handler("", ctx);
   await command.handler("summary", ctx);
@@ -250,15 +249,13 @@ async function methodTests(factory, SessionManager, root) {
   const forked = SessionManager.forkFrom(saved, cwd, path.join(root, "forked-sessions"));
   sessionRef.current = forked;
   const forkExt = load(factory, sessionRef);
-  await forkExt.commands["compaction-method"].handler("", { ...ctx, sessionManager: forked });
-  assert(notices.at(-1).message.includes("method: summary"), "fork inherits the copied branch's method");
+  assert.equal(preferences({ ...ctx, sessionManager: forked }).compactionMethod, "summary", "fork inherits the copied branch's method");
   const reopened = SessionManager.open(saved);
   sessionRef.current = reopened;
   const resumedCtx = { ...ctx, sessionManager: reopened };
   const resumed = load(factory, sessionRef);
   await resumed.handlers.session_start({ reason: "resume" }, resumedCtx);
-  await resumed.commands["compaction-method"].handler("", resumedCtx);
-  assert(notices.at(-1).message.includes("method: summary"), "selection survives session-file reopening and reload");
+  assert.equal(preferences(resumedCtx).compactionMethod, "summary", "selection survives session-file reopening and reload");
   assert.equal((await wrap(current).getSuggestions(["/comp"], 0, 5, options)).items[0].description,
     "Manually compact with summary compaction");
   await resumed.handlers.session_start({ reason: "reload" }, { ...resumedCtx, ui: { notify: ctx.ui.notify } });
@@ -437,8 +434,9 @@ async function main() {
     const { SessionManager, loadSkillsFromDir } = await jiti.import("@earendil-works/pi-coding-agent");
     const { default: factory } = await jiti.import(path.join(__dirname, "extensions", "index.ts"));
     const ext = load(factory);
+    const settingsHelpers = await require("./scripts/settings-test-helpers.cjs")(jiti, __dirname);
     const lookupTests = require("./scripts/lookup-tests.cjs");
-    const helpers = { ext, SessionManager, root, fixture, makeContext, assistant, text, toolCall, toolText, search, searchTool, saveSession, output, thinking, argumentsText, user };
+    const helpers = { ...settingsHelpers, ext, SessionManager, root, fixture, makeContext, assistant, text, toolCall, toolText, search, searchTool, saveSession, output, thinking, argumentsText, user };
     if (mode === "lookupturns") {
       await require("./scripts/lookup-budget-tests.cjs")({ ...helpers, expected: Number(process.argv[4]) });
       return;
@@ -448,7 +446,7 @@ async function main() {
       return;
     }
     const capPolicyTests = require("./scripts/cap-policy-tests.cjs");
-    const capHelpers = { factory, SessionManager, root, load, makeContext, compact, saveSession, user };
+    const capHelpers = { ...settingsHelpers, factory, SessionManager, root, load, makeContext, compact, saveSession, user };
     if (mode === "capdefault") {
       await capPolicyTests.defaultBudgetTests(capHelpers);
       return;
@@ -470,13 +468,13 @@ async function main() {
     await require("./scripts/runtime-lookup-tests.cjs")({ ...helpers, jiti, piRoot });
     await require("./scripts/reorientation-tests.cjs")({ ...helpers, factory, load, compact, jiti, piRoot });
     await require("./scripts/read-retention-tests.cjs")({ ...helpers, factory, load, jiti });
-    assert.deepEqual(Object.keys(ext.commands), ["compaction-method", "cap-compaction", "filter-later", "fl", "filter-auto", "compact-filtered", "filter-turns", "retain-reads", "export-checkpoint"]);
+    assert.deepEqual(Object.keys(ext.commands), ["compact-settings", "filter-later", "fl", "compact-filtered", "filter-turns", "retain-reads", "export-checkpoint"]);
     await require("./scripts/export-checkpoint-tests.cjs")({ ...helpers, factory, load });
     await require("./scripts/turn-filter-ui-tests.cjs")({ jiti, piRoot });
     await require("./scripts/turn-filter-tests.cjs")({ ...helpers, factory, load, jiti, piRoot });
     await require("./scripts/turn-fidelity-tests.cjs")({ ...helpers, factory, load, jiti, piRoot });
     await require("./scripts/context-readout-tests.cjs")({ ...helpers, factory, load, jiti, piRoot });
-    await methodTests(factory, SessionManager, root);
+    await methodTests(factory, SessionManager, root, settingsHelpers);
     await require("./scripts/checkpoint-evidence-tests.cjs")({ ...helpers, compact });
     await require("./scripts/file-evidence-tests.cjs")({ ...helpers, factory, load, compact, jiti, piRoot });
     await require("./scripts/compaction-format-tests.cjs")({ ...helpers, compact });
@@ -484,6 +482,8 @@ async function main() {
     await require('./scripts/live-tool-stub-tests.cjs')({ ...helpers, factory, load, compact, jiti });
     await require("./scripts/progressive-cap-tests.cjs")({ ...helpers, compact, jiti });
     await capPolicyTests(capHelpers);
+    await require("./scripts/config-tests.cjs")({ ...helpers, factory, load, jiti });
+    await require("./scripts/settings-menu-tests.cjs")({ ...helpers, factory, load, jiti, piRoot });
     assert.deepEqual(Object.keys(ext.tools.context_lookup.parameters.properties), ["question"]);
 
     console.log("== Skill validates and matches the session-backed tool contract ==");

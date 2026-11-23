@@ -5,7 +5,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 
-module.exports = async function capPolicyTests({ factory, SessionManager, root, load, makeContext, compact, saveSession, user }) {
+module.exports = async function capPolicyTests({ factory, SessionManager, root, load, makeContext, compact, saveSession, user, capControl, updateSettings }) {
   console.log("== Cap policy: modes, budgets, dialogs, cancellation, and branch persistence ==");
   const cwd = path.join(root, "cap-policy-project");
   fs.mkdirSync(cwd);
@@ -20,7 +20,7 @@ module.exports = async function capPolicyTests({ factory, SessionManager, root, 
     const ctx = { ...makeContext(manager, cwd), model: { contextWindow: 192000 }, ui: {
       notify: (message, level) => notices.push({ message, level }),
     } };
-    return { manager, u, kept, ref, ext, notices, ctx, command: ext.commands["cap-compaction"] };
+    return { manager, u, kept, ref, ext, notices, ctx, command: capControl(ext) };
   };
   const set = (f, args) => f.command.handler(args, f.ctx);
   const attempt = (f, reason = "manual", signal = new AbortController().signal) => {
@@ -43,8 +43,6 @@ module.exports = async function capPolicyTests({ factory, SessionManager, root, 
   await set(defaults, "");
   assert(latest(defaults).includes("cap: warn; budget 80000c"));
   assert.equal(defaults.manager.getLeafId(), initialLeaf, "status does not persist state");
-  assert.deepEqual(defaults.command.getArgumentCompletions("w").map((x) => x.value), ["warn"]);
-  assert.deepEqual(defaults.command.getArgumentCompletions("warn 2").map((x) => x.value), ["warn 20000t", "warn 25%"]);
   for (const args of ["invalid", "on extra", "on 10c extra", "0c", "-1t", "1.5t", "0%", "101%", "Infinity%", "NaNc", "20000", "9007199254740992c", "9007199254740991t"]) {
     await set(defaults, args);
     assert.equal(defaults.notices.at(-1).level, "error", `reject ${args}`);
@@ -119,7 +117,7 @@ module.exports = async function capPolicyTests({ factory, SessionManager, root, 
     const ext = load(factory, ref);
     const ctx = { ...bypass.ctx, sessionManager: manager };
     await ext.handlers.session_start({ reason: "resume" }, ctx);
-    await ext.commands["cap-compaction"].handler("", ctx);
+    await capControl(ext).handler("", ctx);
     assert(latest(bypass).includes("cap: off; budget 80000c"), "resume/reload/fork preserve cap state");
   }
   bypass.manager.branch(bypass.kept);
@@ -195,7 +193,7 @@ module.exports = async function capPolicyTests({ factory, SessionManager, root, 
   await set(summary, "warn 25%");
   summary.ctx.model = undefined;
   interactive(summary, () => assert.fail("summary method does not consult verbatim cap policy"));
-  await summary.ext.commands["compaction-method"].handler("summary", summary.ctx);
+  await updateSettings(summary.ext, summary.ctx, { compactionMethod: "summary" });
   assert.equal(await attempt(summary), undefined);
 
   const protectedBase = make("Small new span");
@@ -212,7 +210,7 @@ module.exports = async function capPolicyTests({ factory, SessionManager, root, 
   assert.deepEqual(fs.readdirSync(cwd), [], "cap state adds no local files");
 };
 
-module.exports.defaultBudgetTests = async function ({ factory, SessionManager, root, load, makeContext, user }) {
+module.exports.defaultBudgetTests = async function ({ factory, SessionManager, root, load, makeContext, user, capControl }) {
   console.log("== Default cap: warn 25%, without a character environment override ==");
   const manager = SessionManager.inMemory(root);
   const content = "DEFAULT_PERCENT_CAP ".repeat(12000);
@@ -229,7 +227,7 @@ module.exports.defaultBudgetTests = async function ({ factory, SessionManager, r
       return "Apply trimming";
     },
   } };
-  const command = ext.commands["cap-compaction"];
+  const command = capControl(ext);
   const leaf = manager.getLeafId();
   await command.handler("", ctx);
   assert(notices.at(-1).message.includes("cap: warn; budget 25% (48,000 estimated tokens at 4 chars/token; 192,000 chars)"));
@@ -250,7 +248,7 @@ module.exports.defaultBudgetTests = async function ({ factory, SessionManager, r
   assert((await attempt()).compaction.summary.includes(content));
 };
 
-module.exports.envBudgetTests = async function ({ factory, SessionManager, root, load, makeContext, user, expectedBudget }) {
+module.exports.envBudgetTests = async function ({ factory, SessionManager, root, load, makeContext, user, expectedBudget, capControl }) {
   console.log(`== Environment cap: percent=${process.env.MECH_COMPACT_MAX_SUMMARY_PERCENT}, chars=${process.env.MECH_COMPACT_MAX_SUMMARY_CHARS ?? "unset"}, expected ${expectedBudget} ==`);
   assert(/^(\d+(?:\.\d+)?)(%|c)$/.test(expectedBudget), "test must supply an explicit expected budget");
   const manager = SessionManager.inMemory(root);
@@ -261,7 +259,7 @@ module.exports.envBudgetTests = async function ({ factory, SessionManager, root,
   const ctx = { ...makeContext(manager, root), model: { contextWindow: 192000 }, ui: {
     notify: (message, level) => notices.push({ message, level }),
   } };
-  const command = ext.commands["cap-compaction"];
+  const command = capControl(ext);
   const leaf = manager.getLeafId();
   await command.handler("", ctx);
   assert(notices.at(-1).message.includes(`cap: warn; budget ${expectedBudget} (`));
@@ -280,10 +278,10 @@ module.exports.envBudgetTests = async function ({ factory, SessionManager, root,
     await command.handler("", ctx);
     assert(notices.at(-1).message.includes(`${value.toLocaleString()} chars`), "explicit chars override percent without needing a model");
   }
-  // Defaults are captured on load, not reread from the environment at every use.
+  // Effective defaults are resolved on use, without an import-time cache.
   process.env.MECH_COMPACT_MAX_SUMMARY_PERCENT = "75";
   await command.handler("", ctx);
-  assert(notices.at(-1).message.includes(`budget ${expectedBudget} (`));
+  assert(notices.at(-1).message.includes(`budget ${isPercent ? "75%" : expectedBudget} (`));
   await command.handler("warn 10%", ctx);
   assert(notices.at(-1).message.includes("budget 10% ("), "session settings override either environment unit");
   await command.handler("on 20000c", ctx);

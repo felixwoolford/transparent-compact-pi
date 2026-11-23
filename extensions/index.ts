@@ -7,7 +7,8 @@
  * this history under ~/.pi/agent/sessions/; custom session locations and
  * ephemeral sessions work too. Only the active branch is searched.
  *
- * Optional env settings:
+ * Preferences: transparentCompact in Pi settings.json (read via pi.getSettings()).
+ * Optional environment overrides:
  *   MECH_COMPACT_MAX_SUMMARY_CHARS    initial character budget override (takes precedence over percent)
  *   MECH_COMPACT_MAX_SUMMARY_PERCENT  initial percentage of model context (default 25; >0, <=100)
  *   MECH_COMPACT_LOOKUP_MODEL         "provider/modelId" for the lookup subagent
@@ -34,13 +35,16 @@ import { buildSessionProjection, SessionManager } from "@earendil-works/pi-codin
 import type { ExtensionAPI, ExtensionContext, ModelRegistry, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { capSpans, renderToolLine, renderToolStub, NORMAL_PREVIEW_CHARS, TIGHTENED_ATTR } from "./lib/checkpoint-cap.js";
 import { recoveryText, startMainAgentLookup } from "./lib/main-agent-lookup.js";
+import { CAP_ENTRY, parseCapBudget, capBudgetText, sessionPreferences } from "./lib/config.js";
+import type { CapBudget, CapMode } from "./lib/config.js";
+import { registerSettingsMenu } from "./lib/settings-menu.js";
 import { expandTargets, expansionDigest, formatExpansionResult, pairedToolResults } from "./lib/context-expansion.js";
 import type { ExpansionAnchor, ExpansionQuery, ExpansionResult, ExpansionTarget } from "./lib/context-expansion.js";
 import { ToolRenderer, TOOL_DISPLAY_EXPLANATION } from "./lib/tool-stubs/renderer.mjs";
 import { checkpointPath } from "./lib/tool-stubs/display.mjs";
 import { Locations } from "./lib/tool-stubs/locations.mjs";
 import type { ToolLines, ToolStub } from "./lib/checkpoint-cap.js";
-import { FILTER_EXPLANATION, PREFLAG_ENTRY, AUTO_FILTER_ENTRY, FILTER_REVISION_ENTRY, autoFilterEnabled, preflaggedTurns,
+import { FILTER_EXPLANATION, PREFLAG_ENTRY, FILTER_REVISION_ENTRY, preflaggedTurns,
   filterSpans, pickFilteredTurns, turnOwners } from "./lib/turn-filter.js";
 import type { FilterTurn, TurnSpan, ReadPosition } from "./lib/turn-filter.js";
 import { readPath as fileEvidenceKey, readCatalog, readRetentionState, selectedReads, renderRetainedReads, retainedReadOutputs, retainReadSpans, READ_RETENTION_ENTRY } from "./lib/read-retention.js";
@@ -55,49 +59,11 @@ import type { ContextEstimate, NoticeTokens, TurnFidelities, TurnSelection, Turn
 // ============================================================================
 
 const MECH_KIND = "mech-compact";
-const METHOD_ENTRY = "transparent-compact:compaction-method";
-type CompactionMethod = "verbatim" | "summary";
-
-const SUMMARY_COMPACTION_WARNING = "Applying summary compaction weakens the verbatim guarantee. You may switch back to verbatim compaction before summary compaction runs to leave the guarantee unchanged. If summary compaction runs (manually or automatically), it replaces older active context with a model-generated summary, which may omit or reinterpret details. Switching back afterward does not undo this: only subsequent verbatim spans retain the guarantee. Original history remains recoverable through context_lookup, but is no longer a direct expansion of the active context.";
+const SUMMARY_COMPACTION_WARNING = "Summary uses Pi's original model-generated compaction, effectively disabling transparent-compact's compaction features. It is incompatible with context pruning and provides no verbatim guarantee for summarized content. context_lookup remains available, but may be used less effectively. Switching back before summary compaction runs preserves the existing verbatim context. Switching back afterward does not undo summarization: only subsequent verbatim spans retain the guarantee.";
 const MIXED_CONTEXT_WARNING = "**Mixed context: earlier material is model-summarized, not verbatim.** The verbatim guarantee applies only to the labelled verbatim spans and uncompacted tail. The model-summary base may omit or reinterpret details; use `context_lookup` to recover original history.";
 
-// Read from the active branch rather than cached state: reload, resume, fork,
-// and tree navigation all inherit only the choices on their own path.
-function compactionMethod(entries: SessionEntry[]): CompactionMethod {
-  for (let i = entries.length - 1; i >= 0; i--) {
-    const entry = entries[i];
-    if (entry.type !== "custom" || entry.customType !== METHOD_ENTRY) continue;
-    const method = (entry.data as { method?: unknown } | undefined)?.method;
-    if (method === "verbatim" || method === "summary") return method;
-  }
-  return "verbatim";
-}
-
-function intFromEnv(name: string, fallback: number): number {
-  const raw = process.env[name];
-  if (!raw) return fallback;
-  const n = Number.parseInt(raw, 10);
-  return Number.isFinite(n) && n > 0 ? n : fallback;
-}
-
-function percentFromEnv(name: string, fallback: number): number {
-  const n = Number(process.env[name]);
-  return Number.isFinite(n) && n > 0 && n <= 100 ? n : fallback;
-}
-
-function lookupMaxCallsFromEnv(): number {
-  const raw = process.env.MECH_COMPACT_LOOKUP_MAX_CALLS?.trim();
-  const n = raw && /^\d+$/.test(raw) ? Number(raw) : NaN;
-  return Number.isSafeInteger(n) && n >= 0 ? n : 3;
-}
-
+// Internal output limits, not user preferences.
 const cfg = {
-  defaultCapBudget: (process.env.MECH_COMPACT_MAX_SUMMARY_CHARS
-    ? { unit: "chars", value: intFromEnv("MECH_COMPACT_MAX_SUMMARY_CHARS", 80_000) }
-    : { unit: "percent", value: percentFromEnv("MECH_COMPACT_MAX_SUMMARY_PERCENT", 25) }) as CapBudget,
-  lookupTurns: intFromEnv("MECH_COMPACT_LOOKUP_TURNS", 25),
-  lookupMaxCalls: lookupMaxCallsFromEnv(),
-  lookupModel: process.env.MECH_COMPACT_LOOKUP_MODEL?.trim() || undefined,
   argSnippetChars: NORMAL_PREVIEW_CHARS,
   listMaxChars: 12_000,
   grepMaxChars: 12_000,
@@ -106,38 +72,11 @@ const cfg = {
 };
 
 // Cap policy is session/branch state, separate from the compaction method.
-const CAP_ENTRY = "transparent-compact:cap-compaction";
-type CapMode = "on" | "off" | "warn";
-interface CapBudget { unit: "chars" | "tokens" | "percent"; value: number }
 interface CapSettings { mode: CapMode; budget: CapBudget }
 
-function validCapBudget(value: unknown): value is CapBudget {
-  if (!value || typeof value !== "object") return false;
-  const { unit, value: n } = value as CapBudget;
-  if (typeof n !== "number" || !Number.isFinite(n) || n <= 0) return false;
-  if (unit === "percent") return n <= 100;
-  return Number.isSafeInteger(n) && (unit === "chars" || (unit === "tokens" && n <= Number.MAX_SAFE_INTEGER / 4));
-}
-
-function parseCapBudget(text: string): CapBudget | undefined {
-  const match = /^(\d+(?:\.\d+)?)(c|t|%)$/.exec(text);
-  if (!match) return;
-  const budget: CapBudget = { value: Number(match[1]), unit: match[2] === "c" ? "chars" : match[2] === "t" ? "tokens" : "percent" };
-  return validCapBudget(budget) ? budget : undefined;
-}
-
-function capSettings(entries: SessionEntry[]): CapSettings {
-  for (let i = entries.length - 1; i >= 0; i--) {
-    const entry = entries[i];
-    if (entry.type !== "custom" || entry.customType !== CAP_ENTRY) continue;
-    const state = entry.data as CapSettings | undefined;
-    if (state && ["on", "off", "warn"].includes(state.mode) && validCapBudget(state.budget)) return state;
-  }
-  return { mode: "warn", budget: { ...cfg.defaultCapBudget } };
-}
-
-function capBudgetText(budget: CapBudget): string {
-  return `${budget.value}${budget.unit === "chars" ? "c" : budget.unit === "tokens" ? "t" : "%"}`;
+function capSettings(entries: SessionEntry[], settings: unknown): CapSettings {
+  const values = sessionPreferences(settings, entries);
+  return { mode: values.capMode, budget: values.capBudget };
 }
 
 function capBudgetChars(budget: CapBudget, contextWindow?: number): number | undefined {
@@ -148,7 +87,7 @@ function capBudgetChars(budget: CapBudget, contextWindow?: number): number | und
   return tokens <= Number.MAX_SAFE_INTEGER / 4 ? tokens * 4 : undefined;
 }
 
-function capDescription(state: CapSettings, contextWindow?: number): string {
+export function capDescription(state: CapSettings, contextWindow?: number): string {
   const chars = capBudgetChars(state.budget, contextWindow);
   const resolved = chars === undefined ? "model context window unavailable" : state.budget.unit === "chars"
     ? `${chars.toLocaleString()} chars`
@@ -165,7 +104,7 @@ function persistCap(pi: ExtensionAPI, previous: CapSettings, next: CapSettings):
 async function chooseCapBudget(pi: ExtensionAPI, ctx: ExtensionContext, signal: AbortSignal | undefined,
   reason: string, size: { overhead: number; lineChars: number }, operation = "compaction"): Promise<number | undefined | null> {
   try {
-    let state = capSettings(ctx.sessionManager.getBranch());
+    let state = capSettings(ctx.sessionManager.getBranch(), pi.getSettings());
     for (;;) {
       if (signal?.aborted) return null;
       if (state.mode === "off") return undefined;
@@ -1354,6 +1293,7 @@ async function runLookupSubagent(opts: {
   transcripts: Transcript[];
   model: Model;
   registry: ModelRegistry;
+  lookupTurns: number;
   signal: AbortSignal | undefined;
 }): Promise<string> {
   const toc = truncateHead(listEntries(opts.transcripts).split("\n").slice(0, 60).join("\n"), 4_000);
@@ -1415,14 +1355,14 @@ async function runLookupSubagent(opts: {
   const sessionId = uuidv7();
   // Continuations do not spend the substantive-search budget, but still cost
   // inference. Bound ALL search-phase model calls, plus one final write-up.
-  const maxModelCalls = Math.min(Number.MAX_SAFE_INTEGER, cfg.lookupTurns * 3);
-  const searchLimit = `${cfg.lookupTurns}-turn limit`;
+  const maxModelCalls = Math.min(Number.MAX_SAFE_INTEGER, opts.lookupTurns * 3);
+  const searchLimit = `${opts.lookupTurns}-turn limit`;
   let limit = `${maxModelCalls}-call total limit`;
   let searchTurns = 0;
   let pagingOnlyNotified = false;
   let lastText = "";
   for (let turn = 0; turn < maxModelCalls; turn++) {
-    if (searchTurns >= cfg.lookupTurns) {
+    if (searchTurns >= opts.lookupTurns) {
       if (continuations.size === 0) { limit = searchLimit; break; }
       if (!pagingOnlyNotified) {
         messages.push({ role: "user", content: "The substantive search-turn budget is exhausted. Only follow previously issued continuation pages if needed, or answer now. Do not start new searches.", timestamp: Date.now() });
@@ -1455,7 +1395,7 @@ async function runLookupSubagent(opts: {
     const keys = toolCalls.map((call) => lookupPageKey(String(call.name), (call.arguments ?? {}) as Record<string, any>));
     const continuationOnly = keys.every((key) => key !== undefined && available.delete(key));
     if (!continuationOnly) {
-      if (searchTurns >= cfg.lookupTurns) { limit = searchLimit; break; }
+      if (searchTurns >= opts.lookupTurns) { limit = searchLimit; break; }
       searchTurns++;
     }
     // Consume before dispatch, so a sibling cannot consume a newly issued page.
@@ -1569,6 +1509,14 @@ function consecutiveLookups(ctx: { sessionManager: { getBranch: () => SessionEnt
 // ============================================================================
 
 export default function (pi: ExtensionAPI) {
+  // Resolve from the active branch; never cache settings across tree navigation.
+  const compactionMethod = (entries: SessionEntry[]) => sessionPreferences(pi.getSettings(), entries).compactionMethod;
+  registerSettingsMenu(pi, (previous, next, ctx) => {
+    if (previous.compactionMethod === next.compactionMethod) return;
+    const entries = ctx.sessionManager.getBranch();
+    if (next.compactionMethod === "summary") ctx.ui.notify(recoveryText(entries, SUMMARY_COMPACTION_WARNING), "warning");
+    else if (collectBaseAndSpans(entries).base?.kind === "model-summary") ctx.ui.notify(recoveryText(entries, MIXED_CONTEXT_WARNING), "warning");
+  });
   // Only bridge a specific /filter-later (or /fl) submission to its actual persisted user
   // message. The next input clears a failed/handled submission, so it cannot
   // accidentally flag a later ordinary prompt. Durable state uses raw entries.
@@ -1632,52 +1580,6 @@ export default function (pi: ExtensionAPI) {
     }
   });
 
-  // Method selection never changes Pi's auto-compaction enabled setting.
-  pi.registerCommand("compaction-method", {
-    description: "Show or set the session compaction method: verbatim|summary (manual and automatic)",
-    getArgumentCompletions: (prefix) => ["verbatim", "summary"]
-      .filter((method) => method.startsWith(prefix))
-      .map((method) => ({ value: method, label: method })),
-    handler: async (args, ctx) => {
-      const requested = args.trim();
-      if (requested && requested !== "verbatim" && requested !== "summary") {
-        ctx.ui.notify("Usage: /compaction-method [verbatim|summary]", "error");
-        return;
-      }
-      const entries = ctx.sessionManager.getBranch();
-      const previous = compactionMethod(entries);
-      const method = requested || previous;
-      const changed = method !== previous;
-      if (changed) pi.appendEntry(METHOD_ENTRY, { method });
-      ctx.ui.notify(`Compaction method: ${method} (manual, automatic, and overflow recovery).`, "info");
-      if (changed && method === "summary") ctx.ui.notify(recoveryText(entries, SUMMARY_COMPACTION_WARNING), "warning");
-      else if (changed && collectBaseAndSpans(entries).base?.kind === "model-summary") ctx.ui.notify(recoveryText(entries, MIXED_CONTEXT_WARNING), "warning");
-    },
-  });
-
-  pi.registerCommand("cap-compaction", {
-    description: "Show or set verbatim compaction cap: on|off|warn [80000c|20000t|25%]",
-    getArgumentCompletions: (prefix) => {
-      const mode = /^(on|off|warn)\s/.exec(prefix)?.[1];
-      const values = mode ? ["80000c", "20000t", "25%"].map((budget) => `${mode} ${budget}`)
-        : ["on", "off", "warn", "80000c", "20000t", "25%"];
-      return values.filter((value) => value.startsWith(prefix)).map((value) => ({ value, label: value }));
-    },
-    handler: async (args, ctx) => {
-      const previous = capSettings(ctx.sessionManager.getBranch());
-      const words = args.trim().split(/\s+/).filter(Boolean);
-      const mode = ["on", "off", "warn"].includes(words[0]) ? words.shift() as CapMode : previous.mode;
-      const budget = words.length === 0 ? previous.budget : words.length === 1 ? parseCapBudget(words[0]) : undefined;
-      if (!budget) {
-        ctx.ui.notify("Usage: /cap-compaction [on|off|warn] [<chars>c|<estimated tokens>t|<percent>%]; percentages must be >0 and <=100.", "error");
-        return;
-      }
-      const next = { mode, budget };
-      persistCap(pi, previous, next);
-      ctx.ui.notify(`${capDescription(next, ctx.model?.contextWindow)} Applies only to verbatim compaction.`, "info");
-    },
-  });
-
   for (const name of ["filter-later", "fl"]) pi.registerCommand(name, {
     description: "Submit a normal user turn pre-flagged for future checkpoint filtering",
     handler: async (args, ctx) => {
@@ -1686,7 +1588,7 @@ export default function (pi: ExtensionAPI) {
         ctx.ui.notify("Wait until the agent is idle and queued messages have been handled before submitting an aside.", "warning"); return;
       }
       if (compactionMethod(ctx.sessionManager.getBranch()) !== "verbatim") {
-        ctx.ui.notify(`/${name} requires verbatim compaction. Use /compaction-method verbatim first.`, "error"); return;
+        ctx.ui.notify(`/${name} requires verbatim compaction. Change the method in /compact-settings first.`, "error"); return;
       }
       clearAsideSubmission();
       requestedAside = { sessionId: ctx.sessionManager.getSessionId(), text: args };
@@ -1696,20 +1598,6 @@ export default function (pi: ExtensionAPI) {
         clearAsideSubmission();
         throw error;
       }
-    },
-  });
-
-  pi.registerCommand("filter-auto", {
-    description: "Show or set automatic application of pre-flagged asides: on|off (default off)",
-    getArgumentCompletions: (prefix) => ["on", "off"].filter((value) => value.startsWith(prefix))
-      .map((value) => ({ value, label: value })),
-    handler: async (args, ctx) => {
-      const value = args.trim();
-      if (value && value !== "on" && value !== "off") { ctx.ui.notify("Usage: /filter-auto [on|off]", "error"); return; }
-      const previous = autoFilterEnabled(ctx.sessionManager.getBranch());
-      const enabled = value ? value === "on" : previous;
-      if (enabled !== previous) pi.appendEntry(AUTO_FILTER_ENTRY, { enabled });
-      ctx.ui.notify(`Automatic aside filtering: ${enabled ? "on" : "off"}. Applies user pre-flags during verbatim threshold/overflow compaction; no picker or automatic relevance judgments.`, "info");
     },
   });
 
@@ -1775,7 +1663,7 @@ export default function (pi: ExtensionAPI) {
           pruned.size === previousExcluded.length && previousExcluded.every((id) => pruned.has(id)) &&
           kept.size === previousKept.length && previousKept.every((id) => kept.has(id)) &&
           JSON.stringify(Object.entries(modes).sort()) === JSON.stringify(Object.entries(previousFidelity).sort());
-        const cap = capSettings(entries);
+        const cap = capSettings(entries, pi.getSettings());
         const renderCheckpoint = (pruned: Set<string>, modes: TurnFidelities, placements: TurnSlot[], preview: boolean, presentation?: { shortened: boolean }, expansionTargets?: ExpansionTarget[]) => buildMechanicalSummary({
           reason: canonical.span.reason, tokensBefore: compaction.tokensBefore, branchEntries: entries,
           now: canonical.span.at, revisedAt: new Date().toISOString(), spanLines: [], filteredTurnIds: [...pruned], fidelity: modes, slots: placements, presentation, expansionTargets,
@@ -1865,7 +1753,7 @@ export default function (pi: ExtensionAPI) {
         ctx.ui.notify("Wait until the agent is idle and queued messages have been handled before filtering turns.", "warning"); return;
       }
       if (compactionMethod(ctx.sessionManager.getBranch()) !== "verbatim") {
-        ctx.ui.notify("/compact-filtered requires verbatim compaction. Use /compaction-method verbatim first.", "error"); return;
+        ctx.ui.notify("/compact-filtered requires verbatim compaction. Change the method in /compact-settings first.", "error"); return;
       }
       const sessionId = ctx.sessionManager.getSessionId(), leafId = ctx.sessionManager.getLeafId();
       try {
@@ -1965,7 +1853,6 @@ export default function (pi: ExtensionAPI) {
   // --------------------------------------------------------------------------
   pi.on("session_before_compact", async (event, ctx) => {
     const { preparation, branchEntries, reason, signal } = event;
-    const automaticFiltering = reason !== "manual" && autoFilterEnabled(branchEntries);
     if (!preparation) return;
     if (signal?.aborted) return;
     if (preparation.messagesToSummarize.length === 0 && preparation.turnPrefixMessages.length === 0) return;
@@ -2057,8 +1944,11 @@ export default function (pi: ExtensionAPI) {
       const excluded = new Set(filteredTurns(branchEntries));
       const keptAsides = new Set(keptAsideTurns(branchEntries));
       const fidelity = { ...turnFidelities(branchEntries) }, slots: TurnSlot[] = [];
-      if (automaticFiltering) {
-        const preflags = preflaggedTurns(branchEntries);
+      // /fl is an explicit request to prune at the next eligible compaction,
+      // manual or automatic. Never prune a turn that overlaps the recent tail,
+      // or re-prune an aside the user explicitly kept/restored in the editor.
+      const preflags = preflaggedTurns(branchEntries);
+      if (preflags.size > 0) {
         const proposed = new Set([...excluded, ...[...preflags].filter((id) => !keptAsides.has(id))]);
         const choices = filterChoices(branchEntries, [...collectBaseAndSpans(branchEntries).spans, span],
           excluded, preparation.firstKeptEntryId, selectedReads(catalog, canonicalRetained), proposed);
@@ -2124,7 +2014,7 @@ export default function (pi: ExtensionAPI) {
       };
     } catch (err) {
       // Fail closed rather than discard explicit filtering/fidelity/retention.
-      const preserveFiltering = automaticFiltering || retainingReads || filteredTurns(branchEntries).length > 0 || Object.keys(turnFidelities(branchEntries)).length > 0;
+      const preserveFiltering = preflaggedTurns(branchEntries).size > 0 || retainingReads || filteredTurns(branchEntries).length > 0 || Object.keys(turnFidelities(branchEntries)).length > 0;
       ctx.ui?.notify?.(`transparent-compact: failed to build checkpoint (${errMsg(err)}); ${preserveFiltering ? "compaction cancelled" : "falling back to Pi's summary compaction"}`, "error");
       return preserveFiltering ? { cancel: true } : undefined;
     }
@@ -2144,6 +2034,7 @@ export default function (pi: ExtensionAPI) {
       question: Type.String({ description: "A specific question about earlier in this conversation: an output, source of a finding, reason for a decision, or evidence behind notes that conflict with new observations." }),
     }),
     async execute(toolCallId, params, signal, _onUpdate, ctx) {
+      const cfg = sessionPreferences(pi.getSettings(), ctx.sessionManager.getBranch());
       if (cfg.lookupMaxCalls > 0 && consecutiveLookups(ctx, toolCallId) >= cfg.lookupMaxCalls) {
         return {
           content: [{ type: "text", text: `context_lookup consecutive-call limit reached (${cfg.lookupMaxCalls}).` }],
@@ -2157,7 +2048,7 @@ export default function (pi: ExtensionAPI) {
       }
       model = model ?? ctx.model;
       if (!model) {
-        return { content: [{ type: "text", text: "context_lookup needs a model (session model or MECH_COMPACT_LOOKUP_MODEL)." }], details: undefined };
+        return { content: [{ type: "text", text: "context_lookup needs a model (session model, transparentCompact.lookupModel, or MECH_COMPACT_LOOKUP_MODEL)." }], details: undefined };
       }
 
       try {
@@ -2165,7 +2056,7 @@ export default function (pi: ExtensionAPI) {
         const transcript = sessionTranscript(ctx);
         if (transcript.index.length === 0)
           return { content: [{ type: "text", text: "No entries found on the session branch." }], details: undefined };
-        const answer = await runLookupSubagent({ question: params.question, transcripts: [transcript], model, registry: ctx.modelRegistry, signal });
+        const answer = await runLookupSubagent({ question: params.question, transcripts: [transcript], model, registry: ctx.modelRegistry, lookupTurns: cfg.lookupTurns, signal });
         return { content: [{ type: "text", text: answer }], details: undefined };
       } catch (err) {
         return { content: [{ type: "text", text: `context_lookup failed: ${errMsg(err)}` }], details: undefined };

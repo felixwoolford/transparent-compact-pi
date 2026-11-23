@@ -60,9 +60,9 @@ Each selection covers a user message and all following activity up to the next u
 
 Navigate with **↑/↓**; use **←/→** to collapse or expand details. Press **Space** to prune a turn or restore it to PROSE, or **f** to cycle through all four modes. Press **Enter** to review changes, then **Enter** again to save; **Esc** goes back or cancels. The editor shows an estimated context size as you choose.
 
-You can restore filtered turns later. Choices persist in the current session branch through later verbatim compactions and reloads. Turns overlapping Pi's retained recent history are locked until they can be filtered as a whole; individual content inside an inherited summary cannot be selected.
+You can restore filtered turns later. Choices persist in the current session branch through later verbatim compactions and reloads. Turns overlapping Pi's retained recent history are locked until they can be filtered as a whole.
 
-PROSE+TOOLS and FULL can use substantial context. Oversized selections are rejected, and if later context growth or a model change makes them too large, use `/filter-turns` to downgrade them. FULL includes only what was recorded; provider and model limitations can still affect thinking and images.
+PROSE+TOOLS and FULL can use substantial context. FULL includes only what was recorded; provider and model limitations can still affect thinking and images.
 
 ### Manual context editing and caching
 Manual context edits typically reduce prompt-cache reuse for the next model request, so frequent edits of the retained reads or turn filters are discouraged, and the best time to adjust them is just after compaction, before the next request.
@@ -73,14 +73,15 @@ Treat filtering/pruning/read-retention as useful tools when the situation calls 
 ### Flag an aside
 
 ```text
-/filter-later <message>  # send a turn and flag it for filtering
+/filter-later <message>  # send a turn and flag it for pruning
 /fl <message>            # short alias
-/filter-auto             # show automatic filtering policy
-/filter-auto on          # apply flags during automatic compaction
-/filter-auto off         # stop automatically applying new flags
 ```
 
-A flagged turn remains in context until it is eligible for filtering. It is preselected for pruning in the editor, where you can keep or later restore it. Automatic application of flags is **off** by default. `/fl` is a normal conversation turn, not an isolated aside.
+Flagged turns are automatically pruned during manual or automatic verbatim compaction once they are fully outside the retained recent history. Until then, they remain in context and are locked in the filtering editor.
+
+Use `/filter-turns` to keep or restore a flagged turn. Manually restored turns stay restored.
+
+`/fl` sends a normal conversation turn, not an isolated aside.
 
 ## Retain reads
 
@@ -90,7 +91,7 @@ Consecutive partial reads of the same file with connected ranges form one select
 
 Retained outputs are historical snapshots of the read tool output, not current file contents. 
 
-### Automatic file retention
+### Automatic read retention
 
 Nothing is retained automatically, but files can be declared for retention in `AGENTS.md` or `CLAUDE.md` like so:
 
@@ -103,91 +104,105 @@ latest: docs/WORKING-NOTES.md
 
 Use one literal path per line, relative to the instruction file. Plain paths default to FIRST; `latest:` selects the latest read. These declarations do not read files themselves. Manual choices override the defaults.
 
-## Control compaction
 
-### Export the checkpoint
+## Settings menu and configuration
 
-Use `/export-checkpoint [path]` to save the current checkpoint as plain text. Without a path, it writes `pi-checkpoint-<session-id>.txt` in the working directory; quote paths containing spaces.
+Optionally, open `/compact-settings` while the agent is idle to configure compaction, checkpoint size limits, lookup models and recovery.
 
-This exports the saved text, including confirmed filtering and read-retention edits, without rebuilding or changing context. Recent messages and separately reinserted PROSE+TOOLS/FULL messages are not included.
+Use **↑/↓** to navigate and **Space** or **e** to edit. Press **d** to restore a setting's built-in default. A `*` marks pending edits.
 
-### Choose the method
+Press **Enter** to review, then choose where to apply your changes:
 
-```text
-/compaction-method           # show current method
-/compaction-method verbatim  # extension's compaction (default)
-/compaction-method summary   # Pi's built-in summary compaction
-```
+- **Session:** use them in the current session branch.
+- **Project:** also save defaults in `.pi/settings.json`.
+- **Global:** also save defaults in `~/.pi/agent/settings.json`.
 
-The selection applies to manual and automatic compaction, including overflow recovery, and persists in the session branch. New sessions default to verbatim. Manual filtering requires verbatim mode.
+Press **Enter** again to confirm, or **Esc** to go back or cancel. Session choices survive compaction and resume.
 
-### Set the size cap
+### Compaction method
 
-By default, the extension warns before trimming a checkpoint that exceeds an estimated **25% of the model's context window**. The interactive prompt lets you apply trimming, disable the cap for the session, change the budget, or cancel compaction. Capping works by progressively reducing the size of tool stubs and then as a last resort truncating assistant prose and finally truncating user prose. With normal use, this shouldn't occur until over a dozen compactions.
-If you regularly reach the cap, consider starting a new session or using a different compaction method that is more suited to your workflow.
+**Verbatim** is the default and enables transparent-compact's compaction and context pruning.
 
+**Summary** uses Pi's original model-generated compaction instead, effectively disabling transparent-compact's compaction and pruning features. Use this if you just want to use model summary with the `context_lookup` tool. Note that the agent may use the tool less effectively in this mode.
 
-```text
-/cap-compaction               # show mode and budget
-/cap-compaction warn          # prompt before trimming (default)
-/cap-compaction on            # trim without prompting
-/cap-compaction off           # disable cap-based trimming
-/cap-compaction warn 20000t   # estimated token budget
-/cap-compaction warn 25%      # percentage of model context window
-/cap-compaction on 80000c     # character budget
-/cap-compaction 40000c        # change budget without changing mode
-```
+### Checkpoint size cap
 
-Mode and budget persist in the session branch; changing one leaves the other unchanged. They apply only to verbatim compaction. The cap estimates tokens at four characters each and is not a limit on the whole model context. Some content, including retained reads, is not trimmed. Disabling the cap may leave too much context for the model.
+By default, the extension warns before trimming a checkpoint that exceeds an estimated **25% of the model's context window**.
 
-For unattended use, choose `on` to avoid interactive prompts. Without an interactive UI, `warn` emits a warning and applies the cap. If the model's context window is unavailable, use a fixed token or character budget, or turn the cap off.
+Choose a cap mode:
 
-## Configuration
+- **warn:** ask before trimming.
+- **on:** trim without prompting.
+- **off:** disable cap-based trimming.
 
-No configuration file is needed. Set these environment variables before starting Pi:
+And enter a budget such as `25%`, `20000t` for estimated tokens, or `80000c` for characters.
 
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `MECH_COMPACT_MAX_SUMMARY_PERCENT` | `25` | Initial cap as a percentage of the model's context window (greater than 0, up to 100). |
-| `MECH_COMPACT_MAX_SUMMARY_CHARS` | Unset | Initial fixed character budget; overrides the percentage. |
-| `MECH_COMPACT_LOOKUP_MODEL` | Session model | Lookup model as `provider/modelId`; it must be available in Pi and support tool calls. An unresolved model falls back to the session model. |
-| `MECH_COMPACT_LOOKUP_TURNS` | `25` | Maximum substantive search turns per lookup. |
-| `MECH_COMPACT_LOOKUP_MAX_CALLS` | `3` | Maximum consecutive lookup attempts; `0` means unlimited. |
-| `MECH_COMPACT_LOOKUP_SESSION_FILE` | Unset | Absolute path to a full session JSONL to search instead of the current branch, for harnesses using pruned forks. Leave unset for ordinary use. |
-| `MECH_COMPACT_MAIN_AGENT_LOOKUP` | Unset | `1` opts into direct recovery; `0` overrides the file setting for sessions without a recorded choice. |
+Trimming progressively reduces tool stubs before truncating assistant prose and, finally, user prose. Some content, including retained reads, is not trimmed. The cap applies only to verbatim checkpoints, not the whole model context; disabling it can leave too much context for the model.
 
-For example:
+For unattended use, choose **on**. Without an interactive UI, **warn** emits a warning and applies the cap.
 
-```bash
-MECH_COMPACT_MAX_SUMMARY_PERCENT=30 pi
-MECH_COMPACT_LOOKUP_MODEL=provider/modelId pi
-```
+### Lookup and recovery
 
-A session setting from `/cap-compaction` takes precedence over the environment defaults. Restart Pi after changing its launching environment; `/reload` cannot change inherited environment variables.
+By default, a subagent searches recorded history using the session model. The **Lookup model** picker offers Pi's scoped models—or all available models if no scope is configured. Search by model ID, provider or name, or choose **Use session model**.
 
-### Optional direct recovery
+**Lookup search turns** limits each search. **Consecutive lookups** limits consecutive retrieval attempts; `0` means unlimited.
 
-Subagent lookup is the default. To let the main agent search and read history directly instead, add this to Pi's `~/.pi/agent/settings.json` or trusted project `.pi/settings.json`:
+**Direct recovery is experimental.** It lets the main agent search and read history itself, avoiding a separate model call but putting retrieved pages into the main context. The lookup-model and subagent search limits do not apply.
+
+Choose recovery mode before the first compaction. Once direct recovery is enabled, or the session has compacted, the menu can only save recovery-mode defaults for new sessions.
+
+### Settings files
+
+If you save globally or locally the settings save to Pi's `~/.pi/agent/settings.json` or `.pi/settings.json`, e.g.:
 
 ```json
 {
   "transparentCompact": {
-    "mainAgentLookup": true
+    "maxSummaryPercent": 30,
+    "lookupMaxCalls": 5
   }
 }
 ```
 
-Alternatively, launch with `MECH_COMPACT_MAIN_AGENT_LOOKUP=1 pi`. The environment variable overrides the file setting. Run `/reload` after editing settings.
+| Key | Default | Values or purpose |
+| --- | --- | --- |
+| `compactionMethod` | `"verbatim"` | `"verbatim"` or `"summary"` |
+| `capMode` | `"warn"` | `"warn"`, `"on"` or `"off"` |
+| `maxSummaryPercent` | `25` | Cap as a percentage of the model's context window |
+| `maxSummaryChars` | Unset | Fixed character cap; takes precedence over the percentage |
+| `lookupModel` | Session model | `provider/modelId`; must support tool calls |
+| `lookupTurns` | `25` | Maximum substantive search turns per lookup |
+| `lookupMaxCalls` | `3` | Maximum consecutive lookup attempts; `0` means unlimited |
+| `mainAgentLookup` | `false` | `true` enables experimental direct recovery |
 
-Opt-in requires a session with **no existing compactions**. Once enabled, the choice persists through compaction and resume; changing configuration does not switch that session back. Forks inherit the choice when their copied history includes it. Start another session to use a different mode.
+Project settings override global settings. Environment overrides take precedence over files; recorded session choices take precedence over both.
 
-Direct recovery exposes listing, search, and entry-reading tools instead of `context_lookup`. It avoids a separate model call but puts retrieved pages into the main context. The subagent model and search-turn/call budgets do not apply to direct recovery.
-This is a second-class operational mode and has not been tested in practice as much as the subagent lookup.
+### Environment overrides
 
-### Local inference
+For individual launches or automation:
+
+| Variable | Corresponding setting |
+| --- | --- |
+| `MECH_COMPACT_MAX_SUMMARY_PERCENT` | `maxSummaryPercent` |
+| `MECH_COMPACT_MAX_SUMMARY_CHARS` | `maxSummaryChars` |
+| `MECH_COMPACT_LOOKUP_MODEL` | `lookupModel` |
+| `MECH_COMPACT_LOOKUP_TURNS` | `lookupTurns` |
+| `MECH_COMPACT_LOOKUP_MAX_CALLS` | `lookupMaxCalls` |
+| `MECH_COMPACT_MAIN_AGENT_LOOKUP` | `mainAgentLookup`: `1` enables, `0` disables |
+
+`MECH_COMPACT_LOOKUP_SESSION_FILE` optionally supplies an absolute session JSONL path for history retrieval instead of the current branch. Leave it unset for ordinary use.
+
+## Other stuff
+### Export the checkpoint
+
+For debugging, use `/export-checkpoint [path]` to save the current checkpoint as plain text. Without a path, it writes `pi-checkpoint-<session-id>.txt` in the working directory; quote paths containing spaces.
+
+This exports the saved text, including confirmed filtering and read-retention edits, without rebuilding or changing context. Recent messages and separately reinserted PROSE+TOOLS/FULL messages are not included.
+
+### Local inference suggestion
 
 Lookups using the session model can disrupt the main session's prompt cache. For a single-slot llama.cpp server (`-np 1`), enable `--cache-ram <MiB>` with enough host memory for the main session state. On other engines, use prefix caching, KV offloading, or sufficient parallel capacity to keep both sessions resident.
 
-## License
+### License
 
 [MIT](LICENSE).

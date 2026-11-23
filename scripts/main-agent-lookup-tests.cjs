@@ -23,7 +23,8 @@ async function main() {
   const { loadExtensions } = await import(pathToFileURL(path.join(piRoot, "dist/core/extensions/loader.js")).href);
   const { recoveryText } = await jiti.import(path.join(root, "extensions/lib/main-agent-lookup.ts"));
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "main-agent-lookup-"));
-  const envKeys = ["MECH_COMPACT_MAIN_AGENT_LOOKUP", "MECH_COMPACT_LOOKUP_SESSION_FILE", "MECH_COMPACT_MAX_SUMMARY_CHARS"];
+  const envKeys = ["MECH_COMPACT_MAIN_AGENT_LOOKUP", "MECH_COMPACT_LOOKUP_SESSION_FILE", "MECH_COMPACT_MAX_SUMMARY_CHARS",
+    "MECH_COMPACT_MAX_SUMMARY_PERCENT", "MECH_COMPACT_LOOKUP_MODEL", "MECH_COMPACT_LOOKUP_TURNS", "MECH_COMPACT_LOOKUP_MAX_CALLS"];
   const saved = envKeys.map((key) => process.env[key]);
   envKeys.forEach((key) => delete process.env[key]);
   const model = { id: "stub-model", provider: "stub", api: "test", name: "Test model", baseUrl: "http://127.0.0.1:1/never",
@@ -132,6 +133,28 @@ async function main() {
       assert.equal(normal.nestedCalls(), 0);
     } finally { normal.session.dispose(); }
 
+    console.log("== Settings menu enables direct recovery through a session preference and reload ==");
+    const menuManager = SessionManager.inMemory(cwd);
+    const menuRun = await boot(menuManager);
+    let requestedReload = false;
+    try {
+      await menuRun.session.bindExtensions({ mode: "tui", commandContextActions: { reload: async () => { requestedReload = true; } },
+        uiContext: { notify: () => {}, custom: async (build) => {
+          let result;
+          const kb = { matches: (data, action) => data === ({ "tui.select.confirm": "\r", "tui.select.cancel": "\x1b", "tui.select.up": "\x1b[A", "tui.select.down": "\x1b[B" })[action] };
+          const component = build({ terminal: { rows: 24 }, requestRender() {} }, { fg: (_color, s) => s, bg: (_color, s) => s, bold: (s) => s }, kb,
+            (value) => { result = value; });
+          for (const key of ["\x1b[F", " ", "\r", "\r"]) { component.render(100); component.handleInput(key); }
+          component.dispose(); return result;
+        } } });
+      await menuRun.session.prompt("/compact-settings");
+      assert(requestedReload);
+      assert(menuManager.getBranch().some((entry) => entry.customType === "transparent-compact:settings" && entry.data.mainAgentLookup === true));
+      assert.equal(menuRun.nestedCalls(), 0);
+    } finally { menuRun.session.dispose(); }
+    const menuReloaded = await boot(menuManager);
+    try { assertDirect(menuReloaded); } finally { menuReloaded.session.dispose(); }
+
     // File settings use Pi's trusted, merged configuration rather than a second config parser.
     const configDir = path.join(cwd, "config");
     fs.mkdirSync(path.join(configDir, ".pi"), { recursive: true });
@@ -201,7 +224,9 @@ async function main() {
     const sessionFile = path.join(cwd, "saved-session.jsonl");
     fs.writeFileSync(sessionFile, [manager.getHeader(), ...manager.getEntries()].map((e) => JSON.stringify(e)).join("\n") + "\n");
     manager = SessionManager.open(sessionFile, cwd);
-    const resumed = await boot(manager);
+    process.env.MECH_COMPACT_MAIN_AGENT_LOOKUP = "0";
+    const resumed = await boot(manager, { transparentCompact: { mainAgentLookup: false } });
+    delete process.env.MECH_COMPACT_MAIN_AGENT_LOOKUP;
     try {
       assertDirect(resumed);
       await resumed.session.prompt("Continue resumed session.");
@@ -234,7 +259,7 @@ async function main() {
     }
 
     process.env.MECH_COMPACT_MAIN_AGENT_LOOKUP = "1";
-    const envRun = await boot(SessionManager.inMemory(cwd));
+    const envRun = await boot(SessionManager.inMemory(cwd), { transparentCompact: { mainAgentLookup: false } });
     try { assertDirect(envRun); } finally { envRun.session.dispose(); }
     process.env.MECH_COMPACT_MAIN_AGENT_LOOKUP = "0";
     const envOff = await boot(SessionManager.inMemory(cwd), optIn);

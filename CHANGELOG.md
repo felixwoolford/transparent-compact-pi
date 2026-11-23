@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.13.2
+
+- Add `/compact-settings` with session/project/global saves and a scoped-model
+  picker, replacing `/compaction-method` and `/cap-compaction`.
+- Support Pi settings-file defaults alongside environment overrides.
+- Fixed `/fl` turns, the now automatically prune during both manual and automatic 
+  verbatim compaction once outside the retained tail. remove `/filter-auto`.
+
 ## 0.13.0
 
 - Add `context_expand` to recover the original call and matched result behind a

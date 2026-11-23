@@ -68,7 +68,7 @@ async function main() {
     assert.equal(loaded.extensions.length, 1);
     const extension = loaded.extensions[0];
     assert.deepEqual([...extension.tools.keys()], ["context_lookup", "context_expand"], "lookup and focused expansion are registered for the main agent");
-    assert.deepEqual([...extension.commands.keys()], ["compaction-method", "cap-compaction", "filter-later", "fl", "filter-auto", "compact-filtered", "filter-turns", "retain-reads", "export-checkpoint"], "compaction policy, context editing and checkpoint export commands are registered");
+    assert.deepEqual([...extension.commands.keys()], ["compact-settings", "filter-later", "fl", "compact-filtered", "filter-turns", "retain-reads", "export-checkpoint"], "compaction policy, context editing and checkpoint export commands are registered");
     const lookup = extension.tools.get("context_lookup");
     assert.deepEqual(Object.keys(lookup.definition.parameters.properties), ["question"], "lookup accepts only question");
     const skills = loadSkills({ cwd: root, agentDir: temp, skillPaths, includeDefaults: false });
@@ -76,7 +76,7 @@ async function main() {
     assert.equal(skills.skills[0].name, "context-retrieval");
     assert.deepEqual(skills.diagnostics, []);
     assert.deepEqual([...packedPaths].filter((p) => p.startsWith("extensions/")).sort(),
-      ['extensions/index.ts', 'extensions/lib/checkpoint-cap.ts',
+      ['extensions/index.ts', 'extensions/lib/checkpoint-cap.ts', 'extensions/lib/config.ts',
         'extensions/lib/tool-stubs/display.mjs', 'extensions/lib/tool-stubs/inputs.mjs',
         'extensions/lib/tool-stubs/locations.mjs', 'extensions/lib/tool-stubs/parse.mjs',
         'extensions/lib/tool-stubs/renderer.mjs', 'extensions/lib/tool-stubs/shell.mjs',
@@ -84,7 +84,7 @@ async function main() {
           .map(file => `extensions/lib/tool-stubs/parser/${file}`),
         'extensions/lib/turn-context.ts', 'extensions/lib/turn-filter.ts',
         'extensions/lib/read-retention.ts', 'extensions/lib/read-retention-ui.ts',
-        'extensions/lib/main-agent-lookup.ts', 'extensions/lib/main-agent-retrieval.md',
+        'extensions/lib/main-agent-lookup.ts', 'extensions/lib/main-agent-retrieval.md', 'extensions/lib/settings-menu.ts',
         'extensions/lib/context-expansion.ts'].sort(), 'package ships the live renderer, parser, source, and licenses');
     assert.deepEqual([...packedPaths].filter(p => /^(?:source|experiments|scripts|stub-overhaul|node_modules)\//.test(p) || p === 'test.cjs'), [],
       'package excludes development harnesses, tests, dependencies, and obsolete source');
@@ -102,6 +102,7 @@ async function main() {
     assert(!fs.existsSync(path.join(isolated, 'node_modules')), 'only packed files are needed');
     const isolatedLoad = await loadExtensions([path.join(isolated, 'extensions/index.ts')], isolated);
     assert.deepEqual(isolatedLoad.errors, []);
+    isolatedLoad.runtime.getSettings = () => ({});
     const message = (id, value, parentId = null) => ({ type: 'message', id, parentId, timestamp: '2026-01-01T00:00:00.000Z', message: { timestamp: 0, ...value } });
     const branch = [message('u', { role: 'user', content: 'Inspect files' }),
       message('a', { role: 'assistant', content: [{ type: 'toolCall', id: 'bash', name: 'bash', arguments: {

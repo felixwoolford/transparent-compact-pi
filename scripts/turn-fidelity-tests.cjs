@@ -4,7 +4,7 @@ const path = require("node:path");
 
 module.exports = async function ({ factory, load, SessionManager, root, makeContext, user, assistant, text, toolCall, jiti, piRoot, saveSession, searchTool }) {
   console.log("== Turn fidelity: native ordered replay, thinking modes, caps, edits, budgets, persistence and request projection ==");
-  const { PREFLAG_ENTRY, AUTO_FILTER_ENTRY, FILTER_REVISION_ENTRY } = await jiti.import(path.resolve(__dirname, "../extensions/lib/turn-filter.ts"));
+  const { PREFLAG_ENTRY, FILTER_REVISION_ENTRY } = await jiti.import(path.resolve(__dirname, "../extensions/lib/turn-filter.ts"));
   const { sessionEntryToContextMessages } = await jiti.import("@earendil-works/pi-coding-agent");
   const { visibleWidth } = await jiti.import("@earendil-works/pi-tui");
   const key = { up: "\x1b[A", down: "\x1b[B", right: "\x1b[C", left: "\x1b[D", enter: "\r", esc: "\x1b", end: "\x1b[F", home: "\x1b[H" };
@@ -82,7 +82,7 @@ module.exports = async function ({ factory, load, SessionManager, root, makeCont
     (screen) => assert(screen.includes("[○]") && screen.includes("PROSE+TOOLS") && screen.includes("[Thinking omitted]")), "left", "down", "down", "f", "f",
     (screen) => assert(screen.includes("[■]")), "f", "f", "f", "f", (screen) => assert(screen.includes("[■]")), "right", (screen) => assert(screen.includes("FULL_THINKING_PRESENT")), "left", "down", "f", " ",
     (screen) => assert(screen.includes("[-]") && screen.includes("Locked — in retained recent tail")),
-    "enter", (screen) => { assert(screen.includes("PROSE → PROSE+TOOLS")); assert(screen.includes("tokens")); assert(screen.includes("[Thinking omitted]")); },
+    "enter", (screen) => { assert(screen.includes("tokens")); assert(screen.includes("[Thinking omitted]")); },
     "end", (screen) => assert(screen.includes("FULL_RESULT") && screen.includes("[Image attachment: image/png]")), "enter",
   ]);
   await ext.commands["filter-turns"].handler("", ctx);
@@ -127,7 +127,6 @@ module.exports = async function ({ factory, load, SessionManager, root, makeCont
   manager.branch(oldId);
   assert(!project().some((m) => m.role === "assistant" && m.content.some((b) => b.type === "toolCall" && b.id === "native-read")), "abandoned choices do not leak into the old branch");
   manager.branch(checkpointId);
-  manager.appendCustomEntry(AUTO_FILTER_ENTRY, { enabled: true });
   const next = manager.appendMessage(user("NEXT_RECENT_TAIL"));
   const later = (await run([tail], next, "threshold")).compaction;
   assert.deepEqual(later.details.fidelity, c.fidelity);

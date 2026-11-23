@@ -4,7 +4,7 @@ const path = require("node:path");
 
 module.exports = async function ({ factory, load, SessionManager, root, makeContext, user, assistant, text, toolCall, jiti, piRoot, saveSession, searchTool }) {
   console.log("== Compact-filtered: ordinary compaction first, shared editor, no-op fallback and independent cancellation ==");
-  const { FILTER_MARKER, FILTER_EXPLANATION, PREFLAG_ENTRY, FILTER_REVISION_ENTRY, preflaggedTurns, autoFilterEnabled, filterSpans } = await jiti.import(path.resolve(__dirname, "../extensions/lib/turn-filter.ts"));
+  const { FILTER_MARKER, FILTER_EXPLANATION, PREFLAG_ENTRY, FILTER_REVISION_ENTRY, preflaggedTurns, filterSpans } = await jiti.import(path.resolve(__dirname, "../extensions/lib/turn-filter.ts"));
   const { capSpans } = await jiti.import(path.resolve(__dirname, "../extensions/lib/checkpoint-cap.ts"));
   const { visibleWidth } = await jiti.import("@earendil-works/pi-tui");
   const { sessionEntryToContextMessages, buildSessionProjection } = await jiti.import("@earendil-works/pi-coding-agent");
@@ -228,12 +228,36 @@ module.exports = async function ({ factory, load, SessionManager, root, makeCont
   const runAside = (ids, kept, reason = "threshold") => prepare(asideExt, asideCtx, asideManager, ids, kept, reason,
     { read: new Set(["ASIDE.md"]), written: new Set(), edited: new Set() });
   const persistAside = (c) => asideManager.appendCompaction(c.summary, c.firstKeptEntryId, c.tokensBefore, c.details, true);
-  const defaultOff = (await runAside([asideUser, asideAgent, asideRead], asideTail)).compaction;
-  assert(defaultOff.summary.includes("PREFLAGGED_AGENT") && !defaultOff.details.filteredTurnIds);
+  // DEPRECATED autoFilter compatibility fixtures. TODO(1.x.x): remove these
+  // three legacy settings/history writes. They cannot disable an explicit /fl request.
+  asideRef.settings = { transparentCompact: { autoFilter: false } };
+  asideManager.appendCustomEntry("transparent-compact:auto-filter", { enabled: false });
+  asideManager.appendCustomEntry("transparent-compact:settings", { autoFilter: false });
+  for (const reason of ["manual", "threshold", "overflow"]) {
+    const automatic = (await runAside([asideUser, asideAgent, asideRead], asideTail, reason)).compaction;
+    assert.deepEqual(automatic.details.filteredTurnIds, [asideUser], `${reason} prunes eligible pre-flags without an opt-in`);
+    assert(!automatic.summary.includes("PREFLAGGED_AGENT") && !automatic.summary.includes("PREFLAGGED_USER"));
+    assert(automatic.summary.includes("PREFLAGGED_READ_OUTPUT"), "explicitly retained reads survive aside pruning");
+  }
   const policyLeaf = asideManager.getLeafId();
-  for (const value of ["", "invalid", "off"]) await asideExt.commands["filter-auto"].handler(value, asideCtx);
-  assert.equal(asideManager.getLeafId(), policyLeaf);
-  await asideExt.commands["filter-auto"].handler("on", asideCtx); assert(autoFilterEnabled(asideManager.getBranch()));
+  for (const reason of ["manual", "threshold", "overflow"]) {
+    const locked = SessionManager.inMemory(cwd), lockedExt = load(factory, { current: locked });
+    locked.appendCustomEntry("transparent-compact:cap-compaction", { mode: "off", budget: { unit: "chars", value: 80000 } });
+    const earlier = locked.appendMessage(user("EARLIER_TASK"));
+    locked.appendCustomEntry(PREFLAG_ENTRY, { timestamp: 123 });
+    const flagged = locked.appendMessage(user("LOCKED_ASIDE_CONTENT", 123));
+    const agent = locked.appendMessage(assistant([text("LOCKED_ASIDE_RESPONSE")]));
+    const recent = locked.appendMessage(user("RECENT_BOUNDARY"));
+    const lockedCtx = { ...asideCtx, sessionManager: locked, ui: { notify() {}, custom: noPicker } };
+    const first = (await prepare(lockedExt, lockedCtx, locked, [earlier], flagged, reason)).compaction;
+    assert(!first.details.filteredTurnIds, `${reason} leaves a wholly retained aside pending`);
+    locked.appendCompaction(first.summary, flagged, first.tokensBefore, first.details, true);
+    assert(JSON.stringify(locked.buildSessionContext()).includes("LOCKED_ASIDE_CONTENT"));
+    const next = (await prepare(lockedExt, lockedCtx, locked, [flagged, agent], recent, reason)).compaction;
+    assert.deepEqual(next.details.filteredTurnIds, [flagged], `${reason} prunes the aside once the boundary advances`);
+    assert(!next.summary.includes("LOCKED_ASIDE_CONTENT") && !next.summary.includes("LOCKED_ASIDE_RESPONSE"));
+    assert.equal(locked.getEntry(flagged).message.content, "LOCKED_ASIDE_CONTENT", "raw history remains recoverable");
+  }
   const splitAside = (await runAside([asideUser], asideAgent)).compaction, splitAsideId = persistAside(splitAside);
   assert(!splitAside.details.filteredTurnIds, "never strip half a turn from the recent tail");
   await edit([" ", "enter", "enter"], asideCtx, asideExt);
@@ -241,7 +265,7 @@ module.exports = async function ({ factory, load, SessionManager, root, makeCont
   assert.equal(asideManager.getEntry(splitAsideId).firstKeptEntryId, asideAgent);
   asideManager.branch(splitAsideId);
   asideCtx.ui.custom = noPicker;
-  for (const reason of ["threshold", "overflow"]) {
+  for (const reason of ["manual", "threshold", "overflow"]) {
     const automatic = (await runAside([asideAgent, asideRead], asideTail, reason)).compaction;
     assert.deepEqual(automatic.details.filteredTurnIds, [asideUser]);
     assert(!automatic.summary.includes("PREFLAGGED_AGENT") && !automatic.summary.includes("PREFLAGGED_USER"));
@@ -258,21 +282,22 @@ module.exports = async function ({ factory, load, SessionManager, root, makeCont
   const prunedAsideHead = asideManager.getLeafId();
   assert.deepEqual(asideManager.getBranch().at(-1).data.filteredTurnIds, [asideUser]);
   assert.deepEqual(asideManager.getBranch().at(-1).data.keptAsideTurnIds, []);
-  await asideExt.commands["filter-auto"].handler("off", asideCtx);
   const secondTail = appendUser("SECOND_TAIL");
-  const disabled = (await runAside([asideTail], secondTail)).compaction; persistAside(disabled);
-  assert.deepEqual(disabled.details.filteredTurnIds, [asideUser], "disabling auto does not restore existing pruning");
+  const repeated = (await runAside([asideTail], secondTail, "manual")).compaction; persistAside(repeated);
+  assert.deepEqual(repeated.details.filteredTurnIds, [asideUser], "subsequent manual compaction preserves existing pruning");
   await edit([" ", "enter", "enter"], asideCtx, asideExt);
-  await asideExt.commands["filter-auto"].handler("on", asideCtx);
   const thirdTail = appendUser("THIRD_TAIL");
   const restored = (await runAside([secondTail], thirdTail, "overflow")).compaction; persistAside(restored);
   assert(!restored.details.filteredTurnIds && restored.summary.includes("PREFLAGGED_AGENT"));
   assert.deepEqual(restored.details.keptAsideTurnIds, [asideUser]);
   const asideFile = path.join(root, "aside-resume.jsonl"); saveSession(asideManager, asideFile);
-  const reopenedAside = SessionManager.open(asideFile); assert(autoFilterEnabled(reopenedAside.getBranch()));
+  const reopenedAside = SessionManager.open(asideFile);
   assert.deepEqual(reopenedAside.getBranch().at(-1).details.keptAsideTurnIds, [asideUser]);
-  asideManager.branch(prunedAsideHead); assert(autoFilterEnabled(asideManager.getBranch()));
-  asideManager.branch(policyLeaf); assert(!autoFilterEnabled(asideManager.getBranch()));
+  asideManager.branch(prunedAsideHead);
+  assert.deepEqual(asideManager.getBranch().at(-1).data.filteredTurnIds, [asideUser]);
+  asideManager.branch(policyLeaf);
+  assert.deepEqual((await runAside([asideUser, asideAgent, asideRead], asideTail, "manual")).compaction.details.filteredTurnIds, [asideUser],
+    "branch navigation never restores the removed opt-out policy");
   asideRef.sendUserMessage = (content) => asideExt.handlers.input({ text: content, source: "extension" }, asideCtx);
   await asideExt.commands.fl.handler("UNSENT_ASIDE", asideCtx);
   assert(!preflaggedTurns(asideManager.getBranch()).has(appendUser("AFTER_FAILED_ASIDE")));
@@ -362,7 +387,7 @@ module.exports = async function ({ factory, load, SessionManager, root, makeCont
     for (let i = 0; i < 24; i++) runtimeManager.appendMessage(assistant([text(`KEEP_AFTER_ASIDE_${i} ` + "Useful retained context. ".repeat(200))]));
     const lastAssistant = session.agent.state.messages.findLast((m) => m.role === "assistant");
     lastAssistant.usage = { ...lastAssistant.usage, input: 90000, totalTokens: 90000 }; lastAssistant.timestamp = Date.now() + 1000;
-    await session.prompt("/filter-auto on"); session.setAutoCompactionEnabled(true); runtimeUi.custom = noPicker;
+    session.setAutoCompactionEnabled(true); runtimeUi.custom = noPicker;
     await session.prompt("CONTINUE_AFTER_AUTO_FILTERING");
     const autoCheckpoint = runtimeManager.getBranch().findLast((e) => e.type === "compaction");
     assert.deepEqual(autoCheckpoint.details.filteredTurnIds, [asideId, runtimeAsideId]);
