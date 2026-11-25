@@ -13,6 +13,9 @@ export interface TurnSlot { turnId: string; mode: Fidelity; offset: number; mark
 export const MODE_LABELS: Record<TurnMode, string> = { pruned: "PRUNED", prose: "PROSE", tools: "PROSE+TOOLS", full: "FULL" };
 export const MODE_SYMBOLS: Record<TurnMode, string> = { pruned: "X", prose: " ", tools: "○", full: "■" };
 export const FIDELITY_EXPLANATION = "Selected PROSE+TOOLS/FULL turns are inserted as original context messages at their labelled positions, replacing their compacted copies. PROSE+TOOLS replaces recorded thinking blocks with [Thinking omitted]; FULL retains all recorded thinking. They are not shortened by the prose cap. Provider/model compatibility transformations still apply. Historical content and thinking are not verification of current facts.";
+export const RECOVERY_HISTORY_NOTE = "Compaction hides earlier details from your current view. The original conversation history, including recorded tool outputs and your reasoning, is preserved in the session and can be retrieved.";
+export const CHECKPOINT_EXPLANATION = `**Compacted conversation follows.** The earlier part of this conversation has been compacted into the checkpoint below. This is not the full transcript. ${RECOVERY_HISTORY_NOTE}`;
+export const CHECKPOINT_MESSAGE = "transparent-compact:checkpoint";
 /** Raw user boundaries define whole turns, independent of context edits. */
 export function turnOwners(entries: SessionEntry[]): Map<string, string | null> {
   let owner: string | null = null;
@@ -140,6 +143,32 @@ export function expandCheckpoint(message: Extract<AgentMessage, { role: "compact
   return output;
 }
 
+/** Frame TC's active checkpoint for the model only. Pi converts custom
+ * messages to user messages without adding its compaction summary wrapper.
+ * A full-fidelity checkpoint may straddle native turns; frame it once.
+ */
+export function frameCheckpoint(messages: AgentMessage[]): AgentMessage[] {
+  const first = messages.findIndex((m) => m.role === "compactionSummary");
+  if (first < 0) return messages;
+  const last = messages.findLastIndex((m) => m.role === "compactionSummary");
+  return messages.map((message, i) => {
+    if (message.role !== "compactionSummary") return message;
+    let content = message.summary;
+    if (i === first) {
+      // Move only the generated second line, never a matching quote in the body.
+      const start = content.indexOf("\n") + 1;
+      const intro = `${CHECKPOINT_EXPLANATION}\n`;
+      if (start > 0 && content.startsWith(intro, start)) {
+        content = `${CHECKPOINT_EXPLANATION}\n\n<compacted-checkpoint>\n${content.slice(0, start)}${content.slice(start + intro.length)}`;
+      } else {
+        content = `<compacted-checkpoint>\n${content}`;
+      }
+    }
+    if (i === last) content += "\n</compacted-checkpoint>";
+    return { role: "custom", customType: CHECKPOINT_MESSAGE, content, display: false, timestamp: message.timestamp };
+  });
+}
+
 export interface NoticeTokens { pruning: number; revision: number; fidelity: number }
 export interface ContextEstimate {
   tokens: number;
@@ -190,7 +219,7 @@ export function checkpointContextMessages(summary: string, slots: TurnSlot[], fi
 
 export function checkCheckpointBudget(summary: string, slots: TurnSlot[], fidelity: TurnFidelities,
   entries: SessionEntry[], boundary: string, ctx: ExtensionContext): void {
-  if (Object.keys(fidelity).length) checkContextBudget(checkpointContextMessages(summary, slots, fidelity, entries, boundary), ctx, true);
+  if (Object.keys(fidelity).length) checkContextBudget(frameCheckpoint(checkpointContextMessages(summary, slots, fidelity, entries, boundary)), ctx, true);
 }
 
 /** UI-only, complete text/arguments/output preview; image bytes are identified,

@@ -229,7 +229,15 @@ module.exports = async function ({ factory, load, SessionManager, root, makeCont
     assert(request.includes("OUTPUT_END") && request.includes("ARGUMENT_END") && request.includes("FULL_THINKING_PRESENT"));
     assert(!request.includes("TOOLS_THINKING_SECRET") && request.includes("[Thinking omitted]"));
     assert(request.includes(image.data));
-    assert.equal(requests.at(-1).messages.filter((m) => m.role === "toolResult" && m.toolCallId === "native-read").length, 1);
+    const sent = requests.at(-1).messages;
+    const open = sent.findIndex((m) => m.role === "user" && m.content[0]?.text?.includes("<compacted-checkpoint>\n"));
+    const close = sent.findIndex((m) => m.role === "user" && m.content[0]?.text?.endsWith("\n</compacted-checkpoint>"));
+    const read = sent.findIndex((m) => m.role === "toolResult" && m.toolCallId === "native-read");
+    const current = sent.findIndex((m) => m.role === "user" && JSON.stringify(m.content).includes("CONTINUE_FIDELITY"));
+    assert(open >= 0 && open < read && read < close && close < current, "one checkpoint encloses the native replay, not the current prompt");
+    assert.equal(request.split("<compacted-checkpoint>").length - 1, 1);
+    assert.equal(request.split("</compacted-checkpoint>").length - 1, 1);
+    assert.equal(sent.filter((m) => m.role === "toolResult" && m.toolCallId === "native-read").length, 1);
     const beforeRequests = requests.length;
     await session.prompt("/filter-turns"); // First turn Tools -> Full, no model call.
     assert.equal(requests.length, beforeRequests);

@@ -62,7 +62,8 @@ module.exports = async function ({ factory, load, SessionManager, root, makeCont
     const messages = session.buildSessionContext().messages;
     return extension.handlers.context_with_system({ messages }, { ...ctx, sessionManager: session })?.messages ?? messages;
   };
-  const summary = () => project().filter((m) => m.role === "compactionSummary").map((m) => m.summary).join("\n");
+  const isCheckpoint = (m) => m.role === "custom" && m.customType === "transparent-compact:checkpoint";
+  const summary = () => project().filter(isCheckpoint).map((m) => m.content).join("\n");
   const older = await compact([first, call, read], split, "manual", { read: new Set(["ASIDE.md"]), written: new Set(), edited: new Set() });
   assert(older.summary.includes("LOW_VALUE_STARTUP_OUTPUT"));
   assert(older.details.span.turnIds.every((id) => id === first));
@@ -152,7 +153,7 @@ module.exports = async function ({ factory, load, SessionManager, root, makeCont
   assert.equal(unexpectedPickerCalls, 0, "no picker on failure, cancellation, empty session or session/branch race");
 
   console.log("== Standalone revisions: persistence, cancellation, raw recovery and subsequent compactions ==");
-  const originalTail = project().filter((m) => m.role !== "compactionSummary");
+  const originalTail = project().filter((m) => !isCheckpoint(m));
   for (const actions of [["esc"], [" ", "enter", "esc", "esc"]]) {
     const before = JSON.stringify(manager.getBranch()); await edit(actions); assert.equal(JSON.stringify(manager.getBranch()), before);
   }
@@ -167,7 +168,7 @@ module.exports = async function ({ factory, load, SessionManager, root, makeCont
   const restoredHead = manager.getLeafId();
   assert(summary().includes("LOW_VALUE_STARTUP_OUTPUT") && summary().includes("aside-only.ts"));
   assert(!summary().includes(FILTER_EXPLANATION));
-  assert.deepEqual(project().filter((m) => m.role !== "compactionSummary"), originalTail);
+  assert.deepEqual(project().filter((m) => !isCheckpoint(m)), originalTail);
   const compactions = manager.getBranch().filter((e) => e.type === "compaction").length;
   const beforeNoOp = manager.getLeafId(); await edit(["enter", "enter"]); assert.equal(manager.getLeafId(), beforeNoOp);
   assert.equal(manager.getBranch().filter((e) => e.type === "compaction").length, compactions);
@@ -179,7 +180,7 @@ module.exports = async function ({ factory, load, SessionManager, root, makeCont
   assert(!later.summary.includes("LOW_VALUE_PROSE") && later.summary.includes("LOW_VALUE_STARTUP_OUTPUT"));
   const file = path.join(root, "filtered-session.jsonl"); saveSession(manager, file);
   const reopened = SessionManager.open(file), resumed = load(factory, { current: reopened });
-  assert(project(resumed, reopened).find((m) => m.role === "compactionSummary").summary.includes("LOW_VALUE_STARTUP_OUTPUT"));
+  assert(project(resumed, reopened).find(isCheckpoint).content.includes("LOW_VALUE_STARTUP_OUTPUT"));
   const recovered = await searchTool(resumed, { ...ctx, sessionManager: reopened }, "show_entry", { id: read });
   assert(JSON.stringify(recovered).includes("LOW_VALUE_STARTUP_OUTPUT"));
   manager.branch(older.id); assert(!ext.handlers.before_agent_start({}, ctx).message.content.includes(FILTER_EXPLANATION));

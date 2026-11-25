@@ -2,15 +2,15 @@
 
 Context compaction and pruning for [Pi](https://pi.dev/) that keeps conversation text verbatim instead of replacing it with a model-generated summary or truncation. It removes thinking and most tool output from the active context, while keeping user messages, assistant text, algorithmically compacted tool-call stubs and explicitly selected reads. 
 
-When the agent needs a detail that is no longer in context, it can use retrieval tools to search the recorded session history with a subagent. Compaction itself does not make a model call.
+When the agent needs a detail that is no longer in context, it can use retrieval tools to search the recorded session history with a subagent (no extra extension required). Compaction itself does not make a model call.
 
 The user can also [selectively manipulate which turns to hold in the current context](#filter-turns) in higher or lower fidelity, and [specify file reads to be retained in the context in full](#retain-reads), (e.g. a spec or plan).
 
 This extension is aimed at addressing two main issues that other compaction techniques face, which are especially exacerbated in agents running on lightweight and local LLMs: 
 - Model summaries such as Pi's default method can lead to degradation and confabulation of details that can cause confident blunders.
-- Retrieval-based systems like `pi-vcc` can be effective when the agent knows what to look for, but omitting session structure from the retained context can make the actual use of retrieval less reliable.
+- Mechanical compression (i.e. no model call) + retrieval systems like `pi-vcc` can be effective when the agent knows what to look for, but omitting session structure from the retained context can make the actual use of retrieval less reliable.
 
-`transparent-compact` is also a retrieval-based system, but its design keeps manipulation of conversation text to a minimum and maximises the agent's awareness of its own compacted state, with the aim of avoiding confabulation and encouraging accurate retrieval of historical details. [This study](https://arxiv.org/abs/2610.20116) found that a minimal approach outperformed more complex techniques with lightweight models and was at least as effective with frontier models.
+`transparent-compact` is also a mechanical compression + retrieval system, but its design keeps manipulation of conversation text to a minimum and maximises the agent's awareness of its own compacted state, with the aim of avoiding confabulation and encouraging accurate retrieval of historical details. [This study](https://arxiv.org/abs/2610.20116) found that a minimal approach outperformed more complex techniques with lightweight models and was at least as effective with frontier models.
 
 The verbatim compaction system plays particularly nicely with manual pruning of the context. This allows you to decide which parts of the session remain important to the current work, without having to commit to a particular branching point with /tree or decide at the time of the prompt with something like claude's /btw.
 
@@ -29,7 +29,7 @@ pi install git:github.com/felixwoolford/transparent-compact-pi
 pi install /absolute/path/to/transparent-compact
 ```
 
-Once loaded, the extension uses verbatim compaction by default. Pi's automatic compaction continues to work, using the extension's configured method; to compact manually, enter:
+Once loaded, the extension uses verbatim mechanical compaction by default. Pi's automatic compaction triggering continues to work, using the extension's configured method; to compact manually, enter:
 
 ```text
 /compact

@@ -67,7 +67,9 @@ function checkEnvelope(summary) {
 }
 
 module.exports = async function (h) {
-  const { factory, load, SessionManager, root, compact, makeContext, assistant, text, user, saveSession } = h;
+  const { factory, load, SessionManager, root, compact, makeContext, assistant, text, user, saveSession, jiti } = h;
+  const { convertToLlm } = await jiti.import("@earendil-works/pi-coding-agent");
+  const isRawCheckpoint = (m) => m.role === "compactionSummary";
   console.log("== Persistent envelope: recovery header, boundary, post-tail checklist and deduplication ==");
   const cwd = path.join(root, "reorientation");
   fs.mkdirSync(cwd);
@@ -100,7 +102,8 @@ module.exports = async function (h) {
   assert.equal(start(), undefined, "only one message per compaction on the current branch");
   const input = manager.buildSessionContext().messages;
   const output = project();
-  assert.deepEqual(output, input, "already correctly placed persisted message needs no rewrite");
+  assert.deepEqual(output.filter((_, i) => !isRawCheckpoint(input[i])), input.filter((m) => !isRawCheckpoint(m)),
+    "framing changes only the active checkpoint, not the retained messages");
   const reminder = reminders(output)[0];
   assert.equal(reminders(output).length, 1);
   assert.equal(output.at(-1), reminder);
@@ -109,7 +112,7 @@ module.exports = async function (h) {
   const delta = { role: "system", content: "Late system/tool update", timestamp: 0 };
   const withDelta = [...input, delta];
   const reordered = project(ext, withDelta);
-  assert.deepEqual(reordered.slice(0, -1), [...input.slice(0, -1), delta]);
+  assert.deepEqual(reordered.slice(0, -1), [...output.slice(0, -1), delta]);
   assert.deepEqual(reordered.at(-1), reminder, "first request ends with checklist after all transforms");
   assert.deepEqual(project(ext, reordered), reordered, "projection is idempotent");
   assert.equal(JSON.stringify(manager.getBranch()), before, "request projection never changes stored history");
@@ -175,7 +178,11 @@ module.exports = async function (h) {
   const verbatimLeaf = manager.getLeafId();
   manager.appendCompaction("Builtin model summary", task, 1000);
   assert.equal(start(), undefined);
-  assert.equal(reminders(project()).length, 0, "summary mode does not replay an obsolete managed checklist");
+  const modelSummary = project();
+  assert.equal(reminders(modelSummary).length, 0, "summary mode does not replay an obsolete managed checklist");
+  const native = modelSummary.find(isRawCheckpoint);
+  assert(native, "Pi's own summary retains its native role");
+  assert.match(convertToLlm([native])[0].content[0].text, /<summary>\nBuiltin model summary\n<\/summary>/);
   manager.branch(verbatimLeaf);
   manager.appendCustomEntry("transparent-compact:compaction-method", { method: "summary" });
   assert.equal(reminders(project()).length, 1, "changing only the method setting does not change existing context");
@@ -261,6 +268,10 @@ async function runtimeTests(h) {
         .reduce((n, e) => n + estimateTokens(e.message), 0);
       assert(keptTokens >= 18000 && keptTokens <= 22000, `expected ~20k tokens retained, got ${keptTokens}`);
       const request = requests[startsCompacted ? 0 : 1];
+      const [title, intro, ...body] = c.summary.split("\n");
+      const checkpoint = request.messages.find((m) => m.role === "user" && m.content[0]?.text?.includes(title));
+      assert.equal(checkpoint?.content[0].text, `${intro}\n\n<compacted-checkpoint>\n${[title, ...body].join("\n")}\n</compacted-checkpoint>`,
+        "the model receives the intact checkpoint body with TC's own framing and no extra Pi framing");
       assert(JSON.stringify(request.messages).includes("state=ready signature=engine-20-41"));
       assert.equal(count(JSON.stringify(request), fixture.token), retain ? 1 : 0,
         "actual provider request includes exactly one retained copy");

@@ -50,7 +50,7 @@ import type { FilterTurn, TurnSpan, ReadPosition } from "./lib/turn-filter.js";
 import { readPath as fileEvidenceKey, readCatalog, readRetentionState, selectedReads, renderRetainedReads, retainedReadOutputs, retainReadSpans, READ_RETENTION_ENTRY } from "./lib/read-retention.js";
 import type { ReadOutput, ReadRetention } from "./lib/read-retention.js";
 import { pickRetainedReads } from "./lib/read-retention-ui.js";
-import { FIDELITY_EXPLANATION, fidelityMessages, fidelitySpans, locateSlots, expandCheckpoint,
+import { CHECKPOINT_EXPLANATION, RECOVERY_HISTORY_NOTE, FIDELITY_EXPLANATION, fidelityMessages, fidelitySpans, locateSlots, expandCheckpoint, frameCheckpoint,
   messageTokens, previewMessages, checkCheckpointBudget, checkContextBudget, isExpandedCheckpoint, checkpointContextMessages, retainedTailMessages, estimateContext } from "./lib/turn-context.js";
 import type { ContextEstimate, NoticeTokens, TurnFidelities, TurnSelection, TurnSlot } from "./lib/turn-context.js";
 
@@ -779,7 +779,6 @@ function checkpointEvidence(entries: SessionEntry[], firstKeptEntryId: string, c
   };
 }
 
-const RECOVERY_HISTORY_NOTE = "Compaction hides earlier details from your current view. The original conversation history, including recorded tool outputs and your reasoning, is preserved in the session and can be retrieved.";
 const RECOVERY_SOURCE_GUIDANCE = "Re-read project files for their current contents. Prefer lookup for what was observed earlier or to avoid repeating slow external research or expensive computations; cheap local rereads and recomputations remain reasonable.";
 const RECOVERY_SCOPE_RULE = "Use the recovery tools for history established by this conversation or its checkpoint, not project discovery, requirements never supplied, other sessions, or abandoned branches.";
 
@@ -789,7 +788,6 @@ const REORIENT_BLOCK = `**Post-compaction re-orientation.** ${RECOVERY_HISTORY_N
 3. **Distinguish earlier claims from supporting evidence.** Retained assistant prose records what was said, not independent verification. If a task-relevant claim has uncertain provenance or conflicts with new evidence, check its supporting output (using \`context_lookup\` if hidden) or the current source before treating it as established; label unresolved claims unverified. Retrieved reasoning remains a historical hypothesis, and historical outputs do not establish current file or build/test state.`;
 
 const REVISION_NOTE_PREFIX = "- Checkpoint context revised: ";
-const CHECKPOINT_EXPLANATION = `**Compacted conversation follows.** The earlier part of this conversation has been compacted into the checkpoint below. This is not the full transcript. ${RECOVERY_HISTORY_NOTE}`;
 
 const RECOVERY_INSTRUCTIONS = `**Recovering hidden details.** Use \`context_lookup\` with a specific historical question: a subagent searches this conversation's full session history and returns relevant findings.`;
 
@@ -1570,7 +1568,8 @@ export default function (pi: ExtensionAPI) {
   pi.on("context_with_system", (event, ctx) => {
     const entries = ctx.sessionManager.getBranch();
     try {
-      const messages = projectReorientation(projectCheckpoint(event.messages, entries), entries);
+      const projected = projectReorientation(projectCheckpoint(event.messages, entries), entries);
+      const messages = latestVerbatimCompaction(entries) ? frameCheckpoint(projected) : projected;
       if (Object.keys(turnFidelities(entries)).length) checkContextBudget(messages, ctx);
       if (messages.length !== event.messages.length || messages.some((m, i) => m !== event.messages[i])) return { messages };
     } catch (error) {
@@ -1687,7 +1686,7 @@ export default function (pi: ExtensionAPI) {
           const reminder: AgentMessage = { ...reorientationMessage(entries, compaction.id, pruned.size > 0,
             revisionId ?? compaction.id, Object.keys(modes).length > 0), role: "custom", timestamp: 0 };
           const messages = checkpointContextMessages(summary, placements, modes, entries, compaction.firstKeptEntryId);
-          return { ...estimateContext([system, ...messages, reminder], ctx), tailTokens,
+          return { ...estimateContext([system, ...frameCheckpoint(messages), reminder], ctx), tailTokens,
             noticeTokens: contextNoticeTokens(messages, reminder), shortening };
         };
         const saved = latestFilterRevision(entries)?.data ?? { summary: compaction.summary,
